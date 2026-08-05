@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    # macOS arm64 first, which is what lane is built for today.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint
+        run: make lint
+
+      - name: Types
+        run: make types
+
+      - name: Tests
+        # The suite runs against real temporary git repositories, so git must be
+        # configured enough to commit. It never reaches the network.
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "lane CI"
+          make test
+
+      - name: Build the binary
+        run: make build
+
+      - name: Smoke test the binary
+        # --version is the one path guaranteed to work without a TTY, so it is
+        # what catches a missing hidden import at build time rather than on the
+        # maintainer's machine.
+        run: |
+          ./dist/lane --version
+          ./dist/lane --help
+          # And it must still refuse cleanly when there is no terminal.
+          if ./dist/lane < /dev/null; then
+            echo "expected a non-zero exit without a TTY" >&2
+            exit 1
+          fi

@@ -1,0 +1,89 @@
+[project]
+name = "lane"
+description = "Run several pieces of work side by side, each in its own git worktree"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+dynamic = ["version"]
+dependencies = [
+    "prompt-toolkit>=3.0.53",
+    "rich>=15.0.0",
+    "tomli-w>=1.2.0",
+]
+
+[project.scripts]
+lane = "lane.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Single source of truth for the version: src/lane/__init__.py.
+[tool.hatch.version]
+path = "src/lane/__init__.py"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pre-commit>=4.0",
+    "pyinstaller>=6.21.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "PTH",  # use pathlib
+    "RET",  # returns
+    "ARG",  # unused arguments
+    "TID",  # tidy imports
+    "TRY",  # exception antipatterns
+    "RUF",
+]
+ignore = [
+    "TRY003",  # long messages outside the exception class: lane's errors are user-facing prose
+    "N818",    # exceptions read as prose here (Abandoned, PrerequisiteMissing), not as FooError
+    # lane exists partly to handle non-ASCII input, and its UI uses pointer and
+    # box glyphs on purpose. Flagging "ambiguous" characters is noise throughout.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert on private helpers and use long descriptive names.
+"tests/*" = ["ARG001", "ARG002"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src", "tests"]
+warn_unreachable = true
+warn_no_return = true
+disallow_any_unimported = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
