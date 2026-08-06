@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lane.environment import EditorLaunch
-from lane.github.client import PrLookup, not_applicable
+from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
 from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row
 
 
@@ -58,15 +58,22 @@ class FakeEnvironment:
 
 
 class StubGitHubClient:
-    """Fully controls the pull request answer, including "I cannot tell you".
+    """Fully controls both pull request answers, including "I cannot tell you".
 
-    The close path decides from this answer alone and never probes the
+    The close path decides from these answers alone and never probes the
     environment separately — which is what makes this one stub sufficient.
+
+    `dependents` defaults to "nothing is based on this branch", so every test written
+    before stacked pull requests existed still describes the situation it meant to.
     """
 
-    def __init__(self, answer: PrLookup | None = None) -> None:
+    def __init__(
+        self, answer: PrLookup | None = None, dependents: DependentLookup | None = None
+    ) -> None:
         self._answer = answer
+        self._dependents = dependents if dependents is not None else Dependents(())
         self.asked: list[tuple[str | None, str | None]] = []
+        self.asked_about_dependents: list[str | None] = []
 
     def set(self, answer: PrLookup) -> None:
         self._answer = answer
@@ -79,6 +86,13 @@ class StubGitHubClient:
         if self._answer is None:
             return not_applicable("not-github")
         return self._answer
+
+    def pull_requests_based_on(
+        self, *, branch: str | None, remote_url: str | None, cwd: Path
+    ) -> DependentLookup:
+        del cwd, remote_url
+        self.asked_about_dependents.append(branch)
+        return self._dependents
 
 
 @dataclass

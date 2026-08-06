@@ -194,9 +194,17 @@ whatever happens next happens to the row under it. Full reasoning in
   line when the forty-character cap cut it short, or transliteration replaced
   letters the user typed (`Login sayfası hatası`).
 - **Pull request state never holds up the first paint.** Git status is local and
-  fast and is collected before the screen appears; `gh` is a process per lane and
-  is not, so the `pr` column opens as `checking…` and fills in behind the screen you
-  are already using. If the listing blocks on a `gh` round trip, this is broken.
+  fast and is collected before the screen appears; `gh` is **two** processes per lane
+  and is not, so the `pr` column opens as `checking…` and fills in behind the screen
+  you are already using. If the listing blocks on a `gh` round trip, this is broken.
+  The number is the thing to hold the line on, not the fact that it is more than one:
+  both calls are in the fill, and any further question must go there too.
+- **What is stacked on the branch lives in `state`, not `pr`.** `pr` is the lane's own
+  pull requests; a review based on its branch is somebody else's, and putting it there
+  would conflate whose work is whose. It belongs in `state` because it changes what
+  closing does — `↳ N stacked`, in the same vocabulary of counts and marks, and it
+  makes the cell read as blocked, because it is. The panel names the numbers
+  (`base of #99`) so they can be looked up.
 - **`state` reads the pull request answer, so it settles alongside it.** A squash or
   rebase merge leaves the lane's commits nowhere in the base, so the ancestry check
   reports `not merged yet` about work that plainly landed — directly beside a `pr`
@@ -250,8 +258,18 @@ already solved that.
   and **never probes the environment separately**. Today it shells out to
   `gh pr list --head <branch> --state all --json number,state,url,headRefOid`;
   tomorrow it might be an HTTP call, and the rest of the application must not be
-  able to tell. Still **one subprocess per lane**, which is what keeps the listing
-  from blocking on `gh`.
+  able to tell.
+- **A second question, and so two `gh` subprocesses per lane** — `what is based on
+  this branch`, via `gh pr list --base <branch> --state open`. It was one, and the
+  count is worth stating rather than leaving to be counted: `--head` and `--base` are
+  opposite ends of one relationship and only the second reveals that closing the lane
+  would delete the base of somebody's open pull request. Only open ones are asked
+  about; a closed or merged one is no longer at risk. Its answer is `Dependents`,
+  where **empty means GitHub was asked** and `CannotTell` means it could not be — the
+  two must never collapse, because one is permission to delete the branch and the
+  other is not. What the count does *not* buy is any delay before the first paint:
+  both calls happen in the fill, and a third question would have to earn its place
+  the same way.
 - **One of them is decisive, and the model says which** — `Found.decisive` is the
   open one if there is one, whatever its age, else the newest merged, else the
   newest; `Found.landed` is `decisive` being `MERGED`. Deliberately *not* "any of
@@ -270,6 +288,14 @@ already solved that.
   and closing the lane takes the branch it lives on. The earlier one is still
   reported, in its own quiet tone: a `✓` beside a pull request that was closed
   without merging would be wrong, and a `!` would invent a blocker out of history.
+- **An open pull request based on the lane's branch blocks the close.** Closing
+  deletes the branch, and deleting a base breaks the pull request built on it. Nothing
+  about the lane's own work can reveal this: its pull request can be merged and its
+  tree clean and the close would still take out an open review. Whose work is at stake
+  is the only difference, and it changes nothing about whether it is at stake. **A
+  dependents question that cannot be answered refuses the close**, exactly as the
+  lane's own does — "I could not ask what is built on this" is not permission to
+  delete it.
 - **A merged pull request is not an amnesty for everything on the branch.** What it
   carried is safe; what was committed afterwards exists in that worktree and nowhere
   else. The two are told apart by counting from `headRefOid`, the commit its head was
