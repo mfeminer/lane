@@ -1,0 +1,67 @@
+name: Build
+
+# Every merge to main produces a binary, and this is the only workflow that runs
+# on main. It deliberately does **not** run the test suite: the pull request that
+# produced the commit ran lint, types and tests before it was allowed to merge,
+# and a second pass over the same tree can only ever fail for a reason the merge
+# did not introduce.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The version comes from `git describe`, which needs the tags and the
+          # history behind them. The default shallow fetch has neither.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build the binary
+        run: make build
+
+      - name: Smoke test the binary
+        # Not the test suite — the one path that catches a missing hidden import,
+        # which is the failure only a build can have. The pull request's build
+        # already passed it; it is repeated here because the thing being built is
+        # the merge commit, which no pull request ever built.
+        run: |
+          ./dist/lane --version
+          ./dist/lane --help
+          # And it must still refuse cleanly when there is no terminal.
+          if ./dist/lane < /dev/null; then
+            echo "expected a non-zero exit without a TTY" >&2
+            exit 1
+          fi
+
+      - name: Name the asset for the platform it was built for
+        run: cp dist/lane "lane-macos-arm64"
+
+      - name: Publish the artifact
+        # An unreleased build of main, for trying something that has landed but
+        # not shipped. GitHub serves artifacts as zips, which do not carry the
+        # executable bit — a download needs `chmod +x` before it will run. This is
+        # not what a release publishes: a release rebuilds from the tag, because
+        # the version is derived from the tag and a binary built before the tag
+        # existed cannot report it. See *Releasing* in AGENTS.md.
+        uses: actions/upload-artifact@v7
+        with:
+          name: lane-macos-arm64
+          path: lane-macos-arm64
+          # 90 days is also the default; stated so that a change to the
+          # repository-wide default cannot quietly shorten it.
+          retention-days: 90
+          if-no-files-found: error
