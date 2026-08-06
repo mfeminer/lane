@@ -317,3 +317,35 @@ def test_two_lanes_run_side_by_side_without_colliding(
     # Neither lane tracks anything, so a bare push in either cannot reach main.
     assert backend.status(first, "main").upstream is None
     assert backend.status(second, "main").upstream is None
+
+
+# -- The road: the session opens on it and closes it ------------------------------
+
+
+def test_the_session_opens_with_the_splash(projects_root: Path, lanes_root: Path) -> None:
+    """The road is laid before the menu is offered, once, and it names the version."""
+    ui = FakeUi(["quit"])
+
+    session.run(_context(ui, projects_root, lanes_root))
+
+    splashes = [told for told in ui.told if told.kind == "splash"]
+    assert len(splashes) == 1
+    assert __version__ in splashes[0].text
+    assert ui.told[0].kind == "splash"
+
+
+def test_quitting_closes_the_road(projects_root: Path, lanes_root: Path) -> None:
+    ui = FakeUi(["quit"])
+
+    session.run(_context(ui, projects_root, lanes_root))
+
+    assert ui.told[-1].kind == "farewell"
+
+
+def test_backing_out_of_the_menu_closes_the_road_too(projects_root: Path, lanes_root: Path) -> None:
+    """Ctrl-C at the menu ends the session, so it leaves by the same door as quit."""
+    ui = FakeUi([FakeUi.ABANDON])
+
+    session.run(_context(ui, projects_root, lanes_root))
+
+    assert ui.told[-1].kind == "farewell"

@@ -23,6 +23,13 @@ a gap: raise it rather than guessing, and add the answer here once it's settled.
   vs. its "About to remove" block are the reference shape. *Why: the three report
   screens were close to this but not identical, with no written rule to check a
   fourth screen against — this is that rule.*
+- **The session — not an action — opens with the splash and closes with the
+  farewell.** `session.run()` lays the road once at the top (`Ui.splash`, drawn by
+  `ui/splash.py`) and closes it on the way out (`Ui.farewell`), by both doors: `quit`
+  and Ctrl-C at the menu. This is the one screen that is drawing rather than
+  reporting, so it is pinned whole in `tests/test_screen_snapshots.py` — nothing else
+  in the app would notice a wheel moving or the wordmark drifting off centre. It
+  changes nothing above: an action screen still names itself with `ui.heading`.
 - **The subject of an action (which lane, which project) is named once, in the
   heading or the first line, never repeated as a running header.** `"Closing
   demo/broken-pagination"` names it once; nothing after that re-states the lane

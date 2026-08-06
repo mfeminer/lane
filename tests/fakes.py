@@ -248,6 +248,14 @@ class FakeUi:
     def blank(self) -> None:
         self.told.append(Told("blank", ""))
 
+    def splash(self, version: str) -> None:
+        # The drawing is `splash.py`'s business and pinned in the snapshots; what a
+        # session test cares about is that the road was laid, and which version it named.
+        self.told.append(Told("splash", f"lane {version}"))
+
+    def farewell(self) -> None:
+        self.told.append(Told("farewell", ""))
+
     def progress[T](self, text: str, work: Callable[[], T]) -> T:
         """Runs the work straight through; the spinner is a real-UI concern."""
         self.told.append(Told("progress", text))
