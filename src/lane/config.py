@@ -10,8 +10,8 @@ Two kinds of forward migration are handled, both required rather than optional:
 * a `config.toml` written by a different version of lane is rewritten in place
 
 Both carry the user's values over, keep a backup, and announce themselves in **one
-short line**. What actually changed belongs to the changelog action; an upgrade
-notice that grows into a changelog dump is a regression.
+short line**. What actually changed in the release belongs to its notes on GitHub;
+an upgrade notice that grows into a changelog dump is a regression.
 """
 
 from __future__ import annotations
@@ -24,10 +24,13 @@ from pathlib import Path
 
 import tomli_w
 
-from lane import __version__
+from lane import buildinfo
 
 APP = "lane"
-CONFIG_VERSION = __version__
+
+# The config records a release, not a build: the stamp is compared on every load,
+# and a development checkout's version moves with every commit.
+CONFIG_VERSION = buildinfo.release()
 
 DEFAULT_EDITOR = "cursor"
 DEFAULT_LANES_DIRNAME = "Lanes"

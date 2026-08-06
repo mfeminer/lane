@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from lane.actions import changelog, doctor, list_lanes, open_lane, settings
+from lane.actions import doctor, list_lanes, open_lane, settings
 from lane.context import Context
 
 
@@ -61,13 +61,6 @@ ACTIONS: tuple[Action, ...] = (
         description="Check git, gh, the editor and your paths",
         run=doctor.run,
         # Doctor explains missing prerequisites, so it can never sit behind one.
-        needs_git=False,
-    ),
-    Action(
-        key="changelog",
-        label="changelog",
-        description="What changed between versions",
-        run=changelog.run,
         needs_git=False,
     ),
     Action(

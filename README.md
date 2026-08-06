@@ -56,7 +56,19 @@ installed as `.app`s without their shell command, and uses `open -a` instead.
 **You do not need `fzf`** — the picker is built in. **You do not need Python** —
 the binary is self-contained.
 
-### 2. Build and install
+### 2. Install
+
+Download the binary from the [latest
+release](https://github.com/mfeminer/lane/releases/latest):
+
+```bash
+mkdir -p ~/bin
+curl -fsSL -o ~/bin/lane https://github.com/mfeminer/lane/releases/latest/download/lane-macos-arm64
+chmod +x ~/bin/lane
+xattr -d com.apple.quarantine ~/bin/lane   # it is not notarised
+```
+
+Or build it yourself from a checkout:
 
 ```bash
 make build
@@ -118,7 +130,6 @@ lane 0.0.2
     lanes       Every open lane, where it stands, and what to do with it
     settings    Configure lane
     doctor      Check git, gh, the editor and your paths
-    changelog   What changed between versions
     quit        Leave lane
 
   ↑↓ move · enter choose
@@ -417,8 +428,9 @@ like a bug.
 
 Copy the new binary over the old one. If the config on disk was written by a
 different version, lane rewrites it in place, carries your values over, keeps a
-`.bak`, and says so in one short line. What actually changed is in **changelog** —
-the upgrade notice deliberately stays a single line.
+`.bak`, and says so in one short line. What actually changed is on the [releases
+page](https://github.com/mfeminer/lane/releases) — the upgrade notice deliberately
+stays a single line.
 
 A config in the old shell-sourced format (`LANE_PROJECTS_ROOT="..."`) is migrated
 to TOML automatically on first run.
@@ -509,26 +521,33 @@ Two rules erode first, so they're worth stating here too:
   lint, types, tests, then `make build` and a smoke test of the binary — for
   verification only. It never publishes anything.
 - **CD** (`.github/workflows/cd.yml`) runs only on a pushed tag matching `v*`:
-  it builds the binary and uploads it as a workflow artifact, named after the
-  tag (`lane-macos-arm64-v0.0.3`). It does not run the test suite — CI already
-  gates every push, so CD's job is purely to produce the release artifact.
+  it builds the binary and publishes a GitHub release with the binary attached.
+  It does not run the test suite — CI already gates every push.
 
 ### Releasing a new version
 
-`__version__` in [`src/lane/__init__.py`](src/lane/__init__.py) is the single
-source of truth — `lane --version` prints exactly that string, and it's what
-`buildinfo.version_line()` embeds in the binary at build time. The git tag does
-not drive the version by itself; it has to match what's in the source, or the
-tagged release and `lane --version` will disagree.
+**The tag is the version, and tagging is the whole release.** It's derived from
+`git describe` by `hatch-vcs`, and no file in the repository carries the number —
+so nothing can disagree with the tag. There is no `__version__` to bump and no
+changelog to write.
 
-1. Bump `__version__` in `src/lane/__init__.py`.
-2. Add an entry to `src/lane/actions/changelog.py`'s `ENTRIES` describing what
-   changed — this is what the `changelog` menu action shows.
-3. Run `make check` and commit both files together.
-4. Tag the commit to match, with a `v` prefix: `git tag v0.0.3 && git push --tags`.
-5. Pushing the tag triggers **CD**, which builds `dist/lane` and uploads it as
-   the release artifact for that tag; `./dist/lane --version` on it will print
-   `lane 0.0.3 (build <fingerprint>)`.
+```bash
+git tag -a v0.0.3 -m "..." && git push --tags
+```
+
+CD builds the binary, refuses to publish if its `--version` doesn't match the tag,
+and otherwise publishes a GitHub release with `lane-macos-arm64` attached.
+
+**The notes are generated from the pull requests** merged since the previous tag,
+grouped by the labels in [`.github/release.yml`](.github/release.yml) —
+`enhancement` under *Added*, `bug` under *Fixed*, and `documentation` /
+`dependencies` left out. An unlabelled pull request still shows up, under *Other
+changes*, so a forgotten label costs you the grouping and not the entry.
+
+**Between tags**, `lane --version` reads `0.0.2.post1.dev4+g1a2b3c4` — "after
+0.0.2, unreleased". The config file records the release it came from (`0.0.2`)
+rather than the full build string, which would otherwise move with every commit
+and rewrite `config.toml` on every run.
 
 ---
 

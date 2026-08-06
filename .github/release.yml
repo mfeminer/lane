@@ -1,0 +1,30 @@
+# How GitHub groups the pull requests it turns into release notes.
+#
+# The notes are generated, not written, so a pull request's labels are the only
+# control over what a release says. Every label named here exists on the
+# repository — a category matching a label nobody can apply is a category that
+# silently never fires.
+#
+# To add a category, create the label and add it here, in that order.
+
+changelog:
+  exclude:
+    labels:
+      # Housekeeping a user of lane has no reason to read about.
+      - documentation
+      - dependencies
+
+  categories:
+    - title: Added
+      labels:
+        - enhancement
+
+    - title: Fixed
+      labels:
+        - bug
+
+    # Anything not labelled above. Deliberately last and deliberately present:
+    # a silently dropped pull request is worse than an ungrouped one.
+    - title: Other changes
+      labels:
+        - "*"

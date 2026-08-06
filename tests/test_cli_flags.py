@@ -43,7 +43,7 @@ def test_help_documents_exactly_the_two_flags_and_says_lane_is_interactive(
     # The point of the help text: there is nothing else to type.
     assert "interactive" in out.lower()
     # And no subcommand may ever be advertised here.
-    for absent in ("open", "close", "doctor", "changelog"):
+    for absent in ("open", "close", "doctor", "lanes"):
         assert f"lane {absent}" not in out
 
 

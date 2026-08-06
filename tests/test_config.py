@@ -188,7 +188,7 @@ def test_a_config_from_another_version_is_rewritten_with_a_backup(xdg: Path) -> 
 
 
 def test_the_upgrade_notice_is_one_short_line(xdg: Path) -> None:
-    """Never a changelog dump — the changelog is its own action."""
+    """Never a changelog dump — what changed lives in the release notes."""
     store = ConfigStore()
     store.path.parent.mkdir(parents=True, exist_ok=True)
     store.path.write_text('version = "0.0.0-old"\nprojects_root = "/p"\n')
