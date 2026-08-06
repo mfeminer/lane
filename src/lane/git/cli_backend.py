@@ -89,6 +89,13 @@ class CliGitBackend:
                 timeout=timeout,
                 env=self._env(),
                 check=False,
+                # Out of lane's process group, so the terminal's Ctrl-C reaches lane
+                # and nothing else. Otherwise a removal in flight is killed half-way
+                # whatever lane decides to do with its own copy of the signal, and
+                # deferring it (`lane.interrupts`) would buy nothing. lane still owns
+                # the child's lifetime: an interrupt lane does not defer unwinds
+                # `subprocess.run`, which kills it on the way out.
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise GitError(f"git is not installed: {exc}") from exc

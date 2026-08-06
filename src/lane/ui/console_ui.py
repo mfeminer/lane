@@ -156,6 +156,16 @@ class ConsoleUi:
         self._console.print()
 
     def progress[T](self, text: str, work: Callable[[], T]) -> T:
-        """Long steps — fetching origin, asking GitHub — must show something."""
+        """Long steps — fetching origin, asking GitHub — must show something.
+
+        Ctrl-C during the wait means what it means during a prompt: back out. A
+        spinner is the one place lane holds the terminal without a prompt on it, so
+        without this the interrupt has nothing to catch it and leaves a traceback.
+        Steps that must not be left half-done defer the interrupt instead
+        (`lane.interrupts`), and never reach this.
+        """
         with self._console.status(f"[dim]{render.escape(text)}[/dim]", spinner="dots"):
-            return work()
+            try:
+                return work()
+            except KeyboardInterrupt as exc:
+                raise Abandoned from exc

@@ -194,8 +194,20 @@ line.
 `ui.progress(text, work)` — for any step slow enough to need one: a `rich` spinner
 with the dimmed description of what's happening, phrased as a gerund with an
 ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
-`"Reading lane status…"`). A new slow step uses `progress`; it does not print
-`"Please wait"` or roll its own spinner.
+`"Reading lane status…"`, `"Removing the worktree…"`). A new slow step uses
+`progress`; it does not print `"Please wait"` or roll its own spinner.
+
+- **The steps after the last question need this most, not least.** A wait with a
+  prompt still on screen is legible; the pause between `y` and `✓ Lane closed` is
+  not, and it is the longest one lane has. *Why: this was previously unstated, and
+  the close's whole removal phase ran silently as a result — the one place the tool
+  looked hung was the one place it was working hardest.*
+- **One spinner per user-visible action, not per subprocess.** Pruning is
+  bookkeeping belonging to the removal, so it shares its spinner; deleting the
+  branch is its own step and gets its own.
+- **Ctrl-C during a spinner backs out**, exactly as at a prompt — with the single
+  exception of a close's removal phase, which defers it. See *Ctrl-C is answered
+  everywhere* in AGENTS.md before adding a second exception.
 
 ## 11. Errors and refusals
 

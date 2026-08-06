@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lane import interrupts
 from lane.actions.picking import resolve_base
 from lane.context import Context
 from lane.git.backend import GitError, WorktreeStatus
@@ -278,46 +279,87 @@ def _execute(
     status: WorktreeStatus,
     decisions: _Decisions,
 ) -> None:
-    """Nothing here asks anything. Every decision was made above."""
+    """Nothing here asks anything. Every decision was made above.
+
+    Every step announces itself. This is the slow half of a close — removing a
+    worktree of a few thousand files takes far longer than any check that ran before
+    it — and it is also the half that runs *after* the last question, so a silent
+    pause here reads as a hang rather than as work.
+
+    It is also the one stretch of lane where Ctrl-C is deferred rather than obeyed
+    at once. Everywhere else stopping is a clean no-op because every question came
+    first; here there is nothing left to abandon and plenty to leave half-done, and
+    a lane whose worktree is gone but whose branch and metadata survive is a state
+    nothing in lane can describe. So the whole phase runs, and the interrupt is
+    raised after it.
+    """
     ui = context.ui
 
-    if decisions.rescue_branch is not None:
+    def acknowledge() -> None:
+        ui.detail("  Ctrl-C received — finishing the removal first. Ctrl-C again to stop now.")
+
+    with interrupts.deferred(acknowledge):
+        _remove_everything(context, lane, repo, status, decisions)
+
+
+def _remove_everything(
+    context: Context,
+    lane: Lane,
+    repo: Path,
+    status: WorktreeStatus,
+    decisions: _Decisions,
+) -> None:
+    """The destructive phase itself, run under the deferral above."""
+    ui = context.ui
+
+    rescue = decisions.rescue_branch
+    if rescue is not None:
         try:
             head = context.git.head_commit(lane.path)
-            context.git.create_branch(repo, decisions.rescue_branch, head)
+            ui.progress(
+                f"Parking the commits on {rescue}…",
+                lambda: context.git.create_branch(repo, rescue, head),
+            )
         except GitError as exc:
             ui.error(f"Could not park the commits: {exc}")
             ui.warn("Leaving the lane open so nothing is lost.")
             return
-        ui.ok(f"Parked on {decisions.rescue_branch}")
+        ui.ok(f"Parked on {rescue}")
 
-    try:
+    def remove() -> None:
         # The user has just confirmed, which is the only thing that justifies
         # --force here; git's refusal is the safety net everywhere else.
         context.git.remove_worktree(repo, lane.path, force=True)
+        # Pruning is bookkeeping belonging to the removal rather than a step of its
+        # own, so it shares the one spinner: one spinner per user-visible action.
+        context.git.prune_worktrees(repo)
+
+    try:
+        ui.progress("Removing the worktree…", remove)
     except GitError as exc:
         ui.error(f"Could not remove the worktree: {exc}")
         return
-    context.git.prune_worktrees(repo)
     context.lane_store().forget(lane.project, lane.name)
     ui.ok(f"Lane closed: {lane.slug}")
 
-    if not decisions.delete_branch or status.branch is None:
+    branch = status.branch
+    if not decisions.delete_branch or branch is None:
         # A detached lane has no branch to delete, and a wip/ branch created by the
         # rescue is never deleted — that would defeat its purpose.
         return
 
-    # `-d` first, so git's own merged check gets the chance to object. When the work
-    # landed as a squash or rebase merge it will object, and forcing is then correct
-    # rather than dangerous — the user was told in the summary either way, so both
-    # paths report the same thing.
-    if context.git.delete_branch(repo, status.branch):
-        ui.ok(f"Branch deleted: {status.branch}")
+    def delete() -> bool:
+        # `-d` first, so git's own merged check gets the chance to object. When the
+        # work landed as a squash or rebase merge it will object, and forcing is then
+        # correct rather than dangerous — the user was told in the summary either
+        # way, so both paths report the same thing.
+        if context.git.delete_branch(repo, branch):
+            return True
+        return decisions.force_delete_branch and context.git.delete_branch(repo, branch, force=True)
+
+    if ui.progress(f"Deleting the branch {branch}…", delete):
+        ui.ok(f"Branch deleted: {branch}")
         return
 
-    if decisions.force_delete_branch and context.git.delete_branch(repo, status.branch, force=True):
-        ui.ok(f"Branch deleted: {status.branch}")
-        return
-
-    ui.warn(f"Branch kept: {status.branch}")
-    ui.detail(f"  Delete it yourself with: git -C {repo} branch -D {status.branch}")
+    ui.warn(f"Branch kept: {branch}")
+    ui.detail(f"  Delete it yourself with: git -C {repo} branch -D {branch}")

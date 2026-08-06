@@ -358,7 +358,15 @@ def run(context: Context) -> None:
         # module's neighbours, and a top-level import would be circular.
         from lane.actions import close_lane
 
-        close_lane.close(context, lane)
+        try:
+            close_lane.close(context, lane)
+        except Abandoned:
+            # Backing out of the close lands back at the table, for the same reason
+            # as the row menu above: a close asks everything before it removes
+            # anything, so an abandoned one has changed nothing. This also covers
+            # Ctrl-C during its fetch, which would otherwise punish an impatient
+            # keystroke by throwing away the screen it happened on.
+            continue
         # And stay: closing several lanes in a row is a real batch. The table is
         # rebuilt because a row has gone, but the pull request answers already paid
         # for are kept, so the second paint is immediate.
