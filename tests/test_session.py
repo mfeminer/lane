@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lane import __version__, session
-from lane.actions import ACTIONS
+from lane.actions import ACTIONS, Action
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
@@ -131,6 +133,45 @@ def test_abandoning_an_action_returns_to_the_menu_changing_nothing(
     # Nothing is announced: the menu simply comes back. See test_going_back.py.
     assert not ui.said("left as it was")
     assert not lanes_root.exists()
+
+
+# -- Ctrl-C while an action is working --------------------------------------------
+
+
+def _interrupting(label: str) -> Action:
+    def run(context: Context) -> None:
+        del context
+        raise KeyboardInterrupt
+
+    return Action(key=label, label=label, description="raises Ctrl-C", run=run)
+
+
+def test_ctrl_c_while_an_action_is_working_returns_to_the_menu(
+    monkeypatch: pytest.MonkeyPatch, projects_root: Path, lanes_root: Path
+) -> None:
+    """Inside a prompt Ctrl-C is bound and backs out. Outside one — while a step is
+    actually running — it used to escape as a traceback, killing the session."""
+    monkeypatch.setattr(session, "ACTIONS", (_interrupting("boom"), *ACTIONS))
+    ui = FakeUi(["boom", "quit"])
+
+    assert session.run(_context(ui, projects_root, lanes_root)) == 0
+    assert ui.said("interrupted")
+
+
+def test_an_interruption_says_what_might_be_half_done(
+    monkeypatch: pytest.MonkeyPatch, projects_root: Path, lanes_root: Path
+) -> None:
+    """Unlike backing out of a prompt, this one is not guaranteed to be a no-op:
+    the interrupt may have landed in the middle of a step. Saying nothing would
+    imply it was clean."""
+    monkeypatch.setattr(session, "ACTIONS", (_interrupting("boom"), *ACTIONS))
+    ui = FakeUi(["boom", "quit"])
+
+    session.run(_context(ui, projects_root, lanes_root))
+
+    assert ui.said("half-done")
+    # Named by its current menu name, so the next step is one the user can find.
+    assert ui.said("lanes")
 
 
 # -- D7: without git, everything but doctor refuses -------------------------------

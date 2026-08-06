@@ -7,6 +7,10 @@ separately. That is what makes one stub sufficient.
 
 from __future__ import annotations
 
+import os
+import signal
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -639,3 +643,149 @@ def test_a_detached_lane_says_nothing_about_deleting_a_branch(
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "nobranch")
 
     assert not ui.said("will be deleted")
+
+
+# -- the slow half is after the last question, and it says so --------------------
+
+
+def _steps(ui: FakeUi) -> list[str]:
+    return [told.text for told in ui.told if told.kind == "progress"]
+
+
+def test_removing_the_worktree_and_the_branch_announce_themselves(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Everything slow enough to notice shows a spinner — including the steps that
+    come *after* the last question. Removing a worktree of a few thousand files is
+    the longest thing a close does, and an unannounced pause there reads as a hang."""
+    _, repo, store = lane_setup
+    _open_branch_lane(repo, store, "slow", "feature/slow")
+
+    ui = FakeUi([True])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "slow"
+    )
+
+    steps = _steps(ui)
+    assert any("removing the worktree" in step.lower() for step in steps), steps
+    assert any("feature/slow" in step for step in steps), steps
+
+
+def test_the_removal_is_announced_after_the_last_question(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """The gap the user sees starts at `y`, so the spinner has to start there too."""
+    _, repo, store = lane_setup
+    _open_branch_lane(repo, store, "ordered", "feature/ordered")
+
+    ui = FakeUi([True])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "ordered"
+    )
+
+    summary = next(i for i, told in enumerate(ui.told) if told.text == "About to remove")
+    removal = next(
+        i
+        for i, told in enumerate(ui.told)
+        if told.kind == "progress" and "removing the worktree" in told.text.lower()
+    )
+    assert removal > summary
+
+
+def test_parking_the_rescue_branch_announces_itself(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    _, repo, store = lane_setup
+    lane = _open_detached_lane(repo, store, "parked")
+    _commit(lane, "precious.txt", "would be stranded")
+
+    ui = FakeUi([True, True])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "parked")
+
+    steps = _steps(ui)
+    assert any("parking" in step.lower() and "wip/parked" in step for step in steps), steps
+
+
+# -- Ctrl-C during the removal ----------------------------------------------------
+
+
+class InterruptingUi(FakeUi):
+    """Presses Ctrl-C the moment a named step starts.
+
+    A real SIGINT to this process, because that is what the terminal sends and what
+    the deferral is written against. The sleep lets it land: the C handler only
+    flags it, and the Python one runs at the next bytecode boundary.
+    """
+
+    def __init__(self, answers: Sequence[object], *, at: str) -> None:
+        super().__init__(answers)
+        self._at = at
+
+    def progress[T](self, text: str, work: Callable[[], T]) -> T:
+        if self._at in text.lower():
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.01)
+        return super().progress(text, work)
+
+
+def test_ctrl_c_during_the_removal_does_not_leave_it_half_done(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A partly deleted working copy is a state nothing in lane can describe, let
+    alone repair. So the step finishes and the interrupt is raised afterwards."""
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "stopme", "feature/stopme")
+
+    ui = InterruptingUi([True], at="removing the worktree")
+    with pytest.raises(KeyboardInterrupt):
+        _close(
+            _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
+            store,
+            "stopme",
+        )
+
+    assert not lane.exists()
+    assert store.list_lanes() == []
+    # The whole phase is deferred, not only the removal: a lane whose worktree is
+    # gone but whose branch survives is exactly the mess this avoids.
+    assert not CliGitBackend().branch_exists(repo, "feature/stopme")
+
+
+def test_ctrl_c_during_the_removal_says_it_landed(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A Ctrl-C that appears to do nothing reads as a hung program — which is the
+    very thing deferring it is trying not to look like."""
+    _, repo, store = lane_setup
+    _open_branch_lane(repo, store, "tellme", "feature/tellme")
+
+    ui = InterruptingUi([True], at="removing the worktree")
+    with pytest.raises(KeyboardInterrupt):
+        _close(
+            _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
+            store,
+            "tellme",
+        )
+
+    assert ui.said("finishing")
+    # The way out of a step that turns out to take far longer than it implied.
+    assert ui.said("ctrl-c again")
+
+
+def test_the_rescue_is_covered_by_the_same_deferral(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Interrupting between "worktree removed" and "commits parked" would strand
+    exactly the work the rescue exists to save."""
+    _, repo, store = lane_setup
+    lane = _open_detached_lane(repo, store, "stopwip")
+    stranded = _commit(lane, "precious.txt", "would be stranded")
+
+    ui = InterruptingUi([True, True], at="parking")
+    with pytest.raises(KeyboardInterrupt):
+        _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "stopwip")
+
+    backend = CliGitBackend()
+    assert backend.branch_exists(repo, "wip/stopwip")
+    assert git(["rev-parse", "wip/stopwip"], cwd=repo).strip() == stranded
+    assert not lane.exists()

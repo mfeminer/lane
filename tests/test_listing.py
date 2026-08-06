@@ -597,6 +597,30 @@ def test_backing_out_of_the_row_menu_returns_to_the_table(
     assert len(passes) == 1, "and it came back as it was, without re-reading every lane"
 
 
+def test_backing_out_of_a_close_returns_to_the_table_too(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Same reason as the row menu, and the same guarantee: a close asks everything
+    before it removes anything, so backing out of any of it has changed nothing.
+    Dropping to the main menu instead would punish a Ctrl-C during the fetch."""
+    _two_lanes(projects_root, lanes_root)
+    ui = FakeUi(["clean-lane", "close", FakeUi.ABANDON, "back"])
+
+    list_lanes.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            github=StubGitHubClient(NotApplicable("not-github")),
+        )
+    )
+
+    assert (lanes_root / "thing" / "clean-lane").exists(), "backing out changed nothing"
+    titles = [told.text for told in ui.told if told.kind == "table"]
+    assert len(titles) == 2, "the table came back rather than the menu"
+    assert ui.unanswered() == 0
+
+
 def test_the_cursor_stays_where_it_was_after_an_action(
     projects_root: Path, lanes_root: Path
 ) -> None:

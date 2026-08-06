@@ -6,6 +6,7 @@ whatever implementation sits behind `GitBackend`.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from lane.git.backend import GitError
@@ -508,3 +509,25 @@ def test_commits_ahead_of_base_are_counted_against_the_base_not_the_upstream(
     assert status.unpushed_count == 0, "nothing left to push"
     assert status.ahead_of_base == 1, "but the work is still not in the base branch"
     assert status.has_own_commits
+
+
+# -- the terminal's Ctrl-C does not reach git ------------------------------------
+
+
+def test_git_runs_in_its_own_session_so_ctrl_c_cannot_kill_it(tmp_path: Path) -> None:
+    """Ctrl-C goes to every process in the terminal's foreground group, so without
+    this a removal in flight would be killed half-way no matter what lane decided to
+    do with its own copy of the signal. Deferring it (`lane.interrupts`) is only
+    half the answer; this is the other half.
+
+    Asserted through a shim standing in for git, because a process group is not
+    something git will report about itself.
+    """
+    shim = tmp_path / "pgid"
+    shim.write_text("#!/usr/bin/env python3\nimport os\nprint(os.getpgrp())\n")
+    shim.chmod(0o755)
+
+    reported = CliGitBackend(str(shim)).version()
+
+    assert reported is not None
+    assert int(reported) != os.getpgrp(), "git must not share lane's process group"

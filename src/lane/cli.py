@@ -18,6 +18,8 @@ from lane.environment import Environment, RealEnvironment
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_NO_TTY = 3
+EXIT_INTERRUPTED = 130
+"""What a shell reports for a process killed by SIGINT."""
 
 
 class _UsageError(Exception):
@@ -115,4 +117,10 @@ def main(argv: list[str] | None = None, *, environment: Environment | None = Non
     # so they keep working on a machine where nothing lane needs is installed.
     from lane import app
 
-    return app.run(env)
+    try:
+        return app.run(env)
+    except KeyboardInterrupt:
+        # The session reports the interruptions it can see and returns to the menu.
+        # This is the backstop for the ones it cannot — one exit code, and never a
+        # traceback, which is the only thing a user can do nothing with.
+        return EXIT_INTERRUPTED

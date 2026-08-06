@@ -257,3 +257,25 @@ def test_a_confirm_prompt_shows_how_to_back_out(keys: PipeInput) -> None:
     )
 
     assert any("ctrl-c" in line.lower() for line in seen), seen
+
+
+# -- Ctrl-C while lane is working, not while it is asking ------------------------
+
+
+def test_ctrl_c_during_a_slow_step_backs_out_like_a_prompt() -> None:
+    """Fetching origin and asking GitHub both happen before anything irreversible,
+    so interrupting one is the same clean no-op as backing out of a prompt — and
+    reaches the same handler, rather than escaping as a traceback."""
+    ui = ConsoleUi()
+
+    def interrupted() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(Abandoned):
+        ui.progress("Fetching origin…", interrupted)
+
+
+def test_a_slow_step_that_finishes_still_returns_its_answer() -> None:
+    ui = ConsoleUi()
+
+    assert ui.progress("Fetching origin…", lambda: "done") == "done"

@@ -76,8 +76,9 @@ Consequences that are load-bearing:
   careful stdout/stderr split. Write for a human sitting in front of the session.
   Exit codes are the one exception and stay meaningful — 0 for a clean exit,
   non-zero for a refusal or failure.
-- Long-running steps (fetching origin, asking GitHub about a pull request) show
-  that something is happening.
+- Long-running steps (fetching origin, asking GitHub about a pull request,
+  removing a worktree) show that something is happening — **including the ones
+  after the last question**, which are the slowest a close has.
 
 ### Going back is visible, not a key you have to know
 
@@ -92,7 +93,8 @@ whole mechanism, and it is why almost nothing needs binding:
 | `y` / `n` | answer a yes/no question |
 | `Ctrl-C` | back out |
 
-**That table is the whole vocabulary.** A letter key for "close" was considered and
+**That table is the whole vocabulary.** It describes Ctrl-C *at a prompt*; what it
+does while lane is **working** is below, under *Ctrl-C is answered everywhere*. A letter key for "close" was considered and
 rejected: a footer legend would make it discoverable, but it would still be this
 tool's invention. Choosing a row opens a two-entry menu instead — one keystroke
 more, no new vocabulary. If a future change wants letter keys, that is a decision
@@ -130,6 +132,35 @@ description, mode, branch — and only then creates the worktree. Closing a lane
 runs its checks, shows what it found, asks for confirmation, and only then removes
 anything. So abandoning any prompt is always a clean no-op. Keep it that way: if
 you find yourself wanting rollback logic, the questions are in the wrong place.
+
+### Ctrl-C is answered everywhere, and means three different things
+
+The structural guarantee above covers prompts. Ctrl-C can also arrive while lane is
+*working*, where there is no prompt to catch it, and **nothing lane does may end in
+a traceback** — that is the one outcome a user can do nothing with. Three zones,
+and which one a new step is in is a question worth asking deliberately:
+
+1. **While a spinner is up, before anything irreversible** — fetching origin,
+   asking GitHub, reading lane status. Identical to backing out of a prompt:
+   `ConsoleUi.progress` turns the interrupt into `Abandoned` and the screen you
+   were on comes back, silently. Nothing had happened yet, so nothing is said.
+2. **During a close's removal phase** — the one stretch where stopping half-way is
+   worse than either finishing or never starting. A partly deleted working copy,
+   or a lane whose worktree is gone but whose branch and metadata survive, is a
+   state nothing in lane can describe, let alone repair. So the interrupt is
+   **deferred** (`lane.interrupts`): acknowledged on screen the moment it lands,
+   raised once the phase is done. A second Ctrl-C is never deferred — it means
+   *now*, and the acknowledgement says so. This needs `start_new_session` on git
+   subprocesses to mean anything (see *The git backend*).
+3. **Anywhere else** — the session reports it in one line, says a step already
+   under way may be half-done, names `lanes` as the screen that shows where things
+   stand, and returns to the menu. `cli.main` is the backstop underneath all of
+   this and exits `130`.
+
+Zone 2 is the **only** place an interrupt is deferred, and it is deferred because
+its questions are all behind it — not as licence to defer one elsewhere. If a new
+step wants deferral, check first whether it is really asking for its questions to
+be moved earlier.
 
 ## The lanes screen
 
@@ -261,6 +292,12 @@ Rules for the implementation:
   config cannot change what it reads.
 - The listing collects per-lane status across a **thread pool** — subprocesses
   release the GIL, and this is what keeps the listing fast (measured 5.0× speedup).
+- Every git process is started with **`start_new_session=True`**, so it is not in
+  the terminal's foreground process group and Ctrl-C reaches lane and nothing else.
+  Without it, deferring the interrupt during a removal buys nothing: the terminal
+  would kill git half-way regardless of what lane did with its own copy of the
+  signal. lane still owns the child's lifetime — an interrupt it does *not* defer
+  unwinds `subprocess.run`, which kills the child on the way out.
 - **Default-branch detection**: `origin/HEAD` first, then
   `git remote set-head origin --auto`, then the `main`/`master`/`develop` probe as
   a genuine last resort — and if all of that fails, **say so rather than guessing
@@ -310,12 +347,15 @@ would make it possible to forget one, and forgetting one is exactly how a
 half-finished action would come about. The exception cannot fall through to the
 next statement, which makes the invariant structural rather than a matter of care.
 
-**One action catches it, and only one.** The listing catches `Abandoned` around the
-per-row verb menu so that backing out of it returns to the table rather than to the
-main menu — the table is a screen you are standing in. It is safe for exactly the
-same reason as everywhere else: every question still comes before the first
-irreversible step, so an abandoned verb menu has changed nothing. Do not take this
-as licence elsewhere; if another action wants it, it wants a screen.
+**One action catches it, and only one.** The listing catches `Abandoned` — around
+the per-row verb menu, and around the close it launches — so that backing out of
+either returns to the table rather than to the main menu; the table is a screen you
+are standing in. Both are safe for exactly the same reason as everywhere else:
+every question still comes before the first irreversible step, so an abandoned verb
+menu or an abandoned close has changed nothing. The close is included because
+Ctrl-C during its fetch is Zone 1 above, and throwing away the screen the keystroke
+happened on would punish impatience with a lost place. Do not take this as licence
+elsewhere; if another action wants it, it wants a screen.
 
 The prompt layer is **an interface the action calls, not a library it imports**.
 Actions never touch `prompt_toolkit`; they ask through this seam and get an answer
@@ -411,6 +451,17 @@ These must never regress. Each is one line of behaviour and one line of why.
   rows that rearrange themselves is worse than no cursor.
 - **Escape is not bound at all** — eagerly it swallows Option+Arrow; normally it
   takes over a second to register. Neither is acceptable and neither is needed.
+- **Ctrl-C never surfaces as a traceback, wherever it lands** — a stack trace is
+  the one outcome a user can do nothing with. At a prompt it backs out, during a
+  spinner it abandons, during a close's removal it is deferred and then reported,
+  and `cli.main` exits `130` under all of it.
+- **Every step slow enough to notice runs under `ui.progress`, including the ones
+  after the last question** — the removal is the slowest thing a close does and the
+  only one with no prompt on screen to explain the wait, so leaving it silent is
+  what makes a working close look like a hung one.
+- **A close's removal phase defers Ctrl-C; nothing else does** — half a removal is
+  a state lane cannot describe or repair, and it is the only step with no question
+  left to abandon. A second Ctrl-C is never deferred.
 - **The terminal cursor is hidden in prompts** — otherwise it parks on the first
   character and reads as if that letter were selected.
 - **"merged" is only said of a lane that has commits which reached the base** — a
@@ -494,7 +545,11 @@ is removed, in one pass**: outstanding findings are listed and confirmed; a lane
 a detached HEAD with unpushed commits is offered a `wip/<lane>` branch; and if the
 lane's branch is not merged, permission to force-delete it is asked for here
 rather than after the worktree is gone. Only then does it execute: park the rescue
-branch if asked, remove the worktree, prune, delete the branch.
+branch if asked, remove the worktree, prune, delete the branch. **Every one of
+those steps shows a spinner** — they run after the last question, with nothing on
+screen to explain the wait, and removing a worktree of a few thousand files is the
+longest thing a close does. **The whole phase defers Ctrl-C**, which is Zone 2 of
+*Ctrl-C is answered everywhere* above.
 
 **Diagnostics** — when no projects are found, say how many subfolders were looked
 at, and if the repositories turn out to be nested (`<root>/<org>/<repo>`), point at
@@ -607,6 +662,14 @@ All of it arrived at test-first:
   `gh` call is made
 - closing a GitHub-backed lane refused with a usable message when `gh` is missing
   or logged out, while closing a lane with a non-GitHub remote still succeeds
+- every step of a close's removal phase announcing itself, in order, after the last
+  question
+- Ctrl-C during that phase finishing it rather than stopping half-way — a real
+  `SIGINT` to the test process, because that is what a terminal sends — and being
+  raised afterwards rather than discarded
+- Ctrl-C during a spinner abandoning, Ctrl-C inside an action being reported with
+  what might be half-done, and the boundary exiting `130` rather than tracing back
+- git running outside lane's process group, so the terminal's Ctrl-C cannot reach it
 - a non-TTY invocation refusing cleanly while `--version` still works
 - the version reaching the build from the tag, and the config stamp being the
   release rather than the moving version of a development checkout

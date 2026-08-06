@@ -11,6 +11,7 @@ import re
 import pytest
 
 from lane import __version__, cli
+from tests.fakes import FakeEnvironment
 
 
 def test_version_flag_reports_name_version_and_build(capsys: pytest.CaptureFixture[str]) -> None:
@@ -91,3 +92,26 @@ def test_a_refusal_does_not_print_a_usage_error_to_stdout(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "unrecognized arguments" not in captured.err
+
+
+# -- the last resort: an interrupt must never surface as a traceback --------------
+
+
+def test_an_interrupt_reaching_the_boundary_exits_quietly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The session reports the interruptions it can see and carries on. This is the
+    backstop for the ones it cannot — nothing lane does may end in a traceback."""
+    from lane import app
+
+    def interrupted(environment: object) -> int:
+        del environment
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "run", interrupted)
+
+    code = cli.main([], environment=FakeEnvironment())
+
+    # 130 is what a shell reports for a process killed by SIGINT.
+    assert code == 130
+    assert "traceback" not in capsys.readouterr().err.lower()

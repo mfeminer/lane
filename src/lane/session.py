@@ -69,6 +69,15 @@ def _run_action(context: Context, action: Action) -> None:
         # report: every other tool simply shows the menu again. "Left as it was."
         # explained nothing to anyone who had not read the source.
         pass
+    except KeyboardInterrupt:
+        # Ctrl-C outside a prompt. Inside one it is bound and backs out silently;
+        # here it landed while a step was actually running, so unlike an abandonment
+        # it is *not* guaranteed to be a clean no-op — the steps that must not be
+        # left half-done defer it (`lane.interrupts`), but nothing can promise where
+        # else it struck. Saying nothing would imply it was clean.
+        ui.blank()
+        ui.error("Interrupted.")
+        ui.detail("  A step already under way may be half-done — 'lanes' shows where things stand.")
     except LaneError as exc:
         ui.error(str(exc))
     except GitError as exc:
