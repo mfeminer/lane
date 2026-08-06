@@ -154,6 +154,17 @@ whatever happens next happens to the row under it. Full reasoning in
   fast and is collected before the screen appears; `gh` is a process per lane and
   is not, so the `pr` column opens as `checking…` and fills in behind the screen you
   are already using. If the listing blocks on a `gh` round trip, this is broken.
+- **`state` reads the pull request answer, so it settles alongside it.** A squash or
+  rebase merge leaves the lane's commits nowhere in the base, so the ancestry check
+  reports `not merged yet` about work that plainly landed — directly beside a `pr`
+  cell reading `merged`, about the same lane. `state` therefore counts a `MERGED`
+  pull request as having reached the base, which is the rule the close flow has
+  always applied. Two consequences to keep: the merged verdict **is not final until
+  `pr` has filled in**, so `state` must be drawn from the row on each repaint and
+  never computed once before the fill; and **fetching does not fix this** — it was
+  measured on the maintainer's own repository, where the squash commit was already
+  local and the lane's commits were simply gone. A fetch in the listing would buy a
+  network round trip before every first paint and leave the contradiction standing.
 - **`unknown` and `none` are different answers.** `none` means GitHub was asked and
   said no; `unknown` means it could not be asked, and the panel names the command
   that fixes it. This is the one thing the close flow can never tell you, because
@@ -394,7 +405,9 @@ These must never regress. Each is one line of behaviour and one line of why.
   character and reads as if that letter were selected.
 - **"merged" is only said of a lane that has commits which reached the base** — a
   lane opened a minute ago is an ancestor of its base vacuously, and calling that
-  merged tells the user their work landed when it never existed.
+  merged tells the user their work landed when it never existed. A `MERGED` pull
+  request counts as reaching the base, in the listing as well as in the close flow;
+  `has_own_commits` still gates it, so this cannot resurrect the vacuous case.
 - **The lane's starting commit is recorded in its metadata** — it is the only thing
   that distinguishes "has done no work" from "work has landed"; both leave nothing
   ahead of `origin/<base>`.

@@ -14,6 +14,11 @@ has the reasoning, including why looking and acting are the same widget now.
 paint. Pull request state is a `gh` process per lane and is not, so the `pr` column
 opens as `checking…` and fills in behind the screen you are already using. If the
 listing ever blocks on a `gh` round trip, this has been broken.
+
+`state` is drawn from the row on every repaint rather than computed once, because it
+reads the pull request answer: a squash merge puts the lane's commits nowhere in the
+base, so only GitHub can tell that the work landed. Compute it before the fill and
+`state` goes back to saying `not merged yet` beside a `pr` cell reading `merged`.
 """
 
 from __future__ import annotations
@@ -51,6 +56,13 @@ class PrCell:
     text: str
     tone: Tone
     note: str = ""
+
+    merged: bool = False
+    """GitHub says the work landed — the one thing `state` cannot see for itself.
+
+    A squash or rebase merge rewrites the lane's commits, so no ancestry check will
+    ever find them in the base. `state` reads this rather than contradicting it.
+    """
 
 
 PENDING = PrCell("checking…", "dim", "Checking GitHub for a pull request…")
@@ -166,6 +178,12 @@ def _state_cell(row: LaneRow) -> Cell:
     A lane opened a minute ago sits exactly at `origin/<base>`, so an ancestry check
     calls it merged — vacuously, since it has never had anything to merge. Saying so
     invited the reader to believe their work had landed.
+
+    A `MERGED` pull request counts as reaching the base even when git's ancestry
+    check disagrees — the squash and rebase case, which no amount of fetching can
+    resolve because the lane's commits genuinely are not in the base any more. This
+    is the rule the close flow has always applied; reading it here is what stops
+    `state` saying "not merged yet" beside a `pr` cell that says `merged`.
     """
     if row.status is None:
         # The specific reason is worth the room when there is room; abbreviated it
@@ -181,7 +199,10 @@ def _state_cell(row: LaneRow) -> Cell:
     if status.unpushed_count:
         parts.append(f"↑ {status.unpushed_count} unpushed")
         shorts.append(f"↑{status.unpushed_count}")
-    if status.landed:
+    # `has_own_commits` still gates it, for the pull request route too: a lane that
+    # never committed has landed nothing, whatever GitHub was asked about its branch.
+    landed = status.landed or (row.pr.merged and status.has_own_commits)
+    if landed:
         # Not a blocker, but worth saying alongside them: it means the work landed
         # and whatever is left here is incidental.
         parts.append("✓ merged")
@@ -226,7 +247,12 @@ def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrC
         case Found(pull_request=pr):
             state = pr.state.lower()
             tone: Tone = "good" if pr.state == "MERGED" else "warn" if pr.state == "OPEN" else "bad"
-            return PrCell(f"#{pr.number} {state}", tone, f"PR #{pr.number} {state} — {pr.url}")
+            return PrCell(
+                f"#{pr.number} {state}",
+                tone,
+                f"PR #{pr.number} {state} — {pr.url}",
+                merged=pr.state == "MERGED",
+            )
         case NoPullRequest():
             return PrCell("none", "dim", "No pull request for this branch yet.")
         case CannotTell(remedy=remedy, detail=detail):
