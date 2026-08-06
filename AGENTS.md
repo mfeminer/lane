@@ -180,7 +180,10 @@ whatever happens next happens to the row under it. Full reasoning in
   a state, and lives in `state`.
 - **A panel under the table follows the cursor** and shows only what the status
   pass already collected: the branch, the description when the lane name could not
-  keep all of it, and one sentence about the pull request. **It never makes a git
+  keep all of it, and one sentence about the pull request — which carries the whole
+  history when there is one (`PR #42 open — <url> · earlier: #41 merged`), because
+  `MAX_DETAIL_LINES` is three and a line per pull request would be sliced off, losing
+  exactly what it is there to show. **It never makes a git
   or `gh` call of its own.** That rule is what stops it becoming the close flow's
   diagnosis printed twice; which files are dirty and which commits are unpushed
   cost a call per lane and stay in the close flow, where they change a decision.
@@ -205,6 +208,13 @@ whatever happens next happens to the row under it. Full reasoning in
   measured on the maintainer's own repository, where the squash commit was already
   local and the lane's commits were simply gone. A fetch in the listing would buy a
   network round trip before every first paint and leave the contradiction standing.
+- **`state` never prints `↑ N unpushed` beside `✓ merged` either.** The same false
+  negative reaches the count next door: merging with *delete branch* removes
+  `origin/<branch>`, so there is no upstream left to measure against and the count
+  falls back to the base — where the squash left none of the lane's commits. It is
+  then describing work that landed. Suppressed only when there is no upstream *and*
+  the pull request merged *and* nothing was committed after it; a live upstream, an
+  open pull request, or a count that could not be established all leave it standing.
 - **`unknown` and `none` are different answers.** `none` means GitHub was asked and
   said no; `unknown` means it could not be asked, and the panel names the command
   that fixes it. This is the one thing the close flow can never tell you, because
@@ -233,12 +243,21 @@ already solved that.
   GitHub — carries on unaffected. Doctor reports the state up front so it is never
   a surprise.
 - The interaction sits behind a small `GitHubClient` interface with a single real
-  question: **what is the state of the pull request for this branch?** Its answer
-  includes "I cannot tell you, because `gh` is missing or logged out" as a
-  first-class result. The close path decides from that answer alone and **never
-  probes the environment separately**. Today it shells out to
-  `gh pr view <branch> --json number,state,url`; tomorrow it might be an HTTP
-  call, and the rest of the application must not be able to tell.
+  question: **what pull requests has this branch had?** — plural, because a branch
+  carries a history of them and answering with only the most recent silently drops
+  the rest. Its answer includes "I cannot tell you, because `gh` is missing or
+  logged out" as a first-class result. The close path decides from that answer alone
+  and **never probes the environment separately**. Today it shells out to
+  `gh pr list --head <branch> --state all --json number,state,url,headRefOid`;
+  tomorrow it might be an HTTP call, and the rest of the application must not be
+  able to tell. Still **one subprocess per lane**, which is what keeps the listing
+  from blocking on `gh`.
+- **One of them is decisive, and the model says which** — `Found.decisive` is the
+  open one if there is one, whatever its age, else the newest merged, else the
+  newest; `Found.landed` is `decisive` being `MERGED`. Deliberately *not* "any of
+  them merged": with a follow-up still open the lane holds work that has not landed,
+  and the squash-merge correction would then excuse commits nothing has taken.
+  Callers read these rather than re-deriving the rule.
 - The check does not apply to non-GitHub remotes or to lanes on a detached HEAD:
   there is no pull request to ask about, so those closes proceed on git's own
   evidence and never touch `gh`.
@@ -246,7 +265,18 @@ already solved that.
   disagrees**: a squash or rebase merge leaves the lane's commits nowhere in the
   default branch, and resolving that false negative is the entire reason this
   feature exists. `OPEN` and `CLOSED` are blocking issues, each reported with its
-  URL; "no pull request found" is a blocking issue without one.
+  URL; "no pull request found" is a blocking issue without one. **An open pull
+  request blocks even when an earlier one merged** — it is work that has not landed,
+  and closing the lane takes the branch it lives on. The earlier one is still
+  reported, in its own quiet tone: a `✓` beside a pull request that was closed
+  without merging would be wrong, and a `!` would invent a blocker out of history.
+- **A merged pull request is not an amnesty for everything on the branch.** What it
+  carried is safe; what was committed afterwards exists in that worktree and nowhere
+  else. The two are told apart by counting from `headRefOid`, the commit its head was
+  at — the only way, since a squash merge leaves ancestry unable to separate them. If
+  that commit is no longer on the branch (amended or rebased since), the count is
+  **unknowable and the close is refused**, exactly as it is for an unreachable `gh`.
+  Never conflate "cannot tell" with zero.
 - `gh` is **not bundled** into the binary. It is an external prerequisite,
   documented in the README.
 
@@ -484,8 +514,8 @@ These must never regress. Each is one line of behaviour and one line of why.
   out; `--force`/`-D` are used only where the user has just been asked.
 - **Every question comes before the first irreversible step** — that is what makes
   abandoning a clean no-op and rollback logic unnecessary.
-- **Branch deletion on close applies only to the lane's own branch in branch
-  mode** — a detached lane has no branch to delete, and never the base branch.
+- **Branch deletion on close applies to the lane's own branches** — never the base
+  branch, however often it was visited, and a detached lane has none of its own.
 - **Closing a lane deletes its local branch** — leaving it behind is how a
   repository fills with dead branches, one per lane ever closed. The summary states
   it before the user confirms. Where the work demonstrably landed (git's ancestry
@@ -493,6 +523,16 @@ These must never regress. Each is one line of behaviour and one line of why.
   the squash case, where `git branch -d` refuses and forcing is correct rather than
   dangerous. Where there is no such evidence, permission is asked, and declining
   keeps the branch and prints the command to remove it later.
+- **All of them, not just the one the lane is standing on.** A lane is one task and a
+  task can move through several branches; lane is absent while it does, so they are
+  recorded nowhere but the worktree's own HEAD reflog — read from both sides of every
+  `checkout: moving from A to B`, since the branch the lane was created on appears
+  only as somewhere it moved *from*. Two consequences to keep: it must be read
+  **before the worktree is removed**, because `git worktree remove` takes that reflog
+  with it; and every name is filtered back through git, because reflog entries outlive
+  the branches they name and a detached spell leaves a bare commit id behind. Those
+  holding unique work are marked in the summary and covered by **one** question — a
+  prompt per branch would turn closing a lane that moved around into an interrogation.
 
 ## Behaviour to preserve
 

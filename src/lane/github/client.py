@@ -1,8 +1,10 @@
 """The `GitHubClient` seam: one real question, with "I cannot tell you" as an answer.
 
-The question is *what is the state of the pull request for this branch*. The close
-path decides from the answer alone and never probes the environment separately —
-that is what lets a single stub in the tests control the behaviour completely.
+The question is *what pull requests has this branch had*, plural: a branch can carry
+a history of them — one merged, a follow-up open — and answering with only the most
+recent silently drops the rest. The close path decides from the answer alone and
+never probes the environment separately — that is what lets a single stub in the
+tests control the behaviour completely.
 
 Today the implementation shells out to `gh`. Tomorrow it might be an HTTP call, and
 the rest of the application must not be able to tell.
@@ -25,12 +27,49 @@ class PullRequest:
     state: PrState
     url: str
 
+    head_oid: str = ""
+    """The commit this pull request's head was at.
+
+    How the close path tells commits that landed from commits made after the merge:
+    a squash merge leaves the branch's commits nowhere in the base, so counting from
+    here is the only way to know which of them the pull request actually carried.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class Found:
-    """There is a pull request, and this is its state."""
+    """Every pull request whose head was this branch, newest number first.
 
-    pull_request: PullRequest
+    Never empty: "there are none" is `NoPullRequest`, so every reader can ask which of
+    them is `decisive` without checking first.
+    """
+
+    pull_requests: tuple[PullRequest, ...]
+
+    @property
+    def decisive(self) -> PullRequest:
+        """The one the lane's state turns on.
+
+        An open pull request is work that has not landed, so it decides even when a
+        newer one has already merged — the listing's question is *can I close this*,
+        and an open one is the answer whatever its age. Failing that, the newest
+        merged one; failing that, the newest there is.
+        """
+        for state in ("OPEN", "MERGED"):
+            for pr in self.pull_requests:
+                if pr.state == state:
+                    return pr
+        return self.pull_requests[0]
+
+    @property
+    def landed(self) -> bool:
+        """GitHub says this lane's work is in the base branch.
+
+        Deliberately *not* "any of them merged": with a follow-up still open the lane
+        holds work that has not landed, and the squash-merge correction this answer
+        exists for would then excuse commits nothing has taken.
+        """
+        return self.decisive.state == "MERGED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +98,16 @@ class NotApplicable:
 
 
 type PrLookup = Found | NoPullRequest | CannotTell | NotApplicable
+
+
+def found(*pull_requests: PullRequest) -> Found:
+    """The one way to build a `Found`, so *newest first* is true wherever it is read.
+
+    Sorting here rather than trusting the order they arrived in: `gh` sorts by its
+    own notion of recency, and the callers that want the decisive pull request would
+    otherwise each have to re-establish which one that is.
+    """
+    return Found(tuple(sorted(pull_requests, key=lambda pr: pr.number, reverse=True)))
 
 
 def not_applicable(reason: NotApplicableReason) -> NotApplicable:

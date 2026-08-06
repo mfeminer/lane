@@ -14,7 +14,7 @@ from lane.actions import list_lanes
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
-from lane.github.client import CannotTell, Found, NotApplicable, PullRequest
+from lane.github.client import CannotTell, NotApplicable, PullRequest, found
 from lane.lanes import LaneMeta, LaneStore
 from lane.state import StateStore
 from tests.conftest import build_repo, git
@@ -248,7 +248,7 @@ def test_a_squash_merged_lane_is_not_called_unmerged_next_to_a_merged_pull_reque
             projects_root=projects_root,
             lanes_root=lanes_root,
             github=StubGitHubClient(
-                Found(PullRequest(number=1012, state="MERGED", url="http://x/1012"))
+                found(PullRequest(number=1012, state="MERGED", url="http://x/1012"))
             ),
         )
     )
@@ -257,6 +257,67 @@ def test_a_squash_merged_lane_is_not_called_unmerged_next_to_a_merged_pull_reque
     assert "#1012 merged" in rows, "the pull request column was already right"
     assert "not merged yet" not in rows, "and state must not contradict it"
     assert "✓ merged" in rows
+
+
+def test_a_lane_whose_remote_branch_was_deleted_is_not_also_called_unpushed(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """`↑ 1 unpushed · ✓ merged`, about the same lane, in the same cell.
+
+    Merging with *delete branch* removes `origin/<branch>`, so there is no remote left
+    to measure against and the unpushed count falls back to `origin/main` — where the
+    squash left none of the lane's commits. It is then counting work that landed, and
+    printing it as a blocker beside `✓ merged` is the same contradiction `state` was
+    already taught to avoid, reached from the other side.
+    """
+    origin, clone = build_repo(projects_root / "_b")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    backend = CliGitBackend()
+    store = LaneStore(lanes_root)
+    lane = store.lane_path("thing", "squashed")
+    backend.add_worktree_new_branch(repo, lane, "feature/squashed", "origin/main")
+    started_at = backend.head_commit(lane)
+    (lane / "work.txt").write_text("real work\n")
+    git(["add", "-A"], cwd=lane)
+    git(["commit", "--quiet", "-m", "real work"], cwd=lane)
+    landed = git(["rev-parse", "HEAD"], cwd=lane).strip()
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/squashed"], cwd=lane)
+    store.write_meta(
+        "thing",
+        "squashed",
+        LaneMeta(description="squashed", base="main", repo=str(repo), start=started_at),
+    )
+
+    # The squash, and then the branch deletion that comes with it.
+    (repo / "work.txt").write_text("real work\n")
+    git(["add", "-A"], cwd=repo)
+    git(["commit", "--quiet", "-m", "real work (#1012)"], cwd=repo)
+    git(["push", "--quiet", "origin", "main"], cwd=repo)
+    origin.delete_branch("feature/squashed")
+    backend.fetch_prune(repo)
+
+    premise = backend.status(lane, "main", started_at)
+    assert premise.upstream is None, "the remote-tracking ref went with the merge"
+    assert premise.unpushed_count == 1, "and the count fell back to origin/main"
+
+    ui = FakeUi(["back"])
+    list_lanes.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            github=StubGitHubClient(
+                found(
+                    PullRequest(number=1012, state="MERGED", url="http://x/1012", head_oid=landed)
+                )
+            ),
+        )
+    )
+
+    rows = " ".join(told.text for told in ui.told if told.kind == "row")
+    assert "✓ merged" in rows
+    assert "unpushed" not in rows, "that count is measuring commits that landed"
 
 
 def test_a_detached_lane_says_so_where_it_changes_what_closing_does(
@@ -283,7 +344,7 @@ def test_pull_request_state_appears_in_its_own_column(
     projects_root: Path, lanes_root: Path
 ) -> None:
     _two_lanes(projects_root, lanes_root)
-    pr = Found(PullRequest(number=418, state="OPEN", url="https://github.com/a/b/pull/418"))
+    pr = found(PullRequest(number=418, state="OPEN", url="https://github.com/a/b/pull/418"))
     ui = FakeUi(["back"])
 
     list_lanes.run(
@@ -297,6 +358,41 @@ def test_pull_request_state_appears_in_its_own_column(
 
     assert "#418 open" in ui.transcript
     assert "https://github.com/a/b/pull/418" in ui.transcript, "the panel carries the URL"
+
+
+def test_the_column_shows_the_decisive_pull_request_and_the_panel_keeps_the_rest(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The column answers *can I close this*; the panel carries the history.
+
+    One sentence, not a line each: the panel is capped at three lines and already
+    spends them on the description, the branch and the pull request, so a line per
+    pull request would be sliced off — dropping exactly the history this keeps.
+    """
+    _two_lanes(projects_root, lanes_root)
+    history = found(
+        PullRequest(number=41, state="MERGED", url="http://x/41"),
+        PullRequest(number=42, state="OPEN", url="http://x/42"),
+    )
+    ui = FakeUi(["back"])
+
+    list_lanes.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            github=StubGitHubClient(history),
+        )
+    )
+
+    rows = " ".join(told.text for told in ui.told if told.kind == "row")
+    panel = " ".join(told.text for told in ui.told if told.kind == "panel")
+    assert "#42 open" in rows, "the open one is what holds the lane open"
+    assert "#41" not in rows, "and the column stays one cell wide"
+    assert "#41 merged" in panel, "the history is not dropped"
+    assert "http://x/42" in panel, "the decisive one keeps its URL"
+    panel_lines = [told for told in ui.told if told.kind == "panel"]
+    assert len(panel_lines) <= 3 * 2, "two lanes, and the panel keeps at most three lines each"
 
 
 def test_gh_being_unavailable_is_unknown_and_the_panel_says_how_to_fix_it(
@@ -370,7 +466,7 @@ def test_the_table_is_complete_before_any_gh_call_is_made(
     placeholder and the seam is handed a `fill` to replace it.
     """
     _two_lanes(projects_root, lanes_root)
-    github = StubGitHubClient(Found(PullRequest(number=7, state="MERGED", url="http://x/7")))
+    github = StubGitHubClient(found(PullRequest(number=7, state="MERGED", url="http://x/7")))
     context = _context(
         FakeUi([]), projects_root=projects_root, lanes_root=lanes_root, github=github
     )
@@ -395,7 +491,7 @@ def test_a_pull_request_answer_is_not_asked_for_twice(
 ) -> None:
     """Closing one lane must not re-run `gh` for the lanes that are still there."""
     _two_lanes(projects_root, lanes_root)
-    github = StubGitHubClient(Found(PullRequest(number=7, state="OPEN", url="http://x/7")))
+    github = StubGitHubClient(found(PullRequest(number=7, state="OPEN", url="http://x/7")))
     context = _context(
         FakeUi([]), projects_root=projects_root, lanes_root=lanes_root, github=github
     )

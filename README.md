@@ -260,6 +260,14 @@ branch. A lane you opened a minute ago says **no commits yet** — it sits exact
 the base branch, so a plain ancestry check would call it "merged" when there has
 never been anything to merge.
 
+When a branch has had several pull requests, `pr` shows the one that decides and the
+panel keeps the rest, so nothing is lost off the row:
+
+```
+  bugfix/broken-pagination
+  PR #42 open — https://github.com/you/demo/pull/42 · earlier: #41 merged
+```
+
 Press `Enter` on a row and you get its two verbs:
 
 ```
@@ -339,6 +347,24 @@ says "not merged" about work that shipped last week. lane asks GitHub instead.
 | `CLOSED` | blocking, reported with its URL |
 | none found | blocking |
 
+A branch can have had **more than one** pull request — one merged, a follow-up open —
+and lane tracks all of them. The one that decides is the open one if there is one,
+whatever its age, otherwise the newest merged; the rest are reported alongside it. So
+an earlier merge doesn't make a lane closeable while a follow-up is still open: that
+work hasn't landed, and closing the lane would take the branch it's on.
+
+A merged pull request also isn't a blanket pass for everything on the branch. What it
+carried is safe; anything you committed **after** it merged exists in that worktree and
+nowhere else, so lane counts those separately and still blocks:
+
+```
+! 2 commit(s) made after PR #41 merged, and never pushed
+```
+
+If you amended or rebased the branch after it merged, the commit that landed is gone
+from it and lane can't tell the two apart — so it says so and refuses, rather than
+guessing in a direction that could lose the commits.
+
 Lanes on a **detached HEAD** and lanes whose `origin` **isn't GitHub** skip this
 entirely — there's no pull request to ask about, so those closes go on git's own
 evidence and never invoke `gh`.
@@ -346,7 +372,7 @@ evidence and never invoke `gh`.
 If a GitHub-backed lane *can't* be checked because `gh` is missing or logged out,
 lane **refuses that close** and tells you which command to run. It won't guess.
 
-### The local branch goes with the lane
+### The local branches go with the lane
 
 Closing a lane deletes its local branch too — otherwise your repository fills up
 with dead branches, one per lane you ever closed. The summary says so before you
@@ -357,6 +383,20 @@ About to remove
   Worktree : /Users/you/Lanes/demo/broken-pagination
   Branch   : bugfix/broken-pagination — will be deleted
 ```
+
+**Every** branch the lane used, not just the one you're standing on. Switch branches
+mid-task — a fix-up, a second attempt, a rename — and they're all part of the lane, so
+they all go:
+
+```
+About to remove
+  Worktree : /Users/you/Lanes/demo/broken-pagination
+  Branch   : bugfix/broken-pagination-v2 — will be deleted
+  Branch   : bugfix/broken-pagination — will be deleted (this lane used it earlier)
+```
+
+lane finds them from the worktree's own history, so you don't have to remember. Any
+that still hold unique work are marked, and one question covers them.
 
 When the work demonstrably landed — git says so, or the pull request is `MERGED` —
 the branch is deleted without a second question. That includes the squash-merge

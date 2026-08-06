@@ -19,7 +19,7 @@ from lane.actions import close_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
-from lane.github.client import CannotTell, Found, NoPullRequest, NotApplicable, PullRequest
+from lane.github.client import CannotTell, NoPullRequest, NotApplicable, PullRequest, found
 from lane.lanes import LaneMeta, LaneStore
 from lane.state import StateStore
 from lane.ui.seam import Abandoned
@@ -199,7 +199,7 @@ def test_a_merged_pull_request_counts_as_clean_even_though_git_disagrees(
     # git's own check must disagree, or this test proves nothing.
     assert not CliGitBackend().status(lane, "main").merged
 
-    merged_pr = Found(PullRequest(number=42, state="MERGED", url="https://github.com/a/b/pull/42"))
+    merged_pr = found(PullRequest(number=42, state="MERGED", url="https://github.com/a/b/pull/42"))
     ui = FakeUi([True])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged_pr)), store, "mylane")
 
@@ -207,6 +207,100 @@ def test_a_merged_pull_request_counts_as_clean_even_though_git_disagrees(
     assert ui.said("squashed or rebased")
     assert ui.said("#42")
     assert not lane.exists()
+
+
+def test_a_lane_whose_remote_branch_was_deleted_on_merge_is_not_called_never_pushed(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """The reported fault: `✓ PR merged` and `! never pushed`, about the same lane.
+
+    Merging with *delete branch* — the default on most repositories — removes
+    `origin/<branch>`, so `@{u}` stops resolving and the unpushed count falls back to
+    counting against `origin/main`, where a squash merge left none of the lane's
+    commits. Neither fact says the branch was never pushed, and neither is a reason to
+    hold the lane open. This is the same false negative the pull request check already
+    exists to correct, reached through the check next door.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+    landed = _commit(lane, "feature.txt", "the feature")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
+    origin.advance("squashed the feature")
+    origin.delete_branch("feature/x")
+    CliGitBackend().fetch_prune(repo)
+
+    # The shape of the bug, before anything is asserted about what lane says.
+    status = CliGitBackend().status(lane, "main")
+    assert status.upstream is None, "the remote-tracking ref went with the merge"
+    assert status.unpushed_count == 1, "and the count fell back to origin/main"
+
+    merged = found(
+        PullRequest(
+            number=42, state="MERGED", url="https://github.com/a/b/pull/42", head_oid=landed
+        )
+    )
+    ui = FakeUi([True])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
+
+    assert not ui.said("never pushed"), "it was pushed — that is where PR #42 came from"
+    assert ui.said("Nothing left to push")
+    assert ui.said("Lane is clear")
+    assert not lane.exists()
+
+
+def test_commits_made_after_the_merge_still_block(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """What keeps the fix above from excusing work that has not landed.
+
+    A merged pull request is not a blanket amnesty for everything on the branch. The
+    commits it carried are safe; anything committed afterwards exists in this worktree
+    and nowhere else, and closing the lane would take it away.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+    landed = _commit(lane, "feature.txt", "the feature")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
+    origin.advance("squashed the feature")
+    origin.delete_branch("feature/x")
+    CliGitBackend().fetch_prune(repo)
+    _commit(lane, "afterthought.txt", "a fix-up nobody has seen")
+
+    merged = found(PullRequest(number=42, state="MERGED", url="u42", head_oid=landed))
+    ui = FakeUi([False])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
+
+    assert ui.said("1 commit(s) made after PR #42 merged")
+    assert ui.said("holding this lane open")
+    assert lane.is_dir(), "declining leaves the unlanded commit where it is"
+
+
+def test_a_branch_amended_after_its_merge_is_refused_rather_than_guessed_at(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Rebase or amend after the merge and the commit that landed is gone from here.
+
+    How much of this branch the pull request carried then cannot be known locally, and
+    "cannot tell" is refused for the same reason an unreachable `gh` is: the answer is
+    what the close decides on, and a guess in its place risks the commits.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+    _commit(lane, "feature.txt", "the feature")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
+    origin.advance("squashed the feature")
+    origin.delete_branch("feature/x")
+    CliGitBackend().fetch_prune(repo)
+    git(["commit", "--quiet", "--amend", "-m", "the feature, reworded"], cwd=lane)
+
+    # The pull request merged from a commit this branch no longer has.
+    merged = found(PullRequest(number=42, state="MERGED", url="u42", head_oid="0" * 40))
+    ui = FakeUi([False])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
+
+    assert ui.said("Cannot tell what PR #42 carried")
+    assert ui.said("holding this lane open")
+    assert lane.is_dir()
 
 
 # -- I18: open, closed and missing pull requests block ---------------------------
@@ -220,7 +314,7 @@ def test_an_open_pull_request_blocks_and_shows_its_url(
     _commit(lane, "wip.txt", "work in progress")
     git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
 
-    open_pr = Found(PullRequest(number=7, state="OPEN", url="https://github.com/a/b/pull/7"))
+    open_pr = found(PullRequest(number=7, state="OPEN", url="https://github.com/a/b/pull/7"))
     ui = FakeUi([False])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(open_pr)), store, "mylane")
 
@@ -230,6 +324,113 @@ def test_an_open_pull_request_blocks_and_shows_its_url(
     assert lane.is_dir()
 
 
+def test_an_open_follow_up_blocks_even_though_an_earlier_one_merged(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A lane's branch can carry a history of pull requests, and none of it is dropped.
+
+    The earlier one landing does not make the lane closeable: the open follow-up is
+    work in flight, and closing over it would take the branch it lives on. Both are
+    reported — the merged one as context, the open one as the thing in the way.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+    landed = _commit(lane, "feature.txt", "the feature")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
+    origin.advance("squashed the feature")
+    CliGitBackend().fetch_prune(repo)
+    _commit(lane, "followup.txt", "the fix-up")
+    git(["push", "--quiet", "origin", "feature/x"], cwd=lane)
+
+    history = found(
+        PullRequest(
+            number=41, state="MERGED", url="https://github.com/a/b/pull/41", head_oid=landed
+        ),
+        PullRequest(number=42, state="OPEN", url="https://github.com/a/b/pull/42"),
+    )
+    ui = FakeUi([False])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(history)), store, "mylane")
+
+    assert ui.said("PR #42 is still open")
+    assert ui.said("https://github.com/a/b/pull/41"), "the earlier one is not dropped"
+    assert ui.said("holding this lane open")
+    assert not ui.said("Lane is clear")
+    assert lane.is_dir()
+
+
+def test_every_branch_the_lane_used_is_deleted_not_only_the_last_one(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A lane's branches go with the lane, and a lane can have used several.
+
+    Leaving the earlier ones behind is how a repository fills up with dead branches
+    after every successful close — the same fault deleting the current branch exists to
+    prevent, one branch to the left. They are read from the worktree's reflog while it
+    is still there: removing it takes that record with it.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
+
+    ui = FakeUi([True])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    backend = CliGitBackend()
+    assert not backend.branch_exists(repo, "feature/second")
+    assert not backend.branch_exists(repo, "feature/first"), "the one it started on goes too"
+    assert ui.said("feature/first"), "and the summary said so before removing anything"
+
+
+def _lane_with_an_unmerged_second_branch(repo: Path, store: LaneStore) -> Path:
+    """A lane standing on a clean branch, with unique work left on one it used earlier."""
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
+    _commit(lane, "abandoned.txt", "work nobody took")
+    git(["switch", "--quiet", "feature/first"], cwd=lane)
+    return lane
+
+
+def test_an_unmerged_branch_the_lane_used_is_not_force_deleted_without_permission(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """git's refusal to `-d` a branch holding unique work is the safety net here too.
+
+    Overriding it is the user's call, asked in the same pass as every other question and
+    before anything is removed — so declining leaves the branch exactly where it was,
+    with the command to remove it by hand.
+    """
+    _, repo, store = lane_setup
+    _lane_with_an_unmerged_second_branch(repo, store)
+
+    ui = FakeUi([True, False])  # close it; but do not force the unmerged one
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    backend = CliGitBackend()
+    assert not backend.branch_exists(repo, "feature/first"), "the lane's own branch still goes"
+    assert backend.branch_exists(repo, "feature/second"), "the unmerged one was declined"
+    assert ui.said("not merged")
+    assert ui.said("Branch kept: feature/second")
+
+
+def test_an_unmerged_branch_the_lane_used_is_deleted_once_permission_is_given(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    _, repo, store = lane_setup
+    _lane_with_an_unmerged_second_branch(repo, store)
+
+    ui = FakeUi([True, True])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    assert not CliGitBackend().branch_exists(repo, "feature/second")
+    assert ui.said("Branch deleted: feature/second")
+
+
 def test_a_closed_pull_request_blocks_and_shows_its_url(
     lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
 ) -> None:
@@ -237,7 +438,7 @@ def test_a_closed_pull_request_blocks_and_shows_its_url(
     lane = _open_branch_lane(repo, store)
     _commit(lane, "abandoned.txt", "abandoned work")
 
-    closed = Found(PullRequest(number=9, state="CLOSED", url="https://github.com/a/b/pull/9"))
+    closed = found(PullRequest(number=9, state="CLOSED", url="https://github.com/a/b/pull/9"))
     ui = FakeUi([False])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(closed)), store, "mylane")
 
@@ -570,7 +771,7 @@ def test_a_squash_merged_lane_has_its_local_branch_deleted(
         "git must disagree, or this proves nothing"
     )
 
-    merged_pr = Found(PullRequest(number=7, state="MERGED", url="https://github.com/a/b/pull/7"))
+    merged_pr = found(PullRequest(number=7, state="MERGED", url="https://github.com/a/b/pull/7"))
     ui = FakeUi([True])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged_pr)), store, "squashed")
 
@@ -606,7 +807,7 @@ def test_a_merged_lane_does_not_ask_twice_about_its_branch(
     origin.advance("squashed")
     CliGitBackend().fetch_prune(repo)
 
-    merged_pr = Found(PullRequest(number=8, state="MERGED", url="u"))
+    merged_pr = found(PullRequest(number=8, state="MERGED", url="u"))
     # Only two answers scripted: pick the lane, confirm the close. A third question
     # would exhaust the script and fail.
     ui = FakeUi([True])

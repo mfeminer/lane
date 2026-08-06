@@ -16,16 +16,21 @@ from pathlib import Path
 
 from lane.github.client import (
     CannotTell,
-    Found,
     NoPullRequest,
     NotApplicable,
     PrLookup,
     PrState,
     PullRequest,
+    found,
     is_github_remote,
 )
 
 _TIMEOUT = 60
+
+_LIMIT = 100
+"""How many pull requests one branch could plausibly have had. `gh` defaults to 30
+and says nothing when it truncates, and silently dropping history is the fault this
+query exists to fix."""
 
 INSTALL_REMEDY = "brew install gh"
 LOGIN_REMEDY = "gh auth login"
@@ -54,10 +59,15 @@ class GhClient:
                 [
                     self._gh,
                     "pr",
-                    "view",
+                    "list",
+                    "--head",
                     branch,
+                    "--state",
+                    "all",
+                    "--limit",
+                    str(_LIMIT),
                     "--json",
-                    "number,state,url",
+                    "number,state,url,headRefOid",
                 ],
                 cwd=cwd,
                 capture_output=True,
@@ -126,18 +136,36 @@ class GhClient:
                 remedy=LOGIN_REMEDY,
                 detail=f"gh returned something unreadable: {exc}",
             )
-        if not isinstance(body, dict):
+        # `gh pr list` answers with an array, and an empty one is the ordinary way it
+        # says there are none — not a failure.
+        if not isinstance(body, list):
             return NoPullRequest()
 
-        raw_state = str(body.get("state", "")).upper()
+        pull_requests = [pr for pr in (self._one(item) for item in body) if pr is not None]
+        if not pull_requests:
+            # `[]` is how `gh pr list` says there are none, and it is a `NoPullRequest`
+            # rather than an empty `Found` — which would have no decisive pull request
+            # for its readers to ask about.
+            return NoPullRequest()
+
+        return found(*pull_requests)
+
+    def _one(self, item: object) -> PullRequest | None:
+        """One entry, or None when it carries nothing that identifies a pull request."""
+        if not isinstance(item, dict):
+            return None
+
+        raw_state = str(item.get("state", "")).upper()
         state: PrState = raw_state if raw_state in _VALID_STATES else "OPEN"
         try:
-            number = int(body.get("number", 0))
+            number = int(item.get("number", 0))
         except TypeError, ValueError:
             number = 0
-        url = str(body.get("url", ""))
+        url = str(item.get("url", ""))
 
         if number == 0 and not url:
-            return NoPullRequest()
+            return None
 
-        return Found(PullRequest(number=number, state=state, url=url))
+        return PullRequest(
+            number=number, state=state, url=url, head_oid=str(item.get("headRefOid", ""))
+        )
