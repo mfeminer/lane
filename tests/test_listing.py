@@ -198,6 +198,67 @@ def test_a_lane_whose_work_reached_the_base_is_shown_as_merged(
     assert "✓ merged" in ui.transcript
 
 
+def test_a_squash_merged_lane_is_not_called_unmerged_next_to_a_merged_pull_request(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The false negative the close flow already resolves, in the column that shows it.
+
+    A squash merge lands the lane's work as one *new* commit, so none of the lane's
+    own commits is an ancestor of `origin/<base>` and the ancestry check says "not
+    merged yet" — while `pr` says `merged` one column over, about the same lane. The
+    two cells contradicted each other on screen. A `MERGED` pull request settles it,
+    exactly as it already does when closing: the work landed, however it landed.
+    """
+    _origin, clone = build_repo(projects_root / "_b")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    backend = CliGitBackend()
+    store = LaneStore(lanes_root)
+    lane = store.lane_path("thing", "squashed")
+    backend.add_worktree_new_branch(repo, lane, "feature/squashed", "origin/main")
+    started_at = backend.head_commit(lane)
+    (lane / "work.txt").write_text("real work\n")
+    git(["add", "-A"], cwd=lane)
+    git(["commit", "--quiet", "-m", "real work"], cwd=lane)
+    # Pushed, as any lane with a pull request is: nothing is left unpushed, which is
+    # what leaves `state` saying only "not merged yet".
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/squashed"], cwd=lane)
+    store.write_meta(
+        "thing",
+        "squashed",
+        LaneMeta(description="squashed", base="main", repo=str(repo), start=started_at),
+    )
+
+    # The squash, as GitHub performs it: the same content as one new commit on the
+    # base, so the lane's own commit is nowhere in `origin/main`'s ancestry.
+    (repo / "work.txt").write_text("real work\n")
+    git(["add", "-A"], cwd=repo)
+    git(["commit", "--quiet", "-m", "real work (#1012)"], cwd=repo)
+    git(["push", "--quiet", "origin", "main"], cwd=repo)
+    backend.fetch_prune(repo)
+
+    premise = backend.status(lane, "main", started_at)
+    assert not premise.merged, "the premise: git cannot see this work in the base"
+    assert premise.has_own_commits and not premise.unpushed_count
+
+    ui = FakeUi(["back"])
+    list_lanes.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            github=StubGitHubClient(
+                Found(PullRequest(number=1012, state="MERGED", url="http://x/1012"))
+            ),
+        )
+    )
+
+    rows = " ".join(told.text for told in ui.told if told.kind == "row")
+    assert "#1012 merged" in rows, "the pull request column was already right"
+    assert "not merged yet" not in rows, "and state must not contradict it"
+    assert "✓ merged" in rows
+
+
 def test_a_detached_lane_says_so_where_it_changes_what_closing_does(
     projects_root: Path, lanes_root: Path
 ) -> None:
