@@ -22,7 +22,7 @@ EXIT_OK = 0
 def run(context: Context, *, git_available: bool = True) -> int:
     ui = context.ui
 
-    ui.heading(f"lane {__version__}")
+    ui.splash(__version__)
     if not git_available:
         # The session still starts, and doctor still works: it is the action that
         # explains this. Everything else refuses.
@@ -33,10 +33,13 @@ def run(context: Context, *, git_available: bool = True) -> int:
         try:
             action = _choose_action(context)
         except Abandoned:
-            # q, Esc or Ctrl-C at the menu ends the session cleanly.
+            # Ctrl-C at the menu ends the session cleanly — by the same door as quit,
+            # which is why the road is closed here too and not only below.
+            ui.farewell()
             return EXIT_OK
 
         if action is None or action.run is None:
+            ui.farewell()
             return EXIT_OK
 
         if action.needs_git and not git_available:

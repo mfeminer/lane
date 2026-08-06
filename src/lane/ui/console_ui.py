@@ -20,11 +20,13 @@ from collections.abc import Callable, Sequence
 from prompt_toolkit.input import Input
 from prompt_toolkit.output import Output
 from rich.console import Console
+from rich.text import Text
 
-from lane.ui import render
+from lane.ui import render, splash
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
 from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row
+from lane.ui.splash import Line
 from lane.ui.table import browse as browse_table
 
 _BACK = object()
@@ -154,6 +156,20 @@ class ConsoleUi:
 
     def blank(self) -> None:
         self._console.print()
+
+    def splash(self, version: str) -> None:
+        size = self._console.size
+        self._paint(splash.opening(size.width, size.height, version))
+
+    def farewell(self) -> None:
+        self._console.print()
+        self._paint(splash.closing(self._console.width))
+
+    def _paint(self, lines: list[Line]) -> None:
+        """Segments, not markup: the road is drawn from box characters and `█`, and
+        putting those through markup would mean escaping art that contains no markup."""
+        for line in lines:
+            self._console.print(Text.assemble(*((s.text, s.style) for s in line)))
 
     def progress[T](self, text: str, work: Callable[[], T]) -> T:
         """Long steps — fetching origin, asking GitHub — must show something.

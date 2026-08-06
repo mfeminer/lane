@@ -179,6 +179,18 @@ class Ui(Protocol):
     def heading(self, text: str) -> None: ...
     def blank(self) -> None: ...
 
+    def splash(self, version: str) -> None:
+        """Lay the road the session runs on, once, at the top.
+
+        The session's own opening, not an action's: action screens still name
+        themselves with `heading` (docs/CONVENTIONS.md §1).
+        """
+        ...
+
+    def farewell(self) -> None:
+        """Close the road. The last thing the session says, by either way out."""
+        ...
+
     def progress[T](self, text: str, work: Callable[[], T]) -> T:
         """Run `work` while showing that something is happening."""
         ...

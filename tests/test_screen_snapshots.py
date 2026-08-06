@@ -27,6 +27,7 @@ reason).
 from __future__ import annotations
 
 from lane.ui.seam import Cell, Column, Row
+from lane.ui.splash import closing, opening, plain
 from lane.ui.table import paint
 
 BACK = "← Back to the menu"
@@ -101,3 +102,69 @@ def test_the_lanes_table_at_44_columns_abbreviates_state_before_losing_pr() -> N
     assert "●1 ↑1" in body, "state abbreviates to its short form"
     assert "● 1 uncommitted · ↑ 1 unpushed" not in body, "the long form is gone, not cut mid-word"
     assert "1 un" not in body, "no fragment of a word split mid-character survives"
+
+
+# -- The splash ------------------------------------------------------------------
+# Pinned whole, unlike the table above, because it is *drawing*: nothing else in the
+# app would notice if a wheel moved, a lane lost its markings or the wordmark drifted
+# off centre. The three widths are the ones §13 promises — full, the 44-column floor,
+# and a window too short for the car bodies.
+
+
+def _splash(width: int, height: int = 40, version: str = "0.0.2") -> str:
+    return "\n".join(line.rstrip() for line in plain(opening(width, height, version)))
+
+
+def test_the_splash_at_80_columns() -> None:
+    assert _splash(80) == (
+        "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  ╭─────╮\n"
+        "  │ one │\n"
+        "  ╰─○─○─╯\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "                   ╭──────╮\n"
+        "                   │ task │\n"
+        "                   ╰─○──○─╯\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "                                    ╭─────╮\n"
+        "                                    │ per │\n"
+        "                                    ╰─○─○─╯\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "                  ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "                  ┃ █     ▄▀▀▄  █▄  █  █▀▀▀ ┃\n"
+        "                  ┃ █     █▄▄█  █ ▀▄█  █▀▀  ┃\n"
+        "                  ┃ █▄▄▄  █  █  █   █  █▄▄▄ ┃\n"
+        "                  ┗━━━○━━━━━━━━━━━━━━━━━○━━━┛           v0.0.2\n"
+        "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+
+def test_the_splash_at_the_44_column_floor() -> None:
+    """The cars ride bare and the version steps off the truck — the road survives."""
+    assert _splash(44) == (
+        "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "  one\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "             task\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "                         per\n"
+        "  ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌ ╌\n"
+        "        ┏━━━━━━━━━━━━━━━━━━━━━━━━━┓\n"
+        "        ┃ █     ▄▀▀▄  █▄  █  █▀▀▀ ┃\n"
+        "        ┃ █     █▄▄█  █ ▀▄█  █▀▀  ┃\n"
+        "        ┃ █▄▄▄  █  █  █   █  █▄▄▄ ┃\n"
+        "        ┗━━━○━━━━━━━━━━━━━━━━━○━━━┛\n"
+        "                                    v0.0.2\n"
+        "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+
+def test_the_splash_in_a_short_window_keeps_the_menu_below_it_on_screen() -> None:
+    body = _splash(80, height=24)
+    assert "╭" not in body
+    assert len(body.splitlines()) == 13
+
+
+def test_the_farewell_is_the_road_closing() -> None:
+    """Pins the wording as well as the shape: it is the last thing lane ever says."""
+    assert plain(closing(80)) == ["  ━━━━━━━━━━━━━━━━━ see you in the next lane ━━━━━━━━━━━━━━━━━"]
