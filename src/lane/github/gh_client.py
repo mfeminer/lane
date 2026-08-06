@@ -16,6 +16,8 @@ from pathlib import Path
 
 from lane.github.client import (
     CannotTell,
+    DependentLookup,
+    Dependents,
     NoPullRequest,
     NotApplicable,
     PrLookup,
@@ -47,6 +49,48 @@ class GhClient:
     def pull_request_for(
         self, *, branch: str | None, remote_url: str | None, cwd: Path
     ) -> PrLookup:
+        listed = self._list(
+            branch=branch,
+            remote_url=remote_url,
+            cwd=cwd,
+            select=("--head", "--state", "all"),
+            fields="number,state,url,headRefOid",
+        )
+        if not isinstance(listed, str):
+            return listed
+        return self._parse(listed)
+
+    def pull_requests_based_on(
+        self, *, branch: str | None, remote_url: str | None, cwd: Path
+    ) -> DependentLookup:
+        # Only open ones: a closed or merged pull request based on this branch is no
+        # longer at risk from deleting it.
+        listed = self._list(
+            branch=branch,
+            remote_url=remote_url,
+            cwd=cwd,
+            select=("--base", "--state", "open"),
+            fields="number,state,url",
+        )
+        if not isinstance(listed, str):
+            return listed
+        return self._parse_dependents(listed)
+
+    def _list(
+        self,
+        *,
+        branch: str | None,
+        remote_url: str | None,
+        cwd: Path,
+        select: tuple[str, str, str],
+        fields: str,
+    ) -> str | CannotTell | NotApplicable:
+        """Run one `gh pr list`, returning its stdout or the reason there is none.
+
+        Both questions are the same subprocess with a different filter, and both have
+        the same three ways of not being answerable. Sharing this is what keeps "I
+        cannot tell you" identical for either of them rather than nearly identical.
+        """
         # Both of these are answered without invoking `gh` at all: there is no pull
         # request to ask about, so the close proceeds on git's own evidence.
         if branch is None:
@@ -54,20 +98,21 @@ class GhClient:
         if not is_github_remote(remote_url):
             return NotApplicable("not-github")
 
+        which, state_flag, state = select
         try:
             done = subprocess.run(
                 [
                     self._gh,
                     "pr",
                     "list",
-                    "--head",
+                    which,
                     branch,
-                    "--state",
-                    "all",
+                    state_flag,
+                    state,
                     "--limit",
                     str(_LIMIT),
                     "--json",
-                    "number,state,url,headRefOid",
+                    fields,
                 ],
                 cwd=cwd,
                 capture_output=True,
@@ -89,9 +134,12 @@ class GhClient:
             )
 
         if done.returncode != 0:
-            return self._interpret_failure(done.stderr)
+            failure = self._interpret_failure(done.stderr)
+            # `no pull requests found` is `gh` being chatty about an empty result, and
+            # for either question an empty result is stdout's business, not an error.
+            return failure if isinstance(failure, CannotTell) else ""
 
-        return self._parse(done.stdout)
+        return done.stdout
 
     def _interpret_failure(self, stderr: str) -> PrLookup:
         """`gh` uses one exit code for many situations, so the message decides."""
@@ -149,6 +197,23 @@ class GhClient:
             return NoPullRequest()
 
         return found(*pull_requests)
+
+    def _parse_dependents(self, stdout: str) -> DependentLookup:
+        """Empty is a real answer here, so there is no `NoPullRequest` to fall back to."""
+        if not stdout.strip():
+            return Dependents(())
+        try:
+            body = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return CannotTell(
+                reason="gh-failed",
+                remedy=LOGIN_REMEDY,
+                detail=f"gh returned something unreadable: {exc}",
+            )
+        if not isinstance(body, list):
+            return Dependents(())
+
+        return Dependents(tuple(pr for pr in (self._one(item) for item in body) if pr is not None))
 
     def _one(self, item: object) -> PullRequest | None:
         """One entry, or None when it carries nothing that identifies a pull request."""

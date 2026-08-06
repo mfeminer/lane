@@ -11,10 +11,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from lane.actions import list_lanes
+from lane.actions.list_lanes import PrCell
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
-from lane.github.client import CannotTell, NotApplicable, PullRequest, found
+from lane.github.client import (
+    CannotTell,
+    Dependents,
+    NotApplicable,
+    PullRequest,
+    found,
+)
 from lane.lanes import LaneMeta, LaneStore
 from lane.state import StateStore
 from tests.conftest import build_repo, git
@@ -393,6 +400,69 @@ def test_the_column_shows_the_decisive_pull_request_and_the_panel_keeps_the_rest
     assert "http://x/42" in panel, "the decisive one keeps its URL"
     panel_lines = [told for told in ui.told if told.kind == "panel"]
     assert len(panel_lines) <= 3 * 2, "two lanes, and the panel keeps at most three lines each"
+
+
+def test_a_lane_another_pull_request_is_built_on_says_so_in_state(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """It is a blocker, so it belongs in `state` — that is what `state` is for.
+
+    Not in `pr`: that column is about the lane's own pull requests, and a review
+    stacked on the branch is somebody else's. `state` already carries the things that
+    change what closing does, in the same vocabulary of counts and marks.
+    """
+    _two_lanes(projects_root, lanes_root)
+    github = StubGitHubClient(
+        found(PullRequest(number=42, state="OPEN", url="http://x/42")),
+        dependents=Dependents((PullRequest(number=99, state="OPEN", url="http://x/99"),)),
+    )
+    ui = FakeUi(["back"])
+
+    list_lanes.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root, github=github))
+
+    rows = " ".join(told.text for told in ui.told if told.kind == "row")
+    panel = " ".join(told.text for told in ui.told if told.kind == "panel")
+    assert "↳ 1 stacked" in rows
+    assert "#99" not in rows, "the pr column stays the lane's own pull requests"
+    assert "base of #99" in panel, "and the panel names it so you can go and look"
+
+
+def test_a_stacked_pull_request_makes_state_read_as_blocked(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Tone, not text: a blocker drawn in the clean colour is a blocker nobody sees.
+
+    Asserted on the cell directly, because the seam's fake records what each cell
+    *says* and this is about how it is drawn.
+    """
+    _repo, store = _two_lanes(projects_root, lanes_root)
+    lane = next(one for one in store.list_lanes() if one.name == "clean-lane")
+    status = CliGitBackend().status(lane.path, "main", lane.meta.start)
+
+    quiet = list_lanes.LaneRow(lane=lane, status=status)
+    stacked = list_lanes.LaneRow(
+        lane=lane,
+        status=status,
+        pr=PrCell("#42 open", "warn", "", stacked=(99,)),
+    )
+
+    assert list_lanes._state_cell(quiet).tone != "warn", "the premise: nothing is wrong with it"
+    assert list_lanes._state_cell(stacked).tone == "warn"
+
+
+def test_nothing_stacked_says_nothing_at_all(projects_root: Path, lanes_root: Path) -> None:
+    """The common case adds no noise to either the row or the panel."""
+    _two_lanes(projects_root, lanes_root)
+    github = StubGitHubClient(
+        found(PullRequest(number=42, state="OPEN", url="http://x/42")),
+        dependents=Dependents(()),
+    )
+    ui = FakeUi(["back"])
+
+    list_lanes.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root, github=github))
+
+    assert "stacked" not in ui.transcript
+    assert "base of" not in ui.transcript
 
 
 def test_gh_being_unavailable_is_unknown_and_the_panel_says_how_to_fix_it(

@@ -13,6 +13,7 @@ import pytest
 
 from lane.github.client import (
     CannotTell,
+    Dependents,
     Found,
     NoPullRequest,
     NotApplicable,
@@ -113,6 +114,65 @@ def test_no_pull_request_found(tmp_path: Path) -> None:
     answer = GhClient(gh).pull_request_for(branch="feature/x", remote_url=GITHUB, cwd=tmp_path)
 
     assert isinstance(answer, NoPullRequest)
+
+
+# -- what is stacked on top of this branch ----------------------------------------
+
+
+def test_pull_requests_based_on_this_branch_are_a_separate_question(tmp_path: Path) -> None:
+    """`--head` and `--base` are opposite ends of one relationship.
+
+    The first asks what this branch produced, and answers whether the lane's work
+    landed. Only the second says *deleting this branch would break somebody's pull
+    request*, which is a fact about the close, not about the work.
+    """
+    gh = _fake_gh(
+        tmp_path,
+        stdout='[{"number": 99, "state": "OPEN", "url": "https://github.com/a/b/pull/99"}]',
+    )
+
+    answer = GhClient(gh).pull_requests_based_on(
+        branch="feature/x", remote_url=GITHUB, cwd=tmp_path
+    )
+
+    assert isinstance(answer, Dependents)
+    assert [pr.number for pr in answer.pull_requests] == [99]
+    assert answer.pull_requests[0].url.endswith("/pull/99")
+
+
+def test_nothing_based_on_this_branch_is_none_rather_than_a_failure(tmp_path: Path) -> None:
+    """The ordinary case, and the one that must not read as "I could not ask"."""
+    gh = _fake_gh(tmp_path, stdout="[]")
+
+    answer = GhClient(gh).pull_requests_based_on(
+        branch="feature/x", remote_url=GITHUB, cwd=tmp_path
+    )
+
+    assert isinstance(answer, Dependents)
+    assert answer.pull_requests == ()
+
+
+def test_dependents_that_cannot_be_asked_about_are_cannot_tell(tmp_path: Path) -> None:
+    """Same first-class "I cannot tell you" as the lane's own pull requests.
+
+    A close that would break another pull request must not go ahead on the grounds
+    that nobody could be reached to ask.
+    """
+    answer = GhClient("definitely-not-installed-gh").pull_requests_based_on(
+        branch="feature/x", remote_url=GITHUB, cwd=tmp_path
+    )
+
+    assert isinstance(answer, CannotTell)
+    assert answer.remedy == "brew install gh"
+
+
+def test_a_detached_lane_has_no_branch_for_anything_to_be_based_on(tmp_path: Path) -> None:
+    answer = GhClient("definitely-not-installed-gh").pull_requests_based_on(
+        branch=None, remote_url=GITHUB, cwd=tmp_path
+    )
+
+    assert isinstance(answer, NotApplicable)
+    assert answer.reason == "detached"
 
 
 # -- G3, G4: cannot tell ---------------------------------------------------------

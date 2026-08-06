@@ -73,6 +73,23 @@ class Found:
 
 
 @dataclass(frozen=True, slots=True)
+class Dependents:
+    """The open pull requests based on this branch — what deleting it would break.
+
+    The opposite end of the relationship `Found` describes: those came *from* the
+    branch and say whether its work landed, while these are stacked *on* it and say
+    nothing about the work at all. Only open ones are asked for; a closed or merged
+    one is no longer at risk from anything the close does.
+
+    Empty is a real answer and means GitHub was asked. "I could not ask" is
+    `CannotTell`, as everywhere else — the two must never collapse into each other,
+    because one of them is permission to delete the branch and the other is not.
+    """
+
+    pull_requests: tuple[PullRequest, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class NoPullRequest:
     """GitHub was asked and has no pull request for this branch."""
 
@@ -98,6 +115,7 @@ class NotApplicable:
 
 
 type PrLookup = Found | NoPullRequest | CannotTell | NotApplicable
+type DependentLookup = Dependents | CannotTell | NotApplicable
 
 
 def found(*pull_requests: PullRequest) -> Found:
@@ -118,11 +136,22 @@ class GitHubClient(Protocol):
     def pull_request_for(
         self, *, branch: str | None, remote_url: str | None, cwd: Path
     ) -> PrLookup:
-        """The pull request state for `branch`.
+        """Every pull request whose head was `branch`, and so whether its work landed.
 
         `branch` is None for a detached lane and `remote_url` is whatever origin
         points at — the caller passes what it already knows so that this seam,
         and only this seam, decides whether `gh` is worth invoking.
+        """
+        ...
+
+    def pull_requests_based_on(
+        self, *, branch: str | None, remote_url: str | None, cwd: Path
+    ) -> DependentLookup:
+        """The open pull requests using `branch` as their base.
+
+        A second question, not a refinement of the first: closing a lane deletes its
+        branch, and deleting the base of an open pull request breaks it. Nothing about
+        the lane's own work can reveal that.
         """
         ...
 

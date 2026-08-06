@@ -19,7 +19,14 @@ from lane.actions import close_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
-from lane.github.client import CannotTell, NoPullRequest, NotApplicable, PullRequest, found
+from lane.github.client import (
+    CannotTell,
+    Dependents,
+    NoPullRequest,
+    NotApplicable,
+    PullRequest,
+    found,
+)
 from lane.lanes import LaneMeta, LaneStore
 from lane.state import StateStore
 from lane.ui.seam import Abandoned
@@ -429,6 +436,63 @@ def test_an_unmerged_branch_the_lane_used_is_deleted_once_permission_is_given(
 
     assert not CliGitBackend().branch_exists(repo, "feature/second")
     assert ui.said("Branch deleted: feature/second")
+
+
+def test_a_pull_request_based_on_this_branch_blocks_the_close(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Closing deletes the branch, and deleting a base breaks the pull request on it.
+
+    Nothing about the lane's own work reveals this: its pull request can be merged and
+    its tree clean, and the close would still take out somebody else's open review.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+    landed = _commit(lane, "feature.txt", "the feature")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
+    origin.advance("squashed the feature")
+    CliGitBackend().fetch_prune(repo)
+
+    github = StubGitHubClient(
+        found(PullRequest(number=42, state="MERGED", url="u42", head_oid=landed)),
+        dependents=Dependents(
+            (PullRequest(number=99, state="OPEN", url="https://github.com/a/b/pull/99"),)
+        ),
+    )
+    ui = FakeUi([False])
+    _close(_context(ui, projects_root, lanes_root, github), store, "mylane")
+
+    assert ui.said("PR #99 is based on this branch")
+    assert ui.said("https://github.com/a/b/pull/99")
+    assert ui.said("holding this lane open")
+    assert not ui.said("Lane is clear"), "the lane's own work landing is not the question"
+    assert lane.is_dir()
+    assert github.asked_about_dependents == ["feature/x"]
+
+
+def test_a_close_is_refused_when_dependents_cannot_be_checked(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """ "I could not ask" is not permission to delete the branch.
+
+    The same refusal the lane's own pull request already gets: a close decides on these
+    answers, and going ahead without one risks breaking a review nobody can see.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+
+    github = StubGitHubClient(
+        NoPullRequest(),
+        dependents=CannotTell(
+            reason="gh-logged-out", remedy="gh auth login", detail="gh is not logged in"
+        ),
+    )
+    ui = FakeUi([])
+    _close(_context(ui, projects_root, lanes_root, github), store, "mylane")
+
+    assert ui.said("gh auth login")
+    assert lane.is_dir()
+    assert ui.asked == [], "refused before asking anything"
 
 
 def test_a_closed_pull_request_blocks_and_shows_its_url(

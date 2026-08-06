@@ -22,6 +22,8 @@ from lane.context import Context
 from lane.git.backend import GitError, WorktreeStatus
 from lane.github.client import (
     CannotTell,
+    DependentLookup,
+    Dependents,
     Found,
     NoPullRequest,
     NotApplicable,
@@ -111,13 +113,23 @@ def close(context: Context, lane: Lane) -> None:
     # A lane that cannot be checked is refused — decided from the client's answer
     # alone, never by probing the environment separately.
     if isinstance(answer, CannotTell):
-        ui.blank()
-        ui.error(f"Cannot verify the pull request for '{status.branch}': {answer.detail}.")
-        ui.detail(f"  Fix it with: {answer.remedy}")
-        ui.detail("  Then close this lane again.")
+        _refuse(context, f"the pull request for '{status.branch}'", answer)
         return
 
-    findings = _check(context, lane, status, base, answer)
+    stacked = ui.progress(
+        "Asking GitHub what is based on this branch…",
+        lambda: context.github.pull_requests_based_on(
+            branch=status.branch, remote_url=remote_url, cwd=lane.path
+        ),
+    )
+
+    # Refused for the same reason: closing deletes the branch, and "I could not ask
+    # what is stacked on it" is not permission to do that.
+    if isinstance(stacked, CannotTell):
+        _refuse(context, f"what is based on '{status.branch}'", stacked)
+        return
+
+    findings = _check(context, lane, status, base, answer, stacked)
     _report(context, findings)
 
     decisions = _ask(context, lane, status, base, findings)
@@ -128,12 +140,22 @@ def close(context: Context, lane: Lane) -> None:
     _execute(context, lane, repo, status, decisions)
 
 
+def _refuse(context: Context, subject: str, cannot: CannotTell) -> None:
+    """Both questions refuse the same way, with the command that answers them."""
+    ui = context.ui
+    ui.blank()
+    ui.error(f"Cannot verify {subject}: {cannot.detail}.")
+    ui.detail(f"  Fix it with: {cannot.remedy}")
+    ui.detail("  Then close this lane again.")
+
+
 def _check(
     context: Context,
     lane: Lane,
     status: WorktreeStatus,
     base: str,
     answer: PrLookup,
+    stacked: DependentLookup,
 ) -> _Findings:
     findings = _Findings()
 
@@ -171,6 +193,11 @@ def _check(
         findings.issues.append(
             f"Branch was never pushed — {status.unpushed_count} commit(s) on top of origin/{base}"
         )
+
+    # 4) would closing this lane break somebody else's pull request? Independent of
+    # every check above: the lane's own work can have landed, and its tree be clean,
+    # and closing it still take out an open review stacked on its branch.
+    _note_dependents(findings, stacked)
 
     # 3) has the work reached origin/<base>?
     #
@@ -223,6 +250,23 @@ def _check(
             findings.issues.append(f"Not merged into origin/{base}")
 
     return findings
+
+
+def _note_dependents(findings: _Findings, stacked: DependentLookup) -> None:
+    """Pull requests using this branch as their base.
+
+    Blocking, by the same reasoning as an open pull request of the lane's own: the
+    branch is about to be deleted and that is what these are built on. The difference
+    is whose work is at stake, which changes nothing about whether it is at stake.
+    """
+    if not isinstance(stacked, Dependents):
+        return
+
+    for pr in stacked.pull_requests:
+        findings.issues.append(
+            f"PR #{pr.number} is based on this branch, so deleting it would "
+            f"break that pull request — {pr.url}"
+        )
 
 
 def _note_the_rest_of_the_history(findings: _Findings, answer: PrLookup) -> None:

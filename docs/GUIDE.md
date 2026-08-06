@@ -172,6 +172,19 @@ panel keeps the rest, so nothing is lost off the row:
   PR #42 open — https://github.com/you/demo/pull/42 · earlier: #41 merged
 ```
 
+If somebody's pull request is **based on** your lane's branch, `state` says `↳ 1
+stacked` and the panel names it. It's in `state` rather than `pr` because `pr` is your
+own pull requests, and because it changes what closing does — the branch is about to
+be deleted and their review is built on it:
+
+```
+  lane                state                    pr           age
+❯ broken-pagination   ✓ merged · ↳ 1 stacked   #41 merged   today
+
+  bugfix/broken-pagination
+  PR #41 merged — https://github.com/you/demo/pull/41 · base of #99
+```
+
 Press `Enter` on a row and you get its two verbs:
 
 ```
@@ -191,9 +204,10 @@ you're in the editor now.
 ### It doesn't wait for GitHub
 
 Git status is local and quick, so the table is drawn as soon as it's read. Pull
-request state is a `gh` call per lane, which isn't, so the `pr` column starts as
-`checking…` and fills in while you're already reading. Status for all lanes is
-collected in parallel, so this stays fast when you have a lot of them.
+request state is two `gh` calls per lane — what came from this branch, and what's
+based on it — which isn't, so the `pr` column starts as `checking…` and fills in while
+you're already reading. Status for all lanes is collected in parallel, so this stays
+fast when you have a lot of them.
 
 If `gh` can't be asked at all, the column says `unknown` — which is a different
 thing from `none`, and the panel tells you which command fixes it:
@@ -275,6 +289,23 @@ evidence and never invoke `gh`.
 
 If a GitHub-backed lane *can't* be checked because `gh` is missing or logged out,
 lane **refuses that close** and tells you which command to run. It won't guess.
+
+### Pull requests built on your branch
+
+Closing deletes the branch, and deleting a base breaks the pull request stacked on it.
+Your own work landing doesn't make that safe — your pull request can be merged and your
+tree clean, and closing would still take out an open review. So lane asks GitHub the
+other question too, what's based on this branch, and blocks:
+
+```
+! PR #99 is based on this branch, so deleting it would break that pull request
+  — https://github.com/you/demo/pull/99
+```
+
+Only *open* ones count: a closed or merged pull request based on your branch isn't at
+risk from anything the close does. And if that question can't be answered, the close is
+refused just as it is for your own pull request — "nobody could be reached to ask"
+isn't permission to delete somebody's base.
 
 ### The local branches go with the lane
 

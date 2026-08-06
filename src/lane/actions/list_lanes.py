@@ -11,9 +11,14 @@ lane name with a prefix in front of it, and lives in the panel instead. ADR 0002
 has the reasoning, including why looking and acting are the same widget now.
 
 **Two speeds.** Git status is local and fast, so it is collected before the first
-paint. Pull request state is a `gh` process per lane and is not, so the `pr` column
-opens as `checking…` and fills in behind the screen you are already using. If the
-listing ever blocks on a `gh` round trip, this has been broken.
+paint. Pull request state is **two** `gh` processes per lane and is not, so the `pr`
+column opens as `checking…` and fills in behind the screen you are already using. If
+the listing ever blocks on a `gh` round trip, this has been broken.
+
+The second process asks what is *based on* this branch, which `--head` cannot see and
+which decides whether the lane can close at all. It costs a process rather than a
+field because it is a different query, and it is affordable for the same reason as the
+first: nothing waits for either.
 
 `state` is drawn from the row on every repaint rather than computed once, because it
 reads the pull request answer: a squash merge puts the lane's commits nowhere in the
@@ -26,13 +31,13 @@ from __future__ import annotations
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from lane.actions import enter_lane
 from lane.actions.picking import resolve_base
 from lane.context import Context
 from lane.git.backend import GitError, WorktreeStatus
-from lane.github.client import CannotTell, Found, NoPullRequest, NotApplicable
+from lane.github.client import CannotTell, Dependents, Found, NoPullRequest, NotApplicable
 from lane.lanes import Lane, age_phrase
 from lane.ui.seam import Abandoned, Cell, Choice, Column, Row, Tone
 
@@ -62,6 +67,15 @@ class PrCell:
 
     A squash or rebase merge rewrites the lane's commits, so no ancestry check will
     ever find them in the base. `state` reads this rather than contradicting it.
+    """
+
+    stacked: tuple[int, ...] = ()
+    """Numbers of the open pull requests based on this lane's branch.
+
+    Read by `state`, not drawn in `pr`: this column is the lane's own pull requests,
+    and a review stacked on the branch is somebody else's. It belongs in `state`
+    because it changes what closing does — the branch is about to be deleted, and
+    these are built on it.
     """
 
     after_merge: int | None = None
@@ -210,6 +224,11 @@ def _state_cell(row: LaneRow) -> Cell:
     if unpushed:
         parts.append(f"↑ {unpushed} unpushed")
         shorts.append(f"↑{unpushed}")
+    if row.pr.stacked:
+        # Not the lane's own work, but it decides whether the lane can close: the
+        # branch goes when it does, and these are based on it.
+        parts.append(f"↳ {len(row.pr.stacked)} stacked")
+        shorts.append(f"↳{len(row.pr.stacked)}")
     # `has_own_commits` still gates it, for the pull request route too: a lane that
     # never committed has landed nothing, whatever GitHub was asked about its branch.
     landed = status.landed or (row.pr.merged and status.has_own_commits)
@@ -220,7 +239,7 @@ def _state_cell(row: LaneRow) -> Cell:
         shorts.append("✓")
 
     if parts:
-        blocked = bool(status.dirty_count or unpushed)
+        blocked = bool(status.dirty_count or unpushed or row.pr.stacked)
         text, tone = " · ".join(parts), ("warn" if blocked else "good")
         # `✓ merged` alone is already short; abbreviating it to a bare `✓` reads as
         # nothing at all without a count next to it to anchor it.
@@ -268,7 +287,14 @@ def _after_merge(context: Context, lane: Lane, history: Found) -> int | None:
 
 
 def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrCell:
-    """Never raises: an unavailable `gh` is a cell, not a failure to render."""
+    """Both questions about this lane's branch, and the cell they make between them.
+
+    Two `gh` processes per lane, not one — see AGENTS.md. Both are paid for here, in
+    the fill, behind the screen the user is already reading; neither may be moved in
+    front of the first paint.
+
+    Never raises: an unavailable `gh` is a cell, not a failure to render.
+    """
     if status is None:
         return PrCell("—", "dim")
 
@@ -277,6 +303,45 @@ def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrC
         remote_url = context.git.remote_url(repo)
     except GitError:
         remote_url = None
+
+    return _add_what_is_stacked_on_it(
+        context, lane, status, remote_url, _own_pr_cell(context, lane, status, remote_url)
+    )
+
+
+def _add_what_is_stacked_on_it(
+    context: Context,
+    lane: Lane,
+    status: WorktreeStatus,
+    remote_url: str | None,
+    cell: PrCell,
+) -> PrCell:
+    """Whatever is based on this branch, added to the cell its own pull requests made.
+
+    Independent of that answer, so it applies whichever way it went: a lane can have no
+    pull request of its own and still be the base of somebody else's.
+    """
+    try:
+        answer = context.github.pull_requests_based_on(
+            branch=status.branch, remote_url=remote_url, cwd=lane.path
+        )
+    except Exception:
+        return cell
+
+    if not isinstance(answer, Dependents) or not answer.pull_requests:
+        # `CannotTell` needs no cell of its own: whatever stopped this question stopped
+        # the lane's own one too, and `pr` is already saying `unknown`.
+        return cell
+
+    stacked = tuple(pr.number for pr in answer.pull_requests)
+    numbers = ", ".join(f"#{number}" for number in stacked)
+    return replace(cell, stacked=stacked, note=f"{cell.note} · base of {numbers}".strip(" ·"))
+
+
+def _own_pr_cell(
+    context: Context, lane: Lane, status: WorktreeStatus, remote_url: str | None
+) -> PrCell:
+    """What the `pr` column says: this branch's own pull requests, and nothing else."""
     try:
         answer = context.github.pull_request_for(
             branch=status.branch, remote_url=remote_url, cwd=lane.path
