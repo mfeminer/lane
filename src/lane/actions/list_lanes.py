@@ -64,6 +64,16 @@ class PrCell:
     ever find them in the base. `state` reads this rather than contradicting it.
     """
 
+    after_merge: int | None = None
+    """Commits made after the decisive pull request merged, when that is knowable.
+
+    Also read by `state`, and for the same kind of reason: once the remote branch is
+    deleted there is no upstream to measure against, so the unpushed count falls back
+    to the base and counts the very commits the squash merge landed. Zero here is the
+    pull request saying it carried all of them. None means it could not be established
+    — never confuse that with zero.
+    """
+
 
 PENDING = PrCell("checking…", "dim", "Checking GitHub for a pull request…")
 """What `pr` says before `gh` has answered. Never what it settles on."""
@@ -196,9 +206,10 @@ def _state_cell(row: LaneRow) -> Cell:
     if status.dirty_count:
         parts.append(f"● {status.dirty_count} uncommitted")
         shorts.append(f"●{status.dirty_count}")
-    if status.unpushed_count:
-        parts.append(f"↑ {status.unpushed_count} unpushed")
-        shorts.append(f"↑{status.unpushed_count}")
+    unpushed = 0 if _counts_landed_work(row) else status.unpushed_count
+    if unpushed:
+        parts.append(f"↑ {unpushed} unpushed")
+        shorts.append(f"↑{unpushed}")
     # `has_own_commits` still gates it, for the pull request route too: a lane that
     # never committed has landed nothing, whatever GitHub was asked about its branch.
     landed = status.landed or (row.pr.merged and status.has_own_commits)
@@ -209,7 +220,7 @@ def _state_cell(row: LaneRow) -> Cell:
         shorts.append("✓")
 
     if parts:
-        blocked = bool(status.dirty_count or status.unpushed_count)
+        blocked = bool(status.dirty_count or unpushed)
         text, tone = " · ".join(parts), ("warn" if blocked else "good")
         # `✓ merged` alone is already short; abbreviating it to a bare `✓` reads as
         # nothing at all without a count next to it to anchor it.
@@ -224,6 +235,36 @@ def _state_cell(row: LaneRow) -> Cell:
         # changes what closing does — which makes it a state, not a name.
         return Cell(f"detached · {text}", tone="warn", short=f"detached {short}")
     return Cell(text, tone=tone, short=short)  # type: ignore[arg-type]
+
+
+def _counts_landed_work(row: LaneRow) -> bool:
+    """Whether this lane's unpushed count is measuring commits that in fact landed.
+
+    Only ever true with no upstream: that is when the count falls back to the base,
+    which a squash merge leaves the lane's commits out of. `after_merge == 0` is the
+    pull request saying it carried all of them. Anything else — a live upstream, an
+    open pull request, a count that could not be established — and the number stands.
+    """
+    return (
+        row.status is not None
+        and row.status.upstream is None
+        and row.pr.merged
+        and row.pr.after_merge == 0
+    )
+
+
+def _after_merge(context: Context, lane: Lane, history: Found) -> int | None:
+    """How much of this branch was committed after its pull request merged.
+
+    Paid for during the fill, where the `gh` call already is — so it costs the first
+    paint nothing, and the panel still makes no call of its own.
+    """
+    if not history.landed:
+        return None
+    try:
+        return context.git.commits_since(lane.path, history.decisive.head_oid)
+    except GitError:
+        return None
 
 
 def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrCell:
@@ -244,14 +285,16 @@ def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrC
         return PrCell("unknown", "bad", "Could not ask GitHub about this branch.")
 
     match answer:
-        case Found(pull_request=pr):
+        case Found() as history:
+            pr = history.decisive
             state = pr.state.lower()
             tone: Tone = "good" if pr.state == "MERGED" else "warn" if pr.state == "OPEN" else "bad"
             return PrCell(
                 f"#{pr.number} {state}",
                 tone,
-                f"PR #{pr.number} {state} — {pr.url}",
-                merged=pr.state == "MERGED",
+                f"PR #{pr.number} {state} — {pr.url}{_earlier(history)}",
+                merged=history.landed,
+                after_merge=_after_merge(context, lane, history),
             )
         case NoPullRequest():
             return PrCell("none", "dim", "No pull request for this branch yet.")
@@ -268,6 +311,20 @@ def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrC
                 else "This lane is on a detached HEAD, so there is no branch to have one."
             )
             return PrCell("—", "dim", note)
+
+
+def _earlier(history: Found) -> str:
+    """The branch's other pull requests, appended to the panel's one sentence.
+
+    A line each would be silently sliced off: the panel keeps `MAX_DETAIL_LINES` and
+    already spends them on the description, the branch and this sentence — so a lane
+    with a history would lose exactly the part worth showing. Numbers and states only;
+    the decisive one keeps the URL, and these share its prefix.
+    """
+    rest = [pr for pr in history.pull_requests if pr.number != history.decisive.number]
+    if not rest:
+        return ""
+    return " · earlier: " + ", ".join(f"#{pr.number} {pr.state.lower()}" for pr in rest)
 
 
 def _adds_something(description: str, name: str) -> bool:

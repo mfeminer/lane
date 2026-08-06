@@ -12,6 +12,7 @@ ADR 0001 has the reasoning. The two rules that keep this honest:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -186,6 +187,18 @@ class CliGitBackend:
             return False
         return self._quiet(["check-ref-format", "--branch", branch])
 
+    def branch_merged(self, repo: Path, branch: str, base: str) -> bool:
+        """Whether every commit on `branch` is already in `origin/<base>`.
+
+        `git branch -d` applies this rule itself at deletion time, which is after the
+        user has agreed to the deletion. Asking beforehand is what lets the summary
+        name the branches that hold something while there is still a choice.
+        """
+        return self._quiet(
+            ["merge-base", "--is-ancestor", branch, f"origin/{base}"],
+            cwd=repo,
+        )
+
     def branch_exists(self, repo: Path, branch: str) -> bool:
         return self._quiet(
             ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
@@ -225,6 +238,13 @@ class CliGitBackend:
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=worktree
         )
 
+        # Not the same question as `upstream`, which stops resolving the moment
+        # `origin/<branch>` is pruned — which is what merging a pull request with
+        # "delete branch" does to every lane that landed.
+        pushed_before = not detached and self._quiet(
+            ["config", "--get", f"branch.{branch}.remote"], cwd=worktree
+        )
+
         # Against the upstream when there is one, otherwise against origin/<base>:
         # a lane branch has no upstream until it is first pushed.
         compare_to = upstream if upstream is not None else f"origin/{base}"
@@ -251,11 +271,52 @@ class CliGitBackend:
             head_short=head_short,
             dirty_count=dirty_count,
             upstream=upstream,
+            pushed_before=pushed_before,
             unpushed_count=unpushed,
             ahead_of_base=ahead_of_base,
             own_commits=own,
             merged=merged,
         )
+
+    _MOVED = re.compile(r"^checkout: moving from (?P<from>.+) to (?P<to>.+)$")
+
+    def branches_used(self, worktree: Path) -> list[str]:
+        """Every branch this worktree has had checked out, most recently first.
+
+        Read from the worktree's own HEAD reflog, which is the only record of it:
+        lane is absent while the work happens, so a branch created mid-task appears
+        nowhere in its metadata. Both sides of each entry are taken — the branch the
+        worktree was created on shows up only as somewhere it moved *from*.
+
+        Names are filtered back through git: reflog entries outlive the branches they
+        name, and a spell on a detached HEAD leaves a bare commit id behind.
+        """
+        done = self._run(["reflog", "show", "HEAD", "--format=%gs"], cwd=worktree)
+        if done.returncode != 0:
+            return []
+
+        seen: dict[str, None] = {}
+        for line in done.stdout.splitlines():
+            moved = self._MOVED.match(line.strip())
+            if moved is None:
+                continue
+            # `to` before `from`: within one entry the destination is the more recent.
+            for name in (moved["to"], moved["from"]):
+                if name not in seen and self.branch_exists(worktree, name):
+                    seen[name] = None
+        return list(seen)
+
+    def commits_since(self, worktree: Path, commit: str) -> int | None:
+        """How many commits HEAD has that `commit` does not — or None if it is not here.
+
+        `^{commit}` is what makes the question real: a full-length hex string verifies
+        as a *revision* whether or not the object exists, so without it an amended or
+        rebased branch would answer 0 — "nothing added since it merged" — about a
+        commit this repository has never seen.
+        """
+        if not commit or not self.rev_parse_verify(worktree, f"{commit}^{{commit}}"):
+            return None
+        return self._count_commits(worktree, f"{commit}..HEAD")
 
     def _count_commits(self, worktree: Path, rev_range: str) -> int:
         line = self._line(["rev-list", "--count", rev_range], cwd=worktree)

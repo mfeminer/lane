@@ -334,6 +334,139 @@ def test_unpushed_counted_against_the_upstream_when_there_is_one(
     assert status.unpushed_count == 1
 
 
+def test_a_branch_whose_remote_was_deleted_is_not_mistaken_for_one_never_pushed(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """The aftermath of a merge that deleted the remote branch.
+
+    `@{u}` stops resolving once `origin/<branch>` is pruned, so a missing upstream
+    cannot mean "never pushed" — it means that, *or* this, which is the ordinary end
+    of every lane whose pull request merged. `branch.<name>.remote` survives the
+    prune, and it is the only local evidence that a push ever happened.
+    """
+    origin, clone = repo
+    lane = tmp_path / "lanes" / "gone"
+    backend.add_worktree_new_branch(clone, lane, "feature/gone", "origin/main")
+    _commit(lane, "work.txt", "work")
+
+    assert not backend.status(lane, "main").pushed_before, "nothing has been pushed yet"
+
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/gone"], cwd=lane)
+    assert backend.status(lane, "main").pushed_before
+
+    origin.delete_branch("feature/gone")
+    backend.fetch_prune(clone)
+
+    status = backend.status(lane, "main")
+    assert status.upstream is None, "the remote-tracking ref is gone"
+    assert status.pushed_before, "but this branch was pushed, and git still records where"
+
+
+def test_commits_made_after_a_pull_requests_head_are_counted_from_it(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """What tells landed work from work done after the merge.
+
+    A squash merge puts none of the lane's commits in the base, so no ancestry check
+    can separate the commits the pull request carried from the ones added afterwards.
+    Counting from the commit its head was at can.
+    """
+    _, clone = repo
+    lane = tmp_path / "lanes" / "after"
+    backend.add_worktree_new_branch(clone, lane, "feature/after", "origin/main")
+    landed = _commit(lane, "one.txt", "work the pull request carried")
+
+    assert backend.commits_since(lane, landed) == 0
+
+    _commit(lane, "two.txt", "work done after it merged")
+
+    assert backend.commits_since(lane, landed) == 1
+
+
+def test_a_pull_request_head_that_is_not_here_is_uncountable_not_zero(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """Amend or rebase after pushing and the merged commit is gone from this branch.
+
+    Zero would read as "nothing was added since it merged", which is a reassurance
+    lane has not earned. A full-length hex string verifies as a *revision* without
+    git ever looking for the object, so this is the case that has to be asked for
+    explicitly rather than assumed impossible.
+    """
+    _, clone = repo
+    lane = tmp_path / "lanes" / "amended"
+    backend.add_worktree_new_branch(clone, lane, "feature/amended", "origin/main")
+    _commit(lane, "one.txt", "work")
+
+    assert backend.commits_since(lane, "0" * 40) is None
+
+
+def test_the_branches_a_lane_used_come_from_its_own_reflog(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """A lane can move through several branches, and lane is not there when it does.
+
+    Nothing lane records can know them: it is touched at the two ends of a task and
+    absent for the work in between. The worktree's own HEAD reflog is the record —
+    and both sides of every `moving from A to B` have to be read, because the branch
+    the lane was created on never appears as a destination.
+    """
+    _, clone = repo
+    lane = tmp_path / "lanes" / "several"
+    backend.add_worktree_new_branch(clone, lane, "feature/first", "origin/main")
+    _commit(lane, "one.txt", "first")
+    git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
+    _commit(lane, "two.txt", "second")
+    git(["switch", "--quiet", "-c", "feature/third"], cwd=lane)
+
+    assert sorted(backend.branches_used(lane)) == [
+        "feature/first",
+        "feature/second",
+        "feature/third",
+    ]
+
+
+def test_only_names_that_are_still_branches_count_as_used(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """The reflog outlives what it names, and not every entry names a branch at all.
+
+    A branch deleted by hand and a spell on a detached HEAD both leave entries behind
+    — the second as a bare commit id. Neither is something to offer to delete.
+    """
+    _, clone = repo
+    lane = tmp_path / "lanes" / "stale"
+    backend.add_worktree_new_branch(clone, lane, "feature/kept", "origin/main")
+    git(["switch", "--quiet", "-c", "feature/gone-by-hand"], cwd=lane)
+    git(["switch", "--quiet", "--detach"], cwd=lane)
+    git(["switch", "--quiet", "feature/kept"], cwd=lane)
+    git(["branch", "-D", "feature/gone-by-hand"], cwd=lane)
+
+    used = backend.branches_used(lane)
+
+    assert used == ["feature/kept"]
+
+
+def test_whether_a_named_branch_is_already_in_the_base(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """The same question `status` answers about HEAD, asked about a branch by name.
+
+    `git branch -d` applies this rule itself when the time comes, but by then the user
+    has already been asked to agree to the deletion. Asking first is what lets the
+    summary say which branches hold something before anyone commits to anything.
+    """
+    _, clone = repo
+    lane = tmp_path / "lanes" / "named"
+    backend.add_worktree_new_branch(clone, lane, "feature/named", "origin/main")
+
+    assert backend.branch_merged(clone, "feature/named", "main"), "it sits exactly at the base"
+
+    _commit(lane, "work.txt", "work of its own")
+
+    assert not backend.branch_merged(clone, "feature/named", "main")
+
+
 def test_merged_is_true_when_head_is_an_ancestor_of_origin_base(
     backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
 ) -> None:

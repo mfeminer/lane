@@ -11,7 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from lane.github.client import CannotTell, Found, NoPullRequest, NotApplicable
+from lane.github.client import (
+    CannotTell,
+    Found,
+    NoPullRequest,
+    NotApplicable,
+    PrState,
+    PullRequest,
+    found,
+)
 from lane.github.gh_client import GhClient
 from lane.state import State, StateStore
 
@@ -35,25 +43,64 @@ GITHUB = "git@github.com:acme/thing.git"
 def test_a_merged_pull_request_is_reported_with_its_number_and_url(tmp_path: Path) -> None:
     gh = _fake_gh(
         tmp_path,
-        stdout='{"number": 42, "state": "MERGED", "url": "https://github.com/acme/thing/pull/42"}',
+        stdout=(
+            '[{"number": 42, "state": "MERGED",'
+            ' "url": "https://github.com/acme/thing/pull/42", "headRefOid": "c0ffee"}]'
+        ),
     )
 
     answer = GhClient(gh).pull_request_for(branch="feature/x", remote_url=GITHUB, cwd=tmp_path)
 
     assert isinstance(answer, Found)
-    assert answer.pull_request.number == 42
-    assert answer.pull_request.state == "MERGED"
-    assert answer.pull_request.url.endswith("/pull/42")
+    assert len(answer.pull_requests) == 1
+    assert answer.pull_requests[0].number == 42
+    assert answer.pull_requests[0].state == "MERGED"
+    assert answer.pull_requests[0].url.endswith("/pull/42")
+    assert answer.pull_requests[0].head_oid == "c0ffee"
+
+
+def test_every_pull_request_for_the_branch_is_carried_newest_first(tmp_path: Path) -> None:
+    """A branch can have a history of pull requests, and none of it is dropped.
+
+    The order is ours, not `gh`'s: the newest number first, whatever came back.
+    """
+    gh = _fake_gh(
+        tmp_path,
+        stdout=(
+            '[{"number": 41, "state": "MERGED", "url": "u41", "headRefOid": "aaa"},'
+            ' {"number": 42, "state": "OPEN", "url": "u42", "headRefOid": "bbb"}]'
+        ),
+    )
+
+    answer = GhClient(gh).pull_request_for(branch="feature/x", remote_url=GITHUB, cwd=tmp_path)
+
+    assert isinstance(answer, Found)
+    assert [pr.number for pr in answer.pull_requests] == [42, 41]
+    assert [pr.state for pr in answer.pull_requests] == ["OPEN", "MERGED"]
 
 
 @pytest.mark.parametrize("state", ["OPEN", "CLOSED", "MERGED"])
 def test_every_pull_request_state_is_carried_through(tmp_path: Path, state: str) -> None:
-    gh = _fake_gh(tmp_path, stdout=f'{{"number": 7, "state": "{state}", "url": "u"}}')
+    gh = _fake_gh(tmp_path, stdout=f'[{{"number": 7, "state": "{state}", "url": "u"}}]')
 
     answer = GhClient(gh).pull_request_for(branch="b", remote_url=GITHUB, cwd=tmp_path)
 
     assert isinstance(answer, Found)
-    assert answer.pull_request.state == state
+    assert answer.pull_requests[0].state == state
+
+
+def test_an_empty_list_is_how_gh_says_there_are_none(tmp_path: Path) -> None:
+    """`gh pr list` succeeds and answers `[]` — the ordinary no-pull-request case now.
+
+    It is not an error and not something the caller should have to recognise: `none`
+    and `unknown` are different answers everywhere else in lane, and this is the one
+    that means `none`.
+    """
+    gh = _fake_gh(tmp_path, stdout="[]")
+
+    answer = GhClient(gh).pull_request_for(branch="feature/x", remote_url=GITHUB, cwd=tmp_path)
+
+    assert isinstance(answer, NoPullRequest)
 
 
 def test_no_pull_request_found(tmp_path: Path) -> None:
@@ -144,6 +191,51 @@ def test_a_repository_with_no_remote_is_not_applicable(tmp_path: Path) -> None:
     answer = client.pull_request_for(branch="b", remote_url=None, cwd=tmp_path)
 
     assert isinstance(answer, NotApplicable)
+
+
+# -- the history, and which of it decides -----------------------------------------
+
+
+def _history(*pairs: tuple[int, PrState]) -> Found:
+    return found(*[PullRequest(number=n, state=s, url=f"u{n}") for n, s in pairs])
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        # The obvious one: a follow-up opened after an earlier one merged.
+        ((((42, "OPEN"), (41, "MERGED"))), 42),
+        # Age does not decide it. An open pull request is work that has not landed,
+        # so it is the decisive one even when a newer one has already merged.
+        ((((42, "MERGED"), (41, "OPEN"))), 41),
+        # Nothing open, so the merged one is what the lane's state turns on.
+        ((((42, "CLOSED"), (41, "MERGED"))), 41),
+        # Nothing open and nothing merged: the newest is all there is to report.
+        ((((42, "CLOSED"), (41, "CLOSED"))), 42),
+    ],
+)
+def test_the_decisive_pull_request_is_the_one_holding_the_lane_open(
+    history: tuple[tuple[int, PrState], ...], expected: int
+) -> None:
+    assert _history(*history).decisive.number == expected
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        ((((42, "MERGED"),)), True),
+        # The case that misleads: an earlier one landed, but the follow-up has not, so
+        # the lane's work is not all in the base and nothing may claim it is.
+        ((((42, "OPEN"), (41, "MERGED"))), False),
+        ((((42, "CLOSED"),)), False),
+        # Closed without merging alongside one that merged is still landed work.
+        ((((42, "MERGED"), (41, "CLOSED"))), True),
+    ],
+)
+def test_the_work_landed_only_when_something_merged_and_nothing_is_open(
+    history: tuple[tuple[int, PrState], ...], expected: bool
+) -> None:
+    assert _history(*history).landed is expected
 
 
 # -- E7, E8: convenience state ---------------------------------------------------

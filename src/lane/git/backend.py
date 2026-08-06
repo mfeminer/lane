@@ -49,8 +49,22 @@ class WorktreeStatus:
     head_short: str
     dirty_count: int
     upstream: str | None
+    pushed_before: bool
+    """Whether this branch was ever pushed, even if its remote branch is now gone.
+
+    A missing `upstream` has two causes that look identical and mean opposite things:
+    a branch that was never pushed, and a branch whose remote was deleted when its
+    pull request merged. `branch.<name>.remote` survives the prune, so it is what
+    keeps lane from announcing "never pushed" about work that plainly was.
+    """
+
     unpushed_count: int
-    """Commits not yet on the remote — against the upstream if there is one."""
+    """Commits not yet on the remote — against the upstream if there is one.
+
+    With no upstream there is nothing to measure "on the remote" against, so this
+    falls back to counting against `origin/<base>` and carries no push information at
+    all. Read it with `pushed_before`, never alone.
+    """
 
     ahead_of_base: int
     """Commits on HEAD that are not in `origin/<base>`.
@@ -121,6 +135,15 @@ class GitBackend(Protocol):
 
     def branch_exists(self, repo: Path, branch: str) -> bool: ...
 
+    def branch_merged(self, repo: Path, branch: str, base: str) -> bool:
+        """Whether every commit on `branch` is already in `origin/<base>`.
+
+        The same question `WorktreeStatus.merged` answers about HEAD, asked by name —
+        so a close can say which of a lane's branches hold unique work before it asks
+        for permission to delete them.
+        """
+        ...
+
     # -- fetching ------------------------------------------------------------
     def fetch_prune(self, repo: Path, remote: str = "origin") -> FetchResult: ...
 
@@ -132,6 +155,25 @@ class GitBackend(Protocol):
         ...
 
     def log_oneline(self, worktree: Path, rev_range: str, limit: int = 10) -> list[str]: ...
+
+    def branches_used(self, worktree: Path) -> list[str]:
+        """Every branch this worktree has had checked out, most recently first.
+
+        A lane's branches go with the lane, and there can be more than one of them:
+        the work happens while lane is not watching, so a branch created mid-task is
+        recorded nowhere except the worktree's own reflog. Only names that are still
+        branches are returned.
+        """
+        ...
+
+    def commits_since(self, worktree: Path, commit: str) -> int | None:
+        """Commits on HEAD that `commit` does not have, or None when it is not here.
+
+        None is the honest answer for a branch amended or rebased after its pull
+        request merged: the commit that landed is no longer on it, so how much was
+        added afterwards cannot be known from here. Never conflate that with zero.
+        """
+        ...
 
     # -- the worktree lifecycle ----------------------------------------------
     def add_worktree_new_branch(
