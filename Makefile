@@ -31,6 +31,10 @@ types:
 check: lint types test
 
 build:
+	# _version.py is written from the git tag at install time, so a tag created
+	# since the last sync would otherwise be baked in stale. Re-install first and
+	# the binary always reports the tag it was actually built from.
+	uv sync --reinstall-package lane
 	uv run pyinstaller --clean --noconfirm lane.spec
 	@echo "built: dist/lane"
 

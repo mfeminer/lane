@@ -11,7 +11,7 @@ a gap: raise it rather than guessing, and add the answer here once it's settled.
 ## 1. Screen anatomy
 
 - **Every action-level screen opens with `ui.heading`, once, naming the screen**:
-  `"lane doctor"`, `"lane settings"`, `"lane changelog"`, `"Closing <lane>"`. The
+  `"lane doctor"`, `"lane settings"`, `"Closing <lane>"`. The
   lanes table is the one exception, and it's deliberate: its title *answers* "what
   am I looking at" (`"3 open lanes in demo"`) rather than repeating the word "lanes"
   — see ADR 0002. A new screen gets a heading unless it is, like the table, a screen
@@ -67,7 +67,7 @@ The one place this table is currently *misrepresented* rather than violated: fix
 ## 4. Menu and list entry wording
 
 - **Lower-case, one word where possible, noun for a destination, verb for an
-  action** — `open`, `lanes`, `settings`, `doctor`, `changelog`, `quit`; `enter`,
+  action** — `open`, `lanes`, `settings`, `doctor`, `quit`; `enter`,
   `close` for the two things you can do to a lane. Already consistent; keep doing
   this.
 - **The hint/description after an entry is a plain sentence fragment, not
@@ -97,9 +97,9 @@ The set, and only meaning each one carries:
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
 use a two-space indent with no marker (settings, doctor, the close summary) — not a
-bullet. *Why: the changelog's `•` used to be the one place a bullet appeared, for a
-job every other screen does with indentation alone — it was dropped from
-`changelog.py` to match.*
+bullet. *Why: the changelog screen's `•` used to be the one place a bullet
+appeared, for a job every other screen does with indentation alone — it was
+dropped to match, and the screen itself has since gone (AGENTS.md, "Releasing").*
 
 **A terminal without the symbol font**: not tested live in this audit (out of scope
 for a presentation-only pass — would need faking the terminal's font capability,
@@ -234,7 +234,7 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   wrapping at its spaces exactly as before. Wired into every `ConsoleUi` telling
   method via `_clipped()`. *(An earlier attempt used
   `Console.print(..., overflow="ellipsis", no_wrap=True)` globally — rejected in
-  review because it also stopped long prose sentences, like a changelog entry, from
+  review because it also stopped long prose sentences, like a doctor remedy, from
   wrapping at all instead of only fixing the path case; `clip_long_words` is
   narrower on purpose.)*
 - **A column that answers the screen's own reason for existing is never dropped and

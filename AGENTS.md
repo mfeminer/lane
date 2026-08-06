@@ -45,7 +45,16 @@ There is no `where` action to print a lane's path for shell integration
 (`cd "$(lane where)"`). The four-step day above never needs it. Do not reintroduce
 it as a shell-integration hook or a clipboard action.
 
-Actions: open a lane, lanes, settings, doctor, changelog.
+Actions: open a lane, lanes, settings, doctor.
+
+There is no `changelog` action. It was one until the release notes became
+generated from the merged pull requests rather than written by hand: keeping the
+screen would have meant shipping a second copy of those notes inside the binary,
+which is the duplication the whole release change exists to remove. What changed
+in a release is on its GitHub release page. Do not reintroduce it — see
+*Releasing* below. (**`docs/adr/0002-lane-listing.md`** predates this and still
+lists the menu with `changelog` in it; it is a record of that decision, not the
+current menu.)
 
 **`enter` and `close` are not menu entries.** They are the two verbs the `lanes`
 screen offers for the row under the cursor — see **`docs/adr/0002-lane-listing.md`**
@@ -375,8 +384,9 @@ These must never regress. Each is one line of behaviour and one line of why.
   while the next is `feature/…`; it is a property of the task, not of the machine.
 - **Lane and branch names are always plain ASCII** — task descriptions are typed
   in whatever language the user thinks in; paths and refs must not be.
-- **The config upgrade notice stays one short line** — the changelog is its own
-  action, and an upgrade notice must not become a changelog dump.
+- **The config upgrade notice stays one short line** — what a release changed is
+  on its GitHub release page, and an upgrade notice must not become a changelog
+  dump.
 - **Doctor is always reachable, no matter which prerequisite is missing** — it is
   the action that explains missing prerequisites.
 - **The rest of the menu is never gated behind a missing `gh`** — only closing a
@@ -545,6 +555,41 @@ what answers "did this file change", the question doctor exists to settle.
 Stamping the git commit as well is fine, but the hash is the part that must work.
 Room is left for macOS x86_64 and Linux later; that matrix is not built yet.
 
+### Releasing
+
+**The tag is the version.** `hatch-vcs` derives it from `git describe` and writes
+`src/lane/_version.py` at install and at build time; that file is gitignored, and
+**no file in the tree carries the number**, so no file in the tree can disagree
+with the tag. Do not reintroduce a hard-coded `__version__` — the reason this is
+worth a rule is that a second copy of a version number is only ever wrong later,
+and silently.
+
+Releasing is one step:
+
+```
+git tag -a vX.Y.Z -m "..." && git push --tags
+```
+
+`.github/workflows/cd.yml` does the rest: it builds the binary, **refuses the
+release if the binary's `--version` does not match the tag**, and publishes a
+GitHub release with the binary attached. The refusal exists because a wrong
+version number is invisible until someone reports a bug against it.
+
+**The notes are generated from the pull requests** merged since the previous tag,
+grouped by the labels in `.github/release.yml`. Nothing is written by hand and
+nothing is committed for a release, which is the point: a changelog that has to be
+edited before a tag is a second copy of the release's identity, and a second copy
+is only ever wrong later. Labelling a pull request `enhancement` or `bug` is what
+shapes the notes; an unlabelled one still appears, under *Other changes*. **Every
+label that file names must exist on the repository** — a category matching a label
+nobody can apply never fires, and nothing reports that it didn't.
+
+Between tags the version reads `0.0.2.post1.dev4+g1a2b3c4` — "after 0.0.2,
+unreleased", deliberately not a version that does not exist yet. The config stamp
+asks for the **release** rather than the build, via `buildinfo.release()`: it is
+compared on every load, so stamping the full version would rewrite the file, and
+leave a `.bak` beside it, on every run of a development checkout.
+
 ### Coverage floor
 
 All of it arrived at test-first:
@@ -563,6 +608,8 @@ All of it arrived at test-first:
 - closing a GitHub-backed lane refused with a usable message when `gh` is missing
   or logged out, while closing a lane with a non-GitHub remote still succeeds
 - a non-TTY invocation refusing cleanly while `--version` still works
+- the version reaching the build from the tag, and the config stamp being the
+  release rather than the moving version of a development checkout
 - at least one test driving the session end to end: menu → open a lane → menu →
   lanes → close it → menu → quit, asserting the resulting git state
 

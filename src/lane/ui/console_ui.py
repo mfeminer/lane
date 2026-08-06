@@ -129,7 +129,7 @@ class ConsoleUi:
     # doesn't fit. Clipping only words that are themselves too long (never `text`
     # as a whole, and never with `no_wrap`) makes a path degrade the way the lanes
     # table already does — a clean single-line ellipsis — while leaving ordinary
-    # prose (changelog entries, doctor's remedies) wrapping at its spaces exactly as
+    # prose (doctor's remedies, a close summary's findings) wrapping at its spaces exactly as
     # before.
     def _clipped(self, text: str) -> str:
         return render.escape(render.clip_long_words(text, self._console.width))

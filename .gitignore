@@ -7,3 +7,6 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Generated from the git tag by hatch-vcs at install/build time.
+src/lane/_version.py

@@ -72,7 +72,7 @@ def test_entering_and_closing_are_not_menu_entries(projects_root: Path, lanes_ro
     ui = Recording(["quit"])
     session.run(_context(ui, projects_root, lanes_root))
 
-    assert offered == ["open", "lanes", "settings", "doctor", "changelog", "quit"]
+    assert offered == ["open", "lanes", "settings", "doctor", "quit"]
 
 
 def test_the_menu_is_always_the_full_list_even_without_git(
@@ -110,7 +110,7 @@ def test_abandoning_the_menu_ends_the_session_cleanly(
 
 
 def test_an_action_returns_to_the_menu_afterwards(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi(["changelog", "quit"])
+    ui = FakeUi(["doctor", "quit"])
 
     assert session.run(_context(ui, projects_root, lanes_root)) == 0
     assert ui.asked.count("") == 2, "the menu was shown again after the action"
@@ -133,7 +133,7 @@ def test_abandoning_an_action_returns_to_the_menu_changing_nothing(
     assert not lanes_root.exists()
 
 
-# -- D7: without git, everything but doctor and the changelog refuses -------------
+# -- D7: without git, everything but doctor refuses -------------------------------
 
 
 def test_without_git_the_session_still_starts_and_says_why(
@@ -170,8 +170,11 @@ def test_without_git_opening_a_lane_is_refused_with_a_reason(
     assert ui.said("needs git")
 
 
-def test_without_git_the_changelog_still_works(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi(["changelog", "quit"])
+def test_without_git_the_session_heading_still_names_the_version(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Which copy is running is the first thing to establish when nothing works."""
+    ui = FakeUi(["quit"])
     context = _context(ui, projects_root, lanes_root, environment=FakeEnvironment(tools={}))
 
     session.run(context, git_available=False)

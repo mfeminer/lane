@@ -1,14 +1,25 @@
 name: CD
 
+# Releasing is one action: `git tag -a vX.Y.Z && git push --tags`. The version is
+# derived from the tag by hatch-vcs, and the notes are generated from the pull
+# requests merged since the previous tag — so a release needs nothing committed
+# and nothing edited, and there is no second copy of the version to disagree.
 on:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write # to create the release
 
 jobs:
   release:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The version comes from `git describe`, which needs the tags and the
+          # history behind them. The default shallow fetch has neither.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -30,9 +41,31 @@ jobs:
             exit 1
           fi
 
-      - name: Upload the binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: lane-macos-arm64-${{ github.ref_name }}
-          path: dist/lane
-          if-no-files-found: error
+      - name: Check the binary reports the tag
+        # `--version` prints "lane <version> (build <fingerprint>)". If this ever
+        # disagrees with the tag, the version derivation is broken and every
+        # published binary would be mislabelled — which is invisible until
+        # someone reports a bug against the wrong version.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          built="$(./dist/lane --version | awk '{print $2}')"
+          if [ "$built" != "$version" ]; then
+            echo "::error::binary reports $built, tag says $version" >&2
+            exit 1
+          fi
+          echo "binary reports $built, matching $GITHUB_REF_NAME"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Name the asset for the platform it was built for
+        run: cp dist/lane "lane-macos-arm64"
+
+      - name: Publish the release
+        # --generate-notes asks GitHub for the pull requests merged since the
+        # previous tag, grouped by the labels in .github/release.yml.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "lane-macos-arm64" \
+            --title "lane $VERSION" \
+            --generate-notes

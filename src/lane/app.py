@@ -27,7 +27,7 @@ def run(environment: Environment) -> int:
         return 1
 
     if loaded.notice is not None:
-        # One short line. The changelog is its own action.
+        # One short line — never a summary of what the release changed.
         ui.detail(loaded.notice)
 
     context = Context(

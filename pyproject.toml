@@ -15,12 +15,28 @@ dependencies = [
 lane = "lane.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
-# Single source of truth for the version: src/lane/__init__.py.
+# Single source of truth for the version: the git tag. Releasing is `git tag
+# vX.Y.Z && git push --tags` and nothing else — no file in the tree carries the
+# number, so no file in the tree can disagree with the tag.
 [tool.hatch.version]
-path = "src/lane/__init__.py"
+source = "vcs"
+
+# `no-guess-dev` is what keeps an untagged commit honest: it reports
+# `0.0.2.post1.dev0+g1a2b3c4` — "after 0.0.2, unreleased" — rather than the
+# default's `0.0.3.dev4`, which names a version that does not exist yet and
+# would sort ahead of the 0.0.3 that eventually ships.
+[tool.hatch.version.raw-options]
+version_scheme = "no-guess-dev"
+# A source tree with no .git (an sdist) still has to build.
+fallback_version = "0+unknown"
+
+# Written at install time and at build time, so the number reaches a synced
+# checkout, a wheel and the PyInstaller binary by the same route. Gitignored.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/lane/_version.py"
 
 [dependency-groups]
 dev = [
