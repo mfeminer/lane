@@ -644,6 +644,50 @@ make types    # mypy --strict
 make build    # PyInstaller one-file -> dist/lane
 ```
 
+### Landing a change — main is protected
+
+**Nothing is pushed to main.** A branch ruleset on the default branch requires a
+pull request and refuses direct pushes, force-pushes and deletion, with **no bypass
+actors** — the maintainer included. There is one contributor, so the rule has to
+hold without anybody to enforce it, and an owner who can push directly is a
+protection that is only ever advisory.
+
+**The pull request requires no approving review.** GitHub counts "a pull request is
+required" and "an approval is required" separately, and this repository asks for the
+first and not the second: the sole contributor cannot approve their own work, so any
+non-zero count would mean the branch could never be merged into. The gate is
+therefore not a human — it is `CI / check`, which must be green before the merge
+button unlocks. Two settings hold that open and are easy to break by accident:
+`require_last_push_approval` must stay false, or your own final commit needs
+somebody else's approval, and the bypass list must stay empty.
+
+**Strictness is deliberately off** (`strict_required_status_checks_policy: false`),
+so a pull request need not be rebased onto main before merging. lane exists to run
+several branches side by side; requiring each to be brought up to date would mean
+re-running CI over the whole stack after every merge. The cost is real and worth
+naming: two changes that pass separately can break together, and nothing on main
+will notice until the next pull request runs. If that ever actually bites, turning
+strictness on is the fix.
+
+**Three workflows, each doing one thing once:**
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | pull request | lint, types, tests, build, smoke — the required check |
+| `build.yml` | push to main | builds and uploads `lane-macos-arm64`. **No tests** |
+| `cd.yml` | `v*` tag | rebuilds, verifies the tag, publishes the release |
+
+`build.yml` runs no tests because the pull request that produced the commit already
+ran them. It still builds and smoke-tests, because the thing it is building is the
+merge commit and no pull request ever built that. Its artifact is an unreleased
+build of main for trying something that has landed but not shipped — GitHub serves
+it as a zip, so a download needs `chmod +x`.
+
+**The required check is named `check`.** That is the job id in `ci.yml`, and the
+ruleset names it as a string. Renaming the job, or splitting it into several, leaves
+the required check waiting as *expected* forever with nothing anywhere saying why.
+Change both or neither.
+
 ### The two structural rules that erode first
 
 1. **Actions ask through the prompt interface; they never import a prompt
@@ -695,6 +739,13 @@ git tag -a vX.Y.Z -m "..." && git push --tags
 release if the binary's `--version` does not match the tag**, and publishes a
 GitHub release with the binary attached. The refusal exists because a wrong
 version number is invisible until someone reports a bug against it.
+
+**It rebuilds, and must keep rebuilding.** `build.yml` has already produced a binary
+for that exact commit, and publishing it instead looks like free speed — but the
+version comes from `git describe`, so a binary built on main before the tag existed
+reports `0.0.2.post1.dev0+g1a2b3c4`. Reusing it would ship every release labelled as
+an unreleased development build, and the tag check above would have to be deleted to
+allow it. Two minutes of rebuild is what makes that check mean something.
 
 **The notes are generated from the pull requests** merged since the previous tag,
 grouped by the labels in `.github/release.yml`. Nothing is written by hand and

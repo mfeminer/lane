@@ -4,6 +4,13 @@ name: CD
 # derived from the tag by hatch-vcs, and the notes are generated from the pull
 # requests merged since the previous tag — so a release needs nothing committed
 # and nothing edited, and there is no second copy of the version to disagree.
+#
+# It **rebuilds** rather than publishing the artifact `build.yml` already made for
+# this commit, and that is not an oversight to tidy up: the version is derived from
+# `git describe`, so a binary built on main before the tag existed reports
+# `0.0.2.post1.dev0+g1a2b3c4` and not the version being released. Reusing it would
+# ship every release labelled as an unreleased development build. Two minutes of
+# rebuild is the price of the tag check below meaning anything at all.
 on:
   push:
     tags: ["v*"]

@@ -1,8 +1,15 @@
 name: CI
 
+# Pull requests only. main is protected and takes nothing but a merged pull
+# request, so every commit that reaches it has already been through this job —
+# running it again on the push would re-check a tree that was just checked, and
+# make the merge wait for it twice. What runs on main instead is `build.yml`.
+#
+# The `check` job's name is what the branch ruleset requires before a pull request
+# can merge. Renaming it, or splitting it in two, silently stops satisfying that
+# rule: the required check would sit as *expected* forever and nothing would say
+# why. Change the ruleset in the same breath.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 jobs:
