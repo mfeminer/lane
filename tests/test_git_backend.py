@@ -664,3 +664,84 @@ def test_git_runs_in_its_own_session_so_ctrl_c_cannot_kill_it(tmp_path: Path) ->
 
     assert reported is not None
     assert int(reported) != os.getpgrp(), "git must not share lane's process group"
+
+
+# -- what the lane is missing: ignored paths -------------------------------------
+
+
+def _ignore(repo: Path, *patterns: str) -> None:
+    (repo / ".gitignore").write_text("".join(f"{pattern}\n" for pattern in patterns))
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+
+
+def test_ignored_paths_lists_one_row_per_ignored_directory_and_file(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """`--directory` is what makes this usable: one row for a dependency tree, not
+    two hundred thousand rows for the files inside it."""
+    _, clone = repo
+    _ignore(clone, "node_modules/", ".env", "dist/")
+    (clone / "node_modules").mkdir()
+    (clone / "node_modules" / "pkg").write_text("x")
+    (clone / "dist").mkdir()
+    (clone / "dist" / "out").write_text("x")
+    (clone / ".env").write_text("SECRET=1")
+
+    assert backend.ignored_paths(clone) == [".env", "dist", "node_modules"]
+
+
+def test_ignored_paths_collapses_rows_nested_inside_another_row(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """git reports an intermediate directory *and* everything ignored inside it when
+    the directory holds nothing tracked. Applying that verbatim would write the same
+    bytes twice, in an order-dependent way, so only the shallowest row survives."""
+    _, clone = repo
+    _ignore(clone, "node_modules/", "dist/")
+    for part in ("apps/web/node_modules", "apps/web/dist"):
+        (clone / part).mkdir(parents=True)
+        (clone / part / "thing").write_text("x")
+
+    assert backend.ignored_paths(clone) == ["apps"]
+
+
+def test_ignored_paths_reports_nothing_when_nothing_is_ignored(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    _, clone = repo
+    assert backend.ignored_paths(clone) == []
+
+
+def test_ignored_paths_does_not_raise_on_a_repository_with_no_commits(
+    backend: CliGitBackend, tmp_path: Path
+) -> None:
+    fresh = tmp_path / "fresh"
+    git(["init", "--quiet", str(fresh)])
+    assert backend.ignored_paths(fresh) == []
+
+
+def test_ignored_as_given_answers_a_whole_list_in_one_call(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """A trailing slash asks about a directory and its absence asks about anything
+    else, which is the difference between `clone` and `link` being safe. And a
+    tracked path never comes back, which is what stops lane writing over one."""
+    _, clone = repo
+    _ignore(clone, "node_modules/", "dist")
+
+    answer = backend.ignored_as_given(
+        clone, ["node_modules/", "node_modules", "dist/", "dist", "file0.txt"]
+    )
+
+    assert answer == {"node_modules/", "dist/", "dist"}, (
+        "`node_modules/` matches directories only, so a symlink of that name would "
+        "show up as an untracked file; `dist` matches either way; a tracked file never"
+    )
+
+
+def test_ignored_as_given_asks_nothing_for_an_empty_list(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    _, clone = repo
+    assert backend.ignored_as_given(clone, []) == set()

@@ -47,12 +47,22 @@ def _context(
     )
 
 
-def _two_lanes(projects_root: Path, lanes_root: Path) -> tuple[Path, LaneStore]:
+def _two_lanes(
+    projects_root: Path, lanes_root: Path, *, ignore: str = ""
+) -> tuple[Path, LaneStore]:
     _origin, clone = build_repo(projects_root / "_b")
     repo = projects_root / "thing"
     clone.rename(repo)
     backend = CliGitBackend()
     store = LaneStore(lanes_root)
+
+    if ignore:
+        # Committed and pushed before the worktrees exist, so the lanes are created at a
+        # base that carries it — a lane on an older base genuinely ignores nothing.
+        (repo / ".gitignore").write_text(f"{ignore}\n")
+        git(["add", ".gitignore"], cwd=repo)
+        git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+        git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
 
     clean = store.lane_path("thing", "clean-lane")
     backend.add_worktree_new_branch(repo, clean, "chore/clean-lane", "origin/main")
@@ -830,3 +840,55 @@ def test_status_is_collected_across_a_thread_pool(projects_root: Path, lanes_roo
     assert {row.status.branch for row in rows if row.status} == {
         f"feature/l{index}" for index in range(10)
     }
+
+
+def test_the_enter_verb_says_it_prepares_the_lane_too(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """`enter` stopped meaning "launch the editor" and started meaning "make the lane
+    ready, then launch the editor". The hint follows, or the menu describes the old
+    behaviour."""
+    _two_lanes(projects_root, lanes_root)
+    ui = FakeUi(["busy-lane", "enter"])
+    offered: list[str] = []
+
+    original = ui.choose
+
+    def watch(title: str, options: object, **kwargs: object) -> object:
+        assert isinstance(options, list)
+        offered.extend(f"{option.label}: {option.hint}" for option in options)
+        return original(title, options, **kwargs)  # type: ignore[arg-type]
+
+    ui.choose = watch  # type: ignore[method-assign, assignment]
+    list_lanes.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    hint = next(line for line in offered if line.startswith("enter:"))
+    assert "prepare" in hint.lower()
+    assert "editor" in hint.lower()
+
+
+def test_backing_out_of_preparation_returns_to_the_table(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Preparation is a screen, and backing out of a screen puts you back on the one you
+    were standing in — the same reason the row menu and the close already do it. Nothing
+    irreversible has happened: the lane is simply still unprepared."""
+    # Something for preparation to ask about, so there is a screen to back out of.
+    repo, _store = _two_lanes(projects_root, lanes_root, ignore="vendor/")
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "thing").write_text("x\n")
+
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    ui = FakeUi(["busy-lane", "enter", FakeUi.ABANDON, "back"])
+
+    list_lanes.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=environment,
+        )
+    )
+
+    assert environment.launched == [], "the editor did not open"
+    assert ui.unanswered() == 0, "and the table came back, where 'back' answered it"

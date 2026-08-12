@@ -91,6 +91,7 @@ whole mechanism, and it is why almost nothing needs binding:
 | `↑` `↓` `Home` `End` | move |
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
+| `Space` | change the answer on the row under the cursor — **multi-select rows only** |
 | `Ctrl-C` | back out |
 
 **That table is the whole vocabulary.** It describes Ctrl-C *at a prompt*; what it
@@ -99,6 +100,15 @@ rejected: a footer legend would make it discoverable, but it would still be this
 tool's invention. Choosing a row opens a two-entry menu instead — one keystroke
 more, no new vocabulary. If a future change wants letter keys, that is a decision
 to take deliberately, not a convenience to slip in.
+
+**`Space` is the one key added since, and it passes the test the rule states.** What
+is banned is a key the user would have to be *taught*, one that is this tool's
+invention; `Space` to change the row under the cursor in a multi-select list is what
+`fzf --multi`, `tig`, aptitude and every checkbox prompt in every package manager
+already do. It arrived with the preparation screen (*Preparing a lane* below), it is
+**scoped to rows that carry an answer**, and it is not licence for a second one. On
+such a screen `Enter` on a row does exactly what `Space` does — one call, so the two
+cannot drift — and only a row with no answer to change (`continue`) accepts.
 
 **Escape is deliberately not bound.** Two attempts failed, and both are recorded so
 nobody tries them again:
@@ -133,6 +143,14 @@ runs its checks, shows what it found, asks for confirmation, and only then remov
 anything. So abandoning any prompt is always a clean no-op. Keep it that way: if
 you find yourself wanting rollback logic, the questions are in the wrong place.
 
+**Preparation is the one place worth reading that rule carefully.** It asks its
+questions before it writes its first file, so backing out of its screen changes
+nothing — but reached from `open`, the worktree already exists, because `open` ends by
+entering the lane it just made. That is not a breach: **abandoning preparation leaves a
+complete lane that is merely unprepared**, which the listing describes, the close flow
+can act on, and the next enter repairs. The rule is about half-finished work, and there
+is none.
+
 ### Ctrl-C is answered everywhere, and means three different things
 
 The structural guarantee above covers prompts. Ctrl-C can also arrive while lane is
@@ -161,6 +179,16 @@ Zone 2 is the **only** place an interrupt is deferred, and it is deferred becaus
 its questions are all behind it — not as licence to defer one elsewhere. If a new
 step wants deferral, check first whether it is really asking for its questions to
 be moved earlier.
+
+**Preparation is Zone 1, and it was a deliberate decision rather than a default.** Its
+questions are behind it too, which is the shape Zone 2 has — but two things put it back
+in Zone 1. Every clone is written to a staged path beside its target and renamed into
+place, so **no step can leave a half-populated path**: there is nothing whose half-done
+state lane could not describe. And a `run` step can be a two-minute install, so
+deferring would leave Ctrl-C apparently doing nothing for two minutes, which is the very
+perception Zone 2's acknowledgement exists to prevent. It does, however, borrow one
+thing from Zone 3: it **says** what it was doing, because earlier steps completed and
+are real work, so Zone 1's silence would be a lie.
 
 ## The lanes screen
 
@@ -232,6 +260,8 @@ whatever happens next happens to the row under it. Full reasoning in
   are kept, so the second paint is immediate. **After entering a lane you go back to
   the menu** — your attention has moved to the editor, and the listing's data is
   about to go stale. The asymmetry is deliberate: closing repeats, entering does not.
+  **Backing out of preparation is the exception**: it lands back at the table, because
+  nothing happened and the editor never opened.
 - **Zero lanes renders no table.** It says so in one line and returns.
 
 ## `gh` is a settled dependency
@@ -367,13 +397,21 @@ all — runs for real.**
 
 | Seam | What it is | Faked in tests? |
 |---|---|---|
-| `GitBackend` | all git access (subprocess to `git`) | **No.** Real backend, temporary repositories |
+| `GitBackend` | all git access (subprocess to `git`) — including what a lane is missing | **No.** Real backend, temporary repositories |
 | `GitHubClient` | pull request state | Yes — the suite never authenticates or touches the network |
 | `Environment` | TTY-ness, tool presence on PATH, launching the editor | Yes — this is what lets the suite run under pytest without a TTY and without opening an editor |
 | The prompt layer (`Ui`) | everything that asks the user something, and everything it tells them | Yes — replays scripted answers, records what was said |
 
 `GitBackend` exists so the implementation can be **swapped**, not so tests can
 avoid git. Tests use the real one against temporary repositories.
+
+**`prepare/apply.py` is not a fifth seam.** It clones, links, runs a configured command
+and measures a path — the only place any of those happens — and it is exercised for real,
+because the filesystem is real in tests and `true`/`touch` are honest commands. A fake
+would get exactly the things wrong that matter: whether a clone shared blocks, whether a
+symlink was followed, whether a swap left a partial tree. `Environment` keeps the editor
+launch because that is fire-and-forget and must never happen under pytest; a prepared
+command is waited on and its exit code read, which is a different shape.
 
 `Environment` reports tool presence **for doctor's benefit**; it does not decide
 whether a close may proceed — that comes from `GitHubClient`'s answer. The TTY
@@ -403,15 +441,22 @@ would make it possible to forget one, and forgetting one is exactly how a
 half-finished action would come about. The exception cannot fall through to the
 next statement, which makes the invariant structural rather than a matter of care.
 
-**One action catches it, and only one.** The listing catches `Abandoned` — around
-the per-row verb menu, and around the close it launches — so that backing out of
-either returns to the table rather than to the main menu; the table is a screen you
-are standing in. Both are safe for exactly the same reason as everywhere else:
-every question still comes before the first irreversible step, so an abandoned verb
-menu or an abandoned close has changed nothing. The close is included because
-Ctrl-C during its fetch is Zone 1 above, and throwing away the screen the keystroke
-happened on would punish impatience with a lost place. Do not take this as licence
-elsewhere; if another action wants it, it wants a screen.
+**Two actions catch it, and only two.** The listing catches `Abandoned` — around the
+per-row verb menu, around the close it launches, and around the enter it launches — so
+that backing out of any of them returns to the table rather than to the main menu; the
+table is a screen you are standing in. All three are safe for exactly the same reason as
+everywhere else: every question still comes before the first irreversible step, so an
+abandoned verb menu, close or preparation has changed nothing. The close is included
+because Ctrl-C during its fetch is Zone 1 above, and throwing away the screen the
+keystroke happened on would punish impatience with a lost place; preparation is included
+because it *is* a screen. Do not take this as licence elsewhere; if another action wants
+it, it wants a screen.
+
+**Preparation catches it too, for one line and then re-raises.** It is the only step in
+lane that does several independent pieces of work in sequence *after* the last question,
+so it is the only one where Zone 1's silence would be a lie — it names the step the
+interrupt struck, says entering again finishes the job, and lets the exception carry on
+to the listing. It never swallows one.
 
 The prompt layer is **an interface the action calls, not a library it imports**.
 Actions never touch `prompt_toolkit`; they ask through this seam and get an answer
@@ -471,6 +516,26 @@ a prompt `[y/N]` and then refusing to accept `y` is worse than either option alo
 
 These must never regress. Each is one line of behaviour and one line of why.
 
+- **lane leaks nothing into the projects it manages** — no `.lane.toml`, no marker file,
+  no directory, ever. A project must not be able to tell lane exists, or lane stops being
+  something you can drop on any repository and becomes something a repository has to
+  adopt.
+- **lane learns no package manager** — no `yarn`, `npm`, `go` or `cargo` anywhere in the
+  source. The mechanism is generic and the project-specific knowledge is configuration,
+  or the list of ecosystems is endless and always one short.
+- **Entering a lane never overwrites what the lane changed** unless the user asked for
+  that path to be refreshed — and the screen names the overwrite, in words, before it
+  happens. A dependency tree the user patched by hand is work, and losing it silently is
+  the one thing this feature could do that is worse than not existing.
+- **A failed or interrupted preparation leaves a usable lane** — it lists, it closes, and
+  entering it again finishes the job. Nothing about preparation is recorded per lane,
+  which is what makes entering again the whole repair rather than a reset.
+- **A clone is staged beside its target and renamed into place** — so no interrupt can
+  leave a half-populated path, which is why preparation needs neither rollback logic nor a
+  deferred interrupt to promise it.
+- **Only paths git ignores *in the lane* are ever written** — asked of git in bulk, in
+  both spellings. That is what keeps preparation out of the listing's `state` cell and out
+  of the close flow's first check, and what stops a tracked file being overwritten.
 - **New branches are created with no upstream** — so a bare `git push` inside a
   lane can never land on the default branch.
 - **Commits on a detached HEAD are parked on `wip/<lane>` before removal, and that
@@ -498,6 +563,9 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **The lanes screen binds no key the picker does not** — arrows, `Enter`,
   `Ctrl-C`. A letter key for a verb would be this tool's invention, however visible
   the legend.
+- **`Space` belongs to rows that carry an answer, and to nothing else** — it is the one
+  key added after the vocabulary closed, and it earned that by being what every
+  multi-select list already uses. Without a `toggle` the widget does not bind it at all.
 - **The listing never blocks on `gh`** — git status is collected before the first
   paint, pull request state fills in behind it. It is the difference between a
   screen that appears and one that appears two seconds later.
@@ -581,6 +649,26 @@ environment is currently winning. A config written by a different version is
 rewritten in place, carrying values over and keeping a backup, announcing itself
 in one short line.
 
+**The preparation answers** — `${XDG_CONFIG_HOME:-~/.config}/lane/prepare.toml`, mode
+0600 in the same 0700 directory, a **flat array of `[[step]]` records** keyed by project
+*name*. Deliberately **not** three more keys in `config.toml`: `ConfigStore.save()`
+rebuilds the file from the three settings it knows about, so anything else in there is
+dropped the first time a version bump rewrites it — and that migration code is the one
+part of the config that must never be wrong. It is flat rather than nested because
+nesting would put project names (which contain dots) and paths (which contain slashes) in
+key position, where TOML wants them quoted, and the file would stop being readable. It
+**never announces itself**: no rewrite, no `.bak`, no notice, because the upgrade notice
+staying one short line is an invariant and a second file having something to say does not
+serve it. An unreadable file means **nothing is remembered** — never a crash, never a
+rewrite; the screen asking again is itself the signal, and doctor names the file.
+
+**Project identity is the project name** — the same identifier `Lane.project` uses and
+that `<lanes_root>/<project>` is built from. A recorded path would be a string comparison
+of paths, which is exactly what the `samefile` invariant exists to prevent, and it would
+not survive moving `projects_root`; the name does. A *renamed* project is asked again,
+consistent with lane already giving it a fresh lanes directory and a fresh listing. A
+wrong key finds nothing — it never finds somebody else's answers.
+
 **Convenience state** — anything lane remembers for convenience rather than
 configuration (the last project used, for instance) lives in
 `${XDG_STATE_HOME:-~/.local/state}/lane/state.toml`, mode 0600, **never** in the
@@ -596,6 +684,57 @@ option. Detached mode sits at `origin/<default>` with no branch. Lane metadata �
 description, base branch, created timestamp, repo path — lives **outside the
 worktree** so it cannot dirty it (`<lanes_root>/<project>/.lane/<lane>`). Then
 launch the editor.
+
+**Preparing a lane** — a lane is a fresh checkout, so **everything `.gitignore` covers
+is missing from it**: dependency trees have to be rebuilt, and an ignored `.env` cannot
+be rebuilt at all. Preparation is the repair, and it belongs to **`enter`**, which
+therefore no longer means "launch the editor" but **"make the lane ready, then launch the
+editor"**. `open` ends by entering the lane it created, so there is one code path rather
+than two.
+
+- **Three verbs, and lane learns no package manager.** `clone` (a copy-on-write copy
+  from the main clone), `link` (a symlink to it) and `run` (a configured command, with a
+  directory). Go keeps its caches globally and needs almost none of this; Node keeps them
+  per project and needs all of it — an asymmetry lane cannot learn its way out of, since
+  there is always one more ecosystem. The mechanism is generic; the project-specific
+  knowledge is configuration.
+- **Discovery is git's own answer**, not a guess:
+  `git ls-files -o -i --exclude-standard --directory -z` against the **main clone**,
+  where the files are. `--directory` is what makes it usable — one row for
+  `node_modules/`, not two hundred thousand. Rows nested inside another row are collapsed
+  to the shallowest, because git reports both when an intermediate directory holds
+  nothing tracked, and applying both would write the same bytes twice.
+- **Only paths the lane's own git ignores are ever written**, asked in one bulk
+  `check-ignore --stdin -z`. The trailing slash is the whole question: `node_modules/`
+  matches directories only, so a *symlink* of that name is an untracked file — which
+  would put `● 1 uncommitted` in the listing over a link the user asked for. So a path
+  ignored in neither spelling is not offered at all, and `link` is offered only where the
+  bare spelling comes back. A tracked path never does, which is what stops lane writing
+  over one.
+- **The user is asked once per project per path, on one screen.** One row per path, one
+  keystroke per change, the whole set visible, sizes filling in behind it. A queue of
+  prompts is the wrong shape: entering a lane is something you do several times a day on
+  the way to your editor, and three questions in sequence is a toll. Every row starts at
+  `skip`, so one `Enter` is safe; answers are remembered, and settings is where one is
+  changed.
+- **The cell says what will happen to *this* lane** — `clone` / `clone · overwrites` /
+  `link` / `link · overwrites` / `skip` — because whether the path is already there
+  changes what the answer does, and the destructive case has to name itself in words.
+- **`refresh` is settings-only.** On the screen where an answer is first given the path is
+  absent, so `clone` and a refreshing `clone` do exactly the same thing; a screen has no
+  business offering a distinction it cannot demonstrate. A `run` step's equivalent is a
+  guard path (`unless`), re-checked immediately before it runs so a clone can satisfy it.
+- **Nothing is recorded per lane.** The only state is the filesystem — is the path there —
+  which is what makes a failed or interrupted preparation repair itself.
+- **The answers live in `prepare.toml`, beside the config and never inside it.** See
+  *Configuration* below.
+- **Copy-on-write is `clonefile(2)` via `ctypes`, not a subprocess to `cp -c`.** Measured:
+  a 64 MB tree in 0.3 ms, and across volumes it fails with `EXDEV` having done nothing.
+  `cp -Rc` takes 9 ms and, across volumes, **silently** falls back to a real copy —
+  documented in `cp(1)`, and observed filling a small volume, exiting 1 and leaving a
+  partial file behind. The user configured this expecting it to be free; the least lane
+  owes them is to know when it was not. The fallback is `shutil`, so nothing is spawned to
+  copy anything, and doctor reports whether the two roots can share blocks at all.
 
 **Listing lanes** — for each lane: uncommitted count, unpushed count, merged flag,
 detachment, pull request state and age, on a row you can put a cursor on. The
@@ -694,7 +833,10 @@ Change both or neither.
    library.** The moment an action imports `prompt_toolkit`, it stops being
    testable without a terminal.
 2. **Everything touching git or GitHub sits behind its interface.** No `subprocess`
-   call to `git` or `gh` outside the backend/client implementations.
+   call to `git` or `gh` outside the backend/client implementations. Preparation's
+   discovery is a git call and lives in the backend for that reason; copying is not git,
+   and lives in `prepare/apply.py` — the only module that clones, links, runs a configured
+   command or measures a path.
 
 ### Standards
 
@@ -792,6 +934,26 @@ All of it arrived at test-first:
   release rather than the moving version of a development checkout
 - at least one test driving the session end to end: menu → open a lane → menu →
   lanes → close it → menu → quit, asserting the resulting git state
+- discovery listing one row per ignored directory, and collapsing a row nested inside
+  another; the ignore question distinguishing `x/` from `x` and never returning a tracked
+  path
+- a clone reproducing a tree, the copy being independent of it, and a failed swap leaving
+  the original whole with nothing staged behind
+- a clone that fell back to a real copy **saying so**, since that is the entire reason
+  `clonefile` is called instead of `cp -c`
+- a linked path replaced without following the old link, and a lane closed with one
+  leaving the main clone's copy intact
+- entering an already-prepared lane making **exactly one** git call, asking nothing and
+  drawing nothing — counted through the real backend
+- `Space` changing the row under the cursor and the repaint showing it; `Enter` doing the
+  same on a row that carries an answer and returning the one that does not
+- the `verb` column surviving at 40 columns with `clone · overwrites` in it
+- a failed step reporting its fix while the remaining steps still run and the editor still
+  opens; entering again finishing what it left
+- Ctrl-C during a step naming the step, saying entering again finishes the job, and not
+  launching the editor
+- a prepared lane still reading `✓ clean` to git, so preparation cannot leak into the
+  listing's `state` cell or the close flow's checks
 
 ## Where things stand
 

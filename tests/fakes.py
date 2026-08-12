@@ -12,7 +12,7 @@ from pathlib import Path
 
 from lane.environment import EditorLaunch
 from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Toggle
 
 
 class FakeEnvironment:
@@ -167,6 +167,7 @@ class FakeUi:
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
+        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
     ) -> tuple[T, int]:
         """Records the whole table, then answers it from the script.
@@ -175,42 +176,48 @@ class FakeUi:
         has settled by the time it is read. The real UI runs it on a thread; that
         difference is the only reason "render what is known, fill the rest in" can
         be asserted without sleeps.
+
+        An answer of the form `("space", <row>)` presses Space on that row, so a test
+        drives *"change the first row, change the third, continue"* as a script:
+
+            FakeUi([("space", "apps/web/node_modules"), ("space", 2), "continue"])
         """
         if fill is not None:
             fill(lambda: None)
 
-        table = list(rows())
-        self.told.append(Told("table", title))
-        for row in table:
-            self.told.append(
-                Told("row", " | ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
-            )
-            for line in row.detail:
-                self.told.append(Told("panel", line))
-        if on_render is not None:
+        def paint() -> list[Row[T]]:
+            """Record the table the way the real widget draws it — once per repaint."""
+            table = list(rows())
+            self.told.append(Told("table", title))
             for row in table:
-                on_render(" ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
-            on_render(back)
+                self.told.append(
+                    Told("row", " | ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
+                )
+                for line in row.detail:
+                    self.told.append(Told("panel", line))
+            if on_render is not None:
+                for row in table:
+                    on_render(" ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
+                on_render(back)
+            return table
 
-        answer = self._next(title)
-        if isinstance(answer, str) and answer.lower() in {"back", back.lower()}:
-            raise Abandoned
-        # An integer answers by position, so a test can say "the second lane".
-        if isinstance(answer, int) and not isinstance(answer, bool):
-            if not 0 <= answer < len(table):
-                raise AssertionError(f"FakeUi row {answer} is out of range for {title!r}")
-            return table[answer].value, answer
-        for index, row in enumerate(table):
-            if answer is row.value or answer == row.value:
-                return row.value, index
-            if any(
-                answer == cell.text or answer == f"{cell.lead}{cell.text}" for cell in row.cells
-            ):
-                return row.value, index
-        raise AssertionError(
-            f"FakeUi answer {answer!r} matches no row of {title!r}: "
-            f"{[row.cells[0].text for row in table]}"
-        )
+        table = paint()
+        while True:
+            answer = self._next(title)
+            if isinstance(answer, str) and answer.lower() in {"back", back.lower()}:
+                raise Abandoned
+            if _is_space(answer):
+                if toggle is None:
+                    raise AssertionError(f"FakeUi pressed space on {title!r}, which has no toggle")
+                assert isinstance(answer, tuple)
+                index = _index_of(title, table, answer[1])
+                toggle(table[index].value)
+                # The answer belongs to the action, so the table is read again exactly as
+                # a repaint would: what changed is on screen, and recorded.
+                table = paint()
+                continue
+            index = _index_of(title, table, answer)
+            return table[index].value, index
 
     def text(
         self,
@@ -285,6 +292,27 @@ class FakeUi:
 
     def unanswered(self) -> int:
         return len(self._answers)
+
+
+def _is_space(answer: object) -> bool:
+    return isinstance(answer, tuple) and len(answer) == 2 and answer[0] == "space"
+
+
+def _index_of(title: str, table: Sequence[Row[object]], answer: object) -> int:
+    """Which row a scripted answer means: its position, its value, or any cell text."""
+    if isinstance(answer, int) and not isinstance(answer, bool):
+        if not 0 <= answer < len(table):
+            raise AssertionError(f"FakeUi row {answer} is out of range for {title!r}")
+        return answer
+    for index, row in enumerate(table):
+        if answer is row.value or answer == row.value:
+            return index
+        if any(answer == cell.text or answer == f"{cell.lead}{cell.text}" for cell in row.cells):
+            return index
+    raise AssertionError(
+        f"FakeUi answer {answer!r} matches no row of {title!r}: "
+        f"{[row.cells[0].text for row in table]}"
+    )
 
 
 @dataclass

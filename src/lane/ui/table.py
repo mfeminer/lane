@@ -45,8 +45,8 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.picker import ESCAPE_TIMEOUT, HINT
-from lane.ui.seam import Abandoned, Cell, Column, Fill, Row
+from lane.ui.picker import ESCAPE_TIMEOUT, HINT, TOGGLE_HINT
+from lane.ui.seam import Abandoned, Cell, Column, Fill, Row, Toggle
 
 CURSOR_WIDTH = 2
 """The `❯ ` in front of the row under the cursor, and the space in front of the rest."""
@@ -219,6 +219,7 @@ def paint(
     top: int,
     width: int,
     height: int,
+    toggles: bool = False,
 ) -> Painted:
     """Draw one frame. Pure, which is what makes the layout rules testable."""
     total = len(rows) + 1  # the visible way back is a row like any other
@@ -264,7 +265,8 @@ def paint(
         first = top + 1
         last = min(top + room, total)
         shown = f" · {first}–{last} of {len(rows)}"
-    fragments.append(("class:table.footer", f"  {HINT}{shown}"))
+    hint = TOGGLE_HINT if toggles else HINT
+    fragments.append(("class:table.footer", f"  {hint}{shown}"))
 
     return Painted(fragments=fragments, top=top, room=room)
 
@@ -292,6 +294,7 @@ def browse[T](
     *,
     fill: Fill | None = None,
     cursor: int = 0,
+    toggle: Toggle[T] | None = None,
     on_render: Callable[[str], None] | None = None,
     input: Input | None = None,
     output: Output | None = None,
@@ -300,6 +303,11 @@ def browse[T](
 
     Raises `Abandoned` for the visible back row and for Ctrl-C — the two ways out
     mean the same thing to the caller, so they are the same result.
+
+    With a `toggle`, rows carry an answer that is changed in place: `Space` changes the
+    row under the cursor and the table stays up. `Enter` calls the same `toggle` and
+    only returns the row when it says it does not toggle — one code path, so `Enter`
+    cannot drift from `Space`.
     """
     state = {"index": max(0, cursor), "top": 0, "rows": 0, "opening": 1}
 
@@ -323,6 +331,7 @@ def browse[T](
             top=state["top"],
             width=size.columns,
             height=size.rows - 1,
+            toggles=toggle is not None,
         )
         state["top"] = painted.top
         if on_render is not None:
@@ -360,12 +369,33 @@ def browse[T](
         del event
         state["index"] = _last()
 
+    def _under_cursor() -> Row[T] | None:
+        current = list(rows())
+        index = state["index"]
+        return current[index] if index < len(current) else None
+
+    @bindings.add(" ")
+    def _change(event: KeyPressEvent) -> None:
+        del event
+        row = _under_cursor()
+        if toggle is not None and row is not None:
+            # The answer belongs to the caller, as the rows already do. Whatever it
+            # changed is on screen at the next repaint, which `rows()` supplies.
+            toggle(row.value)
+
     @bindings.add("enter")
     def _accept(event: KeyPressEvent) -> None:
         del event
-        current = list(rows())
-        index = state["index"]
-        application.exit(result=None if index >= len(current) else (current[index].value, index))
+        row = _under_cursor()
+        if row is None:
+            # The back row, one past the last: the same result as Ctrl-C.
+            application.exit(result=None)
+            return
+        if toggle is not None and toggle(row.value):
+            # A row that carries an answer: Enter changed it, and there is more to do
+            # on this screen. Exactly what Space just did, by the same call.
+            return
+        application.exit(result=(row.value, state["index"]))
 
     application: Application[object] = Application(
         layout=Layout(

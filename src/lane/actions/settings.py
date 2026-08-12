@@ -20,9 +20,11 @@ effect looks like a bug.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from lane.actions.picking import choose_project
 from lane.config import (
     DEFAULT_EDITOR,
     DEFAULT_LANES_DIRNAME,
@@ -35,8 +37,9 @@ from lane.config import (
     home,
 )
 from lane.context import Context
+from lane.prepare import Step, Verb, apply
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
-from lane.ui.seam import Abandoned, Cell, Column, Row
+from lane.ui.seam import Abandoned, Cell, Choice, Column, Fill, Row
 
 BACK = "← Back to the menu"
 
@@ -49,7 +52,30 @@ _LABELS = {
     "projects_root": "projects root",
     "lanes_root": "lanes root",
     "editor": "editor",
+    "preparation": "preparation",
 }
+
+PREPARATION = "preparation"
+"""A row that is a *destination* rather than a setting, so it is a noun (§4).
+
+It leads to one screen listing every project's steps, not to a project list and then a
+page each: the lanes table already draws rows from several projects in one table with a
+dimmed lead, so this is two levels of nesting instead of three.
+"""
+
+PREPARE_BACK = "← Back to settings"
+"""Scoped deliberately, as ADR 0002 requires — one step back, not out of settings."""
+
+ADD_STEP = "\x00add\x00"
+
+PREPARE_COLUMNS = (
+    Column("path"),
+    # Informs the decision `verb` records; it does not answer the screen's question, so it
+    # is the one that goes when the terminal is narrow. Same order as the per-enter screen:
+    # two screens showing the same concept do not shuffle their columns.
+    Column("size", drop=1),
+    Column("verb"),
+)
 
 
 def run(context: Context) -> None:
@@ -105,6 +131,9 @@ def _run_list(context: Context) -> None:
             return
 
         current = store.load_file_only()
+        if key == PREPARATION:
+            _run_preparation(context)
+            continue
         if key == "projects_root":
             projects_root = _ask_projects_root(context, current.projects_root)
             if projects_root is None:
@@ -154,7 +183,19 @@ def _rows(context: Context, current: Config) -> list[Row[str]]:
         row("projects_root", _text(current.projects_root)),
         row("lanes_root", _text(current.lanes_root)),
         row("editor", current.editor or DEFAULT_EDITOR),
+        row(PREPARATION, _prepared_phrase(context)),
     ]
+
+
+def _prepared_phrase(context: Context) -> str:
+    """How much is there, the way the other three rows say what they are set to."""
+    remembered = context.prepare_store().load()
+    steps, projects = len(remembered.steps), len(remembered.projects())
+    if not steps:
+        return "nothing yet"
+    step_word = "step" if steps == 1 else "steps"
+    project_word = "project" if projects == 1 else "projects"
+    return f"{steps} {step_word} in {projects} {project_word}"
 
 
 def _text(path: Path | None) -> str:
@@ -172,6 +213,254 @@ def _detail(context: Context, key: str, text: str) -> tuple[str, ...]:
         lines.append(f"{variable} overrides {_LABELS[key]}.")
         lines.append("Edits below are saved to the file, but the environment still wins.")
     return tuple(lines)
+
+
+# -- preparation ------------------------------------------------------------------
+
+
+def _run_preparation(context: Context) -> None:
+    """Every project's steps, in one table you act on one row at a time.
+
+    The same shape as the settings list itself and the lanes table, and for the same
+    reason: looking and acting are the same widget. The project is a dimmed lead on the
+    subject, exactly as the listing does when lanes span projects — which is what makes
+    a second level of nesting unnecessary.
+
+    This is where a decision made months ago is changed, which is the whole reason the
+    per-enter screen can remember every answer without a "remember this?" column: the
+    remedy for a wrong answer is one row here.
+    """
+    ui = context.ui
+    store = context.prepare_store()
+
+    ui.heading("lane settings · preparation")
+    ui.detail(f"  {store.path}")
+    remembered = store.load()
+    if remembered.problem is not None:
+        ui.warn(remembered.problem)
+    ui.blank()
+
+    cursor = 0
+    while True:
+        rows = _prepare_rows(store.load().steps)
+
+        def _rows_now(rows: list[Row[Step | str]] = rows) -> list[Row[Step | str]]:
+            return rows
+
+        try:
+            chosen, cursor = ui.browse(
+                "preparation",
+                PREPARE_COLUMNS,
+                _rows_now,
+                back=PREPARE_BACK,
+                fill=_measure_into(context, rows),
+                cursor=cursor,
+            )
+        except Abandoned:
+            return
+
+        if chosen == ADD_STEP:
+            _add_step(context)
+            continue
+        assert isinstance(chosen, Step)
+        _act_on_step(context, chosen)
+
+
+def _prepare_rows(steps: Sequence[Step]) -> list[Row[Step | str]]:
+    """Ordered by project, then subject — and never rearranged while on screen."""
+    ordered = sorted(steps, key=lambda step: (step.project.lower(), step.subject.lower()))
+    rows: list[Row[Step | str]] = [
+        Row(
+            value=step,
+            cells=(
+                Cell(step.subject, lead=f"{step.project}/"),
+                _MEASURING if step.verb is not Verb.RUN else Cell("—", tone="dim"),
+                Cell(step.describe(), tone="dim" if step.verb is Verb.SKIP else ""),
+            ),
+            detail=_step_detail(step),
+        )
+        for step in ordered
+    ]
+    # An action row, like the visible way back: a screen whose only purpose is to let you
+    # add the first step cannot answer an empty list with a line of prose (§12).
+    rows.append(Row(value=ADD_STEP, cells=(Cell("add a step"), Cell(""), Cell(""))))
+    return rows
+
+
+_MEASURING = Cell("measuring…", tone="dim")
+
+
+def _step_detail(step: Step) -> tuple[str, ...]:
+    lines = [f"{step.project}: {step.subject}"]
+    if step.verb is Verb.RUN and step.unless:
+        lines.append(f"Skipped when {step.unless} is already in the lane.")
+    elif step.verb is Verb.RUN:
+        lines.append("Runs on every enter — nothing guards it.")
+    elif step.verb is Verb.CLONE and step.refresh:
+        lines.append("Replaced on every enter, including anything the lane changed.")
+    elif step.verb is Verb.LINK:
+        lines.append("A symlink: always current, and the lane writes into the main clone.")
+    return tuple(lines)
+
+
+def _measure_into(context: Context, rows: list[Row[Step | str]]) -> Fill:
+    """Sizes behind the screen, the lanes table's own shape and its own `fill`.
+
+    A step configured months ago is worth re-measuring before it is changed, and `du` on
+    a large tree is too slow to hold up the first paint.
+    """
+    root = context.projects_root
+
+    def fill(notify: Callable[[], None]) -> None:
+        if root is None:
+            return
+        for index, row in enumerate(rows):
+            step = row.value
+            if not isinstance(step, Step) or step.verb is Verb.RUN:
+                continue
+            size = apply.measure(root / step.project / step.path)
+            rows[index] = replace(
+                row,
+                cells=(row.cells[0], Cell(apply.size_phrase(size), tone="dim"), row.cells[2]),
+            )
+            notify()
+
+    return fill
+
+
+def _act_on_step(context: Context, step: Step) -> None:
+    """Two verbs for the row under the cursor, exactly as the lanes table offers two."""
+    try:
+        verb = context.ui.choose(
+            f"{step.project}/{step.subject}",
+            [
+                Choice("change", "change", "answer this one differently"),
+                Choice("forget", "forget", "and be asked about it again"),
+            ],
+        )
+    except Abandoned:
+        return
+
+    if verb == "forget":
+        context.prepare_store().forget(step)
+        context.ui.ok(f"Forgot {step.project}/{step.subject} — it will be asked about again.")
+        return
+
+    if step.verb is Verb.RUN:
+        _change_command(context, step)
+        return
+    _change_path_verb(context, step)
+
+
+def _change_path_verb(context: Context, step: Step) -> None:
+    """The one place `refresh` can be set — see `prepare.Step.refresh` for why."""
+    chosen = context.ui.choose(
+        f"What should lane do with {step.subject}",
+        [
+            Choice("skip", (Verb.SKIP, False), "leave it out of the lane"),
+            Choice("clone", (Verb.CLONE, False), "copy it in when it is missing"),
+            Choice(
+                "clone, refreshed",
+                (Verb.CLONE, True),
+                "replace it on every enter, including what the lane changed",
+            ),
+            Choice("link", (Verb.LINK, False), "a symlink to the main clone"),
+        ],
+    )
+    verb, refresh = chosen
+    context.prepare_store().add(replace(step, verb=verb, refresh=refresh))
+    _warn_about_verb(context, verb)
+    context.ui.ok(f"{step.project}/{step.subject} — {verb}")
+
+
+def _change_command(context: Context, step: Step) -> None:
+    command = context.ui.text("Command to run", default=step.command)
+    directory = context.ui.text("Where to run it, relative to the lane", default=step.directory)
+    unless = context.ui.text("Skip it when this path is already in the lane", default=step.unless)
+    _save_command(context, step.project, command, directory, unless)
+
+
+def _add_step(context: Context) -> None:
+    """A `run` step exists only here: the per-enter screen is one row per *discovered*
+    path, and a command is not one."""
+    project = choose_project(context, "Which project?")
+    if project is None:
+        return
+
+    verb = context.ui.choose(
+        f"What should lane do in {project.name}",
+        [
+            Choice("clone", Verb.CLONE, "copy an ignored path in from the main clone"),
+            Choice("link", Verb.LINK, "symlink an ignored path to the main clone"),
+            Choice("run", Verb.RUN, "run a command in the lane"),
+            Choice("skip", Verb.SKIP, "never bring a path in, and stop being asked"),
+        ],
+    )
+
+    if verb is Verb.RUN:
+        command = context.ui.text("Command to run")
+        directory = context.ui.text("Where to run it, relative to the lane")
+        unless = context.ui.text("Skip it when this path is already in the lane")
+        _save_command(context, project.name, command, directory, unless)
+        return
+
+    path = context.ui.text("Which path, relative to the repository root")
+    if not path.strip():
+        context.ui.error("A path is required.")
+        return
+    context.prepare_store().add(Step(project=project.name, verb=verb, path=path.strip().strip("/")))
+    _warn_about_verb(context, verb)
+    context.ui.ok(f"{project.name}/{path.strip()} — {verb}")
+
+
+def _save_command(
+    context: Context, project: str, command: str, directory: str, unless: str
+) -> None:
+    if not command.strip():
+        context.ui.error("A command is required.")
+        return
+    context.prepare_store().add(
+        Step(
+            project=project,
+            verb=Verb.RUN,
+            command=command.strip(),
+            directory=directory.strip().strip("/"),
+            unless=unless.strip().strip("/"),
+        )
+    )
+    if not unless.strip():
+        context.ui.warn(
+            "Nothing guards this, so it runs on every enter — and entering is instant today."
+        )
+    context.ui.ok(f"{project}/{command.strip()} — run")
+
+
+def _warn_about_verb(context: Context, verb: Verb) -> None:
+    """Say the thing that changes the decision, where the decision is being made.
+
+    doctor reports the copy-on-write question too, but nobody consults doctor before
+    configuring something they expect to be free — so it is said in the same words here.
+    """
+    ui = context.ui
+    if verb is Verb.LINK:
+        ui.warn("A symlink is always current, and anything the lane writes there goes into")
+        ui.detail("  the main clone. Use 'clone' for a path the lane will modify.")
+        return
+    if verb is not Verb.CLONE:
+        return
+    projects_root, lanes_root = context.projects_root, context.config.lanes_root
+    if projects_root is None or lanes_root is None:
+        return
+    if not apply.cloning_available(projects_root, lanes_root):
+        ui.warn(COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root))
+        ui.detail("  Put both roots on one volume, or use 'link' or 'run' for large paths.")
+
+
+COPY_ON_WRITE_UNAVAILABLE = (
+    "Copy-on-write is not available: {projects} and {lanes} are on different volumes, "
+    "so a 'clone' step is a real copy — slow, and it uses real disk."
+)
+"""One sentence, shared by doctor and by settings, so they cannot say it differently."""
 
 
 def _report_overrides(context: Context) -> None:

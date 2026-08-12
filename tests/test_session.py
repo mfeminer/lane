@@ -349,3 +349,57 @@ def test_backing_out_of_the_menu_closes_the_road_too(projects_root: Path, lanes_
     session.run(_context(ui, projects_root, lanes_root))
 
     assert ui.told[-1].kind == "farewell"
+
+
+def test_a_whole_working_day_with_a_lane_that_needs_preparing(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The same day, in a project that keeps something outside git.
+
+    The point of the whole feature in one script: asked once on the way in, asked
+    **nothing** on the way back in, and the close is unaffected because the copied path is
+    ignored and so never looked dirty.
+    """
+    _origin, clone = build_repo(projects_root / "_b", default_branch="main")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    (repo / ".gitignore").write_text("node_modules/\n")
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "pkg").write_text("from the main clone\n")
+
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    ui = FakeUi(
+        [
+            # menu -> open, which ends by entering, which prepares
+            "open",
+            "thing",
+            "Fix the CSV export",
+            "branch",
+            "bugfix/fix-the-csv-export",
+            ("space", "node_modules"),  # skip -> clone
+            "continue",
+            # menu -> lanes -> enter it again. Nothing is asked this time.
+            "lanes",
+            "fix-the-csv-export",
+            "enter",
+            # menu -> lanes -> close it
+            "lanes",
+            "fix-the-csv-export",
+            "close",
+            True,
+            "quit",
+        ]
+    )
+    context = _context(ui, projects_root, lanes_root, environment=environment)
+    lane_path = lanes_root / "thing" / "fix-the-csv-export"
+
+    exit_code = session.run(context)
+
+    assert exit_code == 0
+    assert ui.unanswered() == 0, "the whole script was consumed — nothing extra was asked"
+    assert environment.launched == [("cursor", lane_path), ("cursor", lane_path)]
+    assert not lane_path.exists(), "the lane closed cleanly, copied tree and all"
+    assert (repo / "node_modules" / "pkg").read_text() == "from the main clone\n"

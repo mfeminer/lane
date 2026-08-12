@@ -25,7 +25,7 @@ from rich.text import Text
 from lane.ui import render, splash
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Toggle
 from lane.ui.splash import Line
 from lane.ui.table import browse as browse_table
 
@@ -78,6 +78,7 @@ class ConsoleUi:
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
+        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
@@ -94,6 +95,7 @@ class ConsoleUi:
             back,
             fill=fill,
             cursor=cursor,
+            toggle=toggle,
             on_render=on_render,
             input=input,
             output=output,

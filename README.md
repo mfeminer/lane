@@ -68,9 +68,34 @@ A working day is four steps, and lane is only in two of them:
    `close`.** It checks the pull requests, verifies nothing is left behind, and
    removes the worktree and every branch the lane used.
 
-`↑` `↓` move, `Enter` chooses, `Ctrl-C` backs out — from anywhere, and always safely:
-every question comes before the first irreversible step. There are **no subcommands**;
-`--version` and `--help` are the only arguments.
+A new worktree is a fresh checkout, so everything your `.gitignore` covers is missing from
+it — `node_modules`, build caches, your `.env`. The first time lane sees one of those it
+asks, once per project, what to do with it:
+
+```
+Preparing demo/broken-pagination
+  Answers are remembered per project — change them in settings · preparation.
+
+  3 paths lane has not been told about
+
+  path                       size      verb
+❯ apps/web/node_modules      1.2 GB    clone
+  apps/console/.env          1.4 KB    link
+  apps/console/dist          340 MB    skip
+  continue
+  ← Back without entering
+
+  ↑↓ move · space change · enter continue
+```
+
+`clone` is a copy-on-write copy, so on APFS it costs almost nothing and almost no disk;
+`link` is a symlink to your main clone; `skip` leaves it out. Answer once and every lane in
+that project after it comes up ready.
+
+`↑` `↓` move, `Enter` chooses, `Space` changes an answer on a list like the one above,
+`Ctrl-C` backs out — from anywhere, and always safely: every question comes before the
+first irreversible step. There are **no subcommands**; `--version` and `--help` are the
+only arguments.
 
 ## Configure
 
@@ -82,8 +107,11 @@ lanes_root = "/Users/you/Lanes"         # where lanes are parked
 editor = "cursor"                       # code, zed, idea, subl...
 ```
 
-`LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file.
-Something not working? **doctor** checks every bit of it.
+`LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file. What to do
+with each project's ignored paths lives beside it in `prepare.toml`, and
+**settings → preparation** is where you change an answer or add a command to run.
+Something not working? **doctor** checks every bit of it — including whether your projects
+and lanes folders can actually share blocks, which is what makes `clone` free.
 
 ## Develop
 

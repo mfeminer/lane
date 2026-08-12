@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lane.actions import doctor, settings
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
 from lane.lanes import LaneStore
+from lane.prepare import Step, Verb, apply
 from lane.state import StateStore
 from tests.conftest import build_repo, git
 from tests.fakes import FakeEnvironment, FakeUi, StubGitHubClient
@@ -456,3 +459,292 @@ def test_an_environment_override_is_visible_in_the_list(
     assert ui.said("LANE_EDITOR overrides editor")
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("overridden by LANE_EDITOR" in row for row in rows)
+
+
+# -- preparation, from settings --------------------------------------------------
+
+
+def _configured(xdg: Path, projects_root: Path, lanes_root: Path, name: str) -> Path:
+    """A config already on disk, so settings shows its list rather than the first run."""
+    config_dir = xdg / name
+    git(["init", "--quiet", str(projects_root / "p")])
+    ConfigStore(config_dir).save(
+        Config(projects_root=projects_root, lanes_root=lanes_root, editor="cursor")
+    )
+    return config_dir
+
+
+def test_settings_has_a_preparation_row_saying_how_much_is_there(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP1")
+    ui = FakeUi(["back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="acme", verb=Verb.CLONE, path="node_modules"),
+            Step(project="other", verb=Verb.SKIP, path="vendor"),
+        )
+    )
+
+    settings.run(context)
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert any("preparation" in row and "2 steps in 2 projects" in row for row in rows)
+
+
+def test_the_preparation_screen_lists_every_projects_steps_with_the_project_dimmed(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """One screen for every project rather than a project list and then a page each: the
+    lanes table already solves "rows from several projects in one table" with a dimmed
+    lead, so this is two levels of nesting instead of three."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP2")
+    ui = FakeUi(["preparation", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="zeta", verb=Verb.LINK, path=".env"),
+            Step(project="acme", verb=Verb.CLONE, path="node_modules", refresh=True),
+            Step(project="acme", verb=Verb.RUN, command="install-things", directory="web"),
+        )
+    )
+
+    settings.run(context)
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    prepared = [row for row in rows if "acme/" in row or "zeta/" in row]
+    assert [row.split(" | ")[0] for row in prepared] == [
+        "acme/install-things",
+        "acme/node_modules",
+        "zeta/.env",
+    ], "ordered by project, then subject, and never rearranging"
+    assert any("clone, refreshed" in row for row in prepared)
+    assert any("run · web" in row for row in prepared)
+    assert any("add a step" in row for row in rows)
+
+
+def test_changing_a_step_asks_one_question_and_returns_to_the_list(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP3")
+    ui = FakeUi(["preparation", "acme/node_modules", "change", "link", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    settings.run(context)
+
+    assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.LINK]
+    assert ui.unanswered() == 0, "the list came back, and 'back' answered it"
+
+
+def test_a_clone_step_can_be_set_to_refresh_on_every_enter(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The only place `refresh` can be set. On the screen where an answer is first given
+    the path is absent, so `clone` and a refreshing `clone` do the same thing — a screen
+    has no business offering a distinction it cannot demonstrate."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP4")
+    ui = FakeUi(["preparation", "acme/node_modules", "change", "clone, refreshed", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    settings.run(context)
+
+    step = context.prepare_store().load().for_project("acme")[0]
+    assert step.verb is Verb.CLONE
+    assert step.refresh
+
+
+def test_forgetting_a_step_means_the_path_is_asked_about_again(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The remedy the whole "every answer is remembered" decision rests on."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP5")
+    ui = FakeUi(["preparation", "acme/node_modules", "forget", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="node_modules"),))
+
+    settings.run(context)
+
+    assert context.prepare_store().load().steps == ()
+
+
+def test_a_command_step_can_be_added(xdg: Path, projects_root: Path, lanes_root: Path) -> None:
+    """`run` exists only here: the preparation screen is one row per discovered path, and
+    a command is not a discovered path."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP6")
+    ui = FakeUi(
+        [
+            "preparation",
+            "add a step",
+            "p",
+            "run",
+            "install-things",
+            "web",
+            "web/node_modules",
+            "back",
+            "back",
+        ]
+    )
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    step = context.prepare_store().load().for_project("p")[0]
+    assert step.verb is Verb.RUN
+    assert (step.command, step.directory, step.unless) == (
+        "install-things",
+        "web",
+        "web/node_modules",
+    )
+
+
+def test_with_no_steps_at_all_the_screen_still_offers_add_a_step(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """§12 is about *data* rows: a screen whose only purpose is to let you add the first
+    step cannot answer with a line of prose."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP7")
+    ui = FakeUi(["preparation", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert any("add a step" in told.text for told in ui.told if told.kind == "row")
+
+
+def test_adding_a_clone_step_warns_when_copy_on_write_is_not_possible(
+    xdg: Path, projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Said where it changes a decision, in the same words doctor uses — doctor is not
+    something a user consults before configuring something they expect to be free."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP8")
+    monkeypatch.setattr(apply, "cloning_available", _never)
+    ui = FakeUi(["preparation", "add a step", "p", "clone", "vendor", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert ui.said("copy-on-write")
+    assert context.prepare_store().load().for_project("p")[0].verb is Verb.CLONE
+
+
+def test_adding_a_link_step_says_the_lane_will_write_into_the_main_clone(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP9")
+    ui = FakeUi(["preparation", "add a step", "p", "link", "vendor", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert ui.said("main clone")
+
+
+# -- doctor on copy-on-write ------------------------------------------------------
+
+
+def test_doctor_says_cloning_is_free_when_both_roots_share_a_volume(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The user configured 'clone' expecting it to be free. Doctor is where that
+    expectation is checked before a gigabyte of disk quietly disappears."""
+    lanes_root.mkdir()
+    ui = FakeUi([])
+
+    doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    assert ui.said("copy-on-write")
+    assert ui.said(str(projects_root))
+    assert ui.said(str(lanes_root))
+
+
+def test_doctor_says_cloning_is_a_real_copy_across_volumes(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(apply, "cloning_available", _never)
+    ui = FakeUi([])
+
+    doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    assert ui.said("different volumes")
+    assert ui.said("real disk")
+    assert any(told.kind == "warn" and "Copy-on-write" in told.text for told in ui.told)
+
+
+def test_doctor_still_renders_when_the_roots_are_unset(lanes_root: Path) -> None:
+    ui = FakeUi([])
+    doctor.run(_context(ui, projects_root=None, lanes_root=lanes_root))
+    assert ui.said("Editor"), "it got all the way to the end"
+
+
+def test_doctor_survives_a_probe_that_raises(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Doctor must render on a machine where nothing it inspects works, so the probe is a
+    line rather than an exception."""
+
+    def explode(source: Path, target: Path) -> bool:
+        del source, target
+        raise OSError("no")
+
+    monkeypatch.setattr(apply, "cloning_available", explode)
+    ui = FakeUi([])
+
+    doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    assert ui.said("could not be checked")
+    assert ui.said("Editor")
+
+
+def test_doctor_reports_an_unreadable_preparation_file(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    ui = FakeUi([])
+    context = _context(ui, projects_root=projects_root, lanes_root=lanes_root)
+    store = context.prepare_store()
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text("not toml [[[")
+
+    doctor.run(context)
+
+    assert ui.said("Could not read")
+    assert ui.said(str(store.path))
+
+
+def test_doctor_names_the_preparation_file_and_how_much_is_in_it(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    ui = FakeUi([])
+    context = _context(ui, projects_root=projects_root, lanes_root=lanes_root)
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    doctor.run(context)
+
+    assert ui.said("prepare.toml")
+    assert ui.said("1 step")
+
+
+def _never(source: Path, target: Path) -> bool:
+    """Stand in for a machine whose two roots are on different volumes."""
+    del source, target
+    return False

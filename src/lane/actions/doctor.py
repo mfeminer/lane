@@ -15,9 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from lane import __version__, buildinfo
+from lane.actions import settings
 from lane.config import ENV_EDITOR, ENV_LANES_ROOT, ENV_PROJECTS_ROOT
 from lane.context import Context
 from lane.github.gh_client import INSTALL_REMEDY, LOGIN_REMEDY
+from lane.prepare import apply
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
 
 
@@ -48,6 +50,8 @@ def run(context: Context) -> None:
     _report_projects(context)
     ui.blank()
     _report_lanes(context)
+    ui.blank()
+    _report_preparation(context)
     ui.blank()
     _report_editor(context)
     ui.blank()
@@ -137,6 +141,50 @@ def _report_lanes(context: Context) -> None:
         return
     count = len(context.lane_store().list_lanes())
     ui.ok(f"Lanes: {root} ({count} open)")
+
+
+def _report_preparation(context: Context) -> None:
+    """What preparation is set to do, and whether cloning can actually be free.
+
+    The second half is the one that matters: `cp -c` falls back to a real copy in silence,
+    which is exactly why lane calls `clonefile(2)` instead — it fails loudly. This says so
+    up front, so nobody discovers it as a gigabyte of missing disk.
+    """
+    ui = context.ui
+    store = context.prepare_store()
+    remembered = store.load()
+
+    if remembered.problem is not None:
+        ui.error(remembered.problem)
+        ui.detail("  Fix or delete that file; every answer in it will simply be asked again.")
+    else:
+        steps, projects = len(remembered.steps), len(remembered.projects())
+        if steps:
+            word = "step" if steps == 1 else "steps"
+            ui.ok(f"Preparation: {store.path} ({steps} {word} in {projects} project(s))")
+        else:
+            ui.detail(f"  Preparation: {store.path} — nothing configured yet")
+
+    projects_root, lanes_root = context.projects_root, context.config.lanes_root
+    if projects_root is None or lanes_root is None:
+        ui.detail("  Copy-on-write could not be checked: set both folders first.")
+        return
+
+    try:
+        available = apply.cloning_available(projects_root, lanes_root)
+    except OSError as exc:
+        # Doctor must render on a machine where nothing it inspects works.
+        ui.warn(f"Copy-on-write could not be checked: {exc}")
+        return
+
+    if available:
+        ui.detail(
+            f"  Copy-on-write: {projects_root} and {lanes_root} are on one volume that "
+            "supports cloning, so bringing a dependency tree into a lane is nearly free."
+        )
+        return
+    ui.warn(settings.COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root))
+    ui.detail("  Put both roots on one volume, or use 'link' or 'run' for large paths.")
 
 
 def _report_editor(context: Context) -> None:
