@@ -709,15 +709,16 @@ def test_a_folder_of_loose_ignored_files_is_one_row_not_forty(
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert len(rows) == 1, f"one row, not forty: {rows}"
-    assert any("logs/ · 40 ignored files" in row for row in rows)
+    assert any("logs/ · 40 ignored paths" in row for row in rows)
 
 
 def test_one_keystroke_on_a_folder_brings_in_every_path_inside_it(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """A folder is one checkbox: ticking it means all of them, and there is no third
-    state for it to land in."""
-    ui = FakeUi([["logs/ · 3 ignored files"]])
+    """A folder row stands for everything beneath it: one keystroke answers the lot,
+    which is the whole reason nobody has to descend into fourteen packages one at a
+    time."""
+    ui = FakeUi([["logs/ · 3 ignored paths"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("*.log",))
     _litter(repo, "logs", "a.log", "b.log", "c.log")
@@ -739,7 +740,7 @@ def test_a_folder_answer_never_writes_the_directory_itself(
 ) -> None:
     """The directory is only *partly* ignored — that is why its files were listed one by
     one — so it holds tracked work too. Cloning the directory would overwrite it."""
-    ui = FakeUi([["logs/ · 3 ignored files"]])
+    ui = FakeUi([["logs/ · 3 ignored paths"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("*.log",))
     _litter(repo, "logs", "a.log", "b.log", "c.log")
@@ -752,22 +753,44 @@ def test_a_folder_answer_never_writes_the_directory_itself(
     assert context.git.status(lane.path, "main").dirty_count == 1, "only the file it edited"
 
 
-def test_a_folder_whose_answers_disagree_is_drawn_as_its_own_rows(
+def test_a_deep_tree_opens_on_its_branching_points_not_on_its_leaves(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """A folder is a folder only while its paths agree. Where they do not, one checkbox
-    could only lie about them — so the folder is opened out instead, which is the whole
-    of what replaced drilling into it."""
+    """The complaint this shape answers: two hundred ignored paths scattered under
+    different packages must not be two hundred rows to choose between."""
     ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
-    repo = _project(projects_root, ignore=(".env*", "*.log"))
-    _litter(repo, "web", ".env", "a.log", "b.log")
+    repo = _project(projects_root, ignore=("*.log", ".env"))
+    for name in ("api", "web", "console"):
+        _litter(repo, f"packages/{name}", ".env", "a.log", "b.log")
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert len(rows) == 1, f"one row to open, not nine: {rows}"
+    assert rows[0].startswith("packages/ · 9 ignored paths")
+    inside = [told.text for told in ui.told if told.kind == "nested"]
+    assert any("packages/api/ · 3 ignored paths" in row for row in inside), (
+        "and the level below it is the packages, not their files"
+    )
+
+
+def test_one_keystroke_at_the_top_of_a_tree_answers_every_leaf_under_it(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """A folder is presentation at every depth: answering the top of the tree stores one
+    step per path and never one for a directory."""
+    ui = FakeUi([["packages/ · 9 ignored paths"]])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("*.log", ".env"))
+    for name in ("api", "web", "console"):
+        _litter(repo, f"packages/{name}", ".env", "a.log", "b.log")
     lane = _lane(context, repo)
-    context.prepare_store().save((Step(project="demo", verb=Verb.CLONE, path="web/.env"),))
 
     enter_lane.enter(context, lane)
 
-    rows = [told.text for told in ui.told if told.kind == "row"]
-    assert not any("ignored files" in row for row in rows), "no folder row over a disagreement"
-    assert any("web/a.log" in row for row in rows)
-    assert any("web/b.log" in row for row in rows)
+    steps = context.prepare_store().load().for_project("demo")
+    assert len(steps) == 9
+    assert all(step.verb is Verb.CLONE for step in steps)
+    assert all(step.path.count("/") == 2 for step in steps), "never a step for a directory"
+    assert (lane.path / "packages" / "api" / ".env").exists()

@@ -34,7 +34,7 @@ lane again simply runs it again.
 
 from __future__ import annotations
 
-from collections.abc import Container, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -140,11 +140,12 @@ class Candidate:
 
 
 GROUP_FROM = 3
-"""How many loose ignored files in one directory it takes to become a group row.
+"""How many rows a level has to hold before it is worth a folder row of its own.
 
-A group row costs one keystroke to reach the answers inside it, so it has to save more
-than one row to be worth having: two files folded into one row is a wash, three saves
-two. This is the first count where grouping pays.
+A folder row costs one keystroke to reach the rows inside it, so it has to save more than
+one row to be worth having: two folded into one is a wash, three saves two. This is the
+first count where folding pays — below it, a level is drawn in its parent instead, which
+is also what collapses a chain of directories with a single child into one row.
 """
 
 ROOT_LABEL = "./"
@@ -154,32 +155,41 @@ nothing at all."""
 
 @dataclass(frozen=True, slots=True)
 class Group:
-    """Several loose ignored files under one directory, shown as a single row.
+    """A directory of ignored paths, shown as a single row you can go into.
 
     **Presentation only, and that is a safety property rather than an implementation
     note.** A group is *not* a step for its directory: the directory is only partially
-    ignored — that is the entire reason git listed its files separately — so it holds
-    tracked work as well, and cloning it would overwrite that. Ticking a group applies
-    the answer to each path in it and stores one step per path.
+    ignored — that is the entire reason git listed its paths separately — so it holds
+    tracked work as well, and cloning it would overwrite that. Answering a group applies
+    the answer to each path beneath it and stores one step per path.
 
     Two consequences worth keeping: a file that appears in that directory later is a path
     nobody has answered, so it is asked about rather than silently swept in; and an answer
     given here means exactly what the same answer means on a row of its own.
 
-    **A folder is a folder only while its paths agree.** One checkbox has two states, and
-    a directory holding two `.env` files that are in and thirty logs that are out has no
-    honest tick — so `group` does not fold it, and its files are drawn as their own rows.
-    That is what replaced drilling into a folder to answer it file by file: the screen
-    opens it out itself, exactly when opening it out is the only truthful thing to do.
+    **`items` are the rows one level down, and they may be groups themselves**; the
+    `candidates` are every leaf beneath, however deep. A group stands for all of them —
+    which is three states rather than two, all in, all out or a mix, and the mark that
+    says so is `◐` (docs/CONVENTIONS.md §5). A folder used to be opened out into its own
+    rows when its paths disagreed, because a checkbox could not say "some of these"; the
+    mark can, so the shape no longer has to lie or to flatten.
     """
 
     directory: str
-    candidates: tuple[Candidate, ...]
+    items: tuple[Item, ...]
+
+    @property
+    def candidates(self) -> tuple[Candidate, ...]:
+        """Every leaf beneath this row, however deep — what one keystroke answers."""
+        found: list[Candidate] = []
+        for item in self.items:
+            found.extend(item.candidates if isinstance(item, Group) else (item,))
+        return tuple(found)
 
     @property
     def label(self) -> str:
         count = len(self.candidates)
-        word = "file" if count == 1 else "files"
+        word = "path" if count == 1 else "paths"
         shown = f"{self.directory}/" if self.directory else ROOT_LABEL
         return f"{shown} · {count} ignored {word}"
 
@@ -201,48 +211,80 @@ type Item = Candidate | Group
 """One row of the preparation screen: a path to answer, or a folder of them."""
 
 
-def group(
-    candidates: Sequence[Candidate],
-    threshold: int = GROUP_FROM,
-    checked: Container[str] = frozenset(),
-) -> tuple[Item, ...]:
-    """Fold loose ignored files into one row per directory, keeping discovery's order.
+def tree(candidates: Sequence[Candidate], threshold: int = GROUP_FROM) -> tuple[Item, ...]:
+    """The top of the tree the discovered paths already are, one level at a time.
 
-    Grouping is by **parent directory and nothing else**: it says nothing about what each
-    path is, so a fully ignored directory sitting beside loose files is folded in with
-    them like any other path. That is safe precisely because a group is never a step for
-    its directory — see `Group`.
+    Two hundred ignored paths drawn flat is not a screen, and they are not a flat list
+    either: they are a tree, and git already put the separators in. This groups on those
+    and nothing else — it says nothing about what each path is, so a fully ignored
+    directory sitting beside loose files is a leaf beside them like any other path. That
+    is safe precisely because a group is never a step for its directory (see `Group`).
 
-    `checked` is what is currently in, and a directory whose paths disagree about that is
-    left unfolded: one checkbox cannot say "some of these". On the screen where a path is
-    first answered nothing is checked, so everything folds — the disagreement only ever
-    arrives from answers already on disk.
+    **A level of fewer than `threshold` rows is drawn in its parent instead of behind a
+    keystroke.** A folder row costs one press to reach the rows inside it, so it has to
+    save more than one row to be worth having: two folded into one is a wash, three saves
+    two. A directory with a single child is the extreme of the same rule — no choice is
+    being offered, so `apps/web/frontend/node_modules` stays the one row it always was.
+
+    No second git call and no walk of its own: this is the same
+    `ls-files -o -i --exclude-standard --directory` answer, split on `/`.
     """
-    by_directory: dict[str, list[Candidate]] = {}
+    return _fold_root(_level(candidates, "", threshold), threshold)
+
+
+def _level(candidates: Sequence[Candidate], prefix: str, threshold: int) -> tuple[Item, ...]:
+    """The rows of one directory: its own paths, and a row per directory under it.
+
+    Emitted in the order the candidates arrived, with a folder anchored where its **first
+    member** was. Discovery's order is git's, which is sorted; grouping by bucket and then
+    flattening would put `logs/` after `node_modules`, and a list that reads as shuffled
+    is one the eye cannot trust.
+    """
+    under: dict[str, list[Candidate]] = {}
     for candidate in candidates:
-        directory, _, _ = candidate.path.rpartition("/")
-        by_directory.setdefault(directory, []).append(candidate)
+        segment, slash, _ = candidate.path[len(prefix) :].partition("/")
+        if slash:
+            under.setdefault(prefix + segment, []).append(candidate)
 
-    def agree(found: Sequence[Candidate]) -> bool:
-        answers = {one.path in checked for one in found}
-        return len(answers) == 1
-
-    # Emitted in the order the candidates arrived, with a group anchored where its **first
-    # member** was. Discovery's order is git's, which is sorted; grouping by bucket and
-    # then flattening would put `logs/` after `node_modules`, and a list that reads as
-    # shuffled is one the eye cannot trust.
     rows: list[Item] = []
     placed: set[str] = set()
     for candidate in candidates:
-        directory, _, _ = candidate.path.rpartition("/")
-        found = by_directory[directory]
-        if len(found) < threshold or not agree(found):
+        segment, slash, _ = candidate.path[len(prefix) :].partition("/")
+        if not slash:
             rows.append(candidate)
             continue
-        if directory not in placed:
-            placed.add(directory)
-            rows.append(Group(directory=directory, candidates=tuple(found)))
+        directory = prefix + segment
+        if directory in placed:
+            continue
+        placed.add(directory)
+        inside = _level(under[directory], f"{directory}/", threshold)
+        if len(inside) < threshold:
+            # Not a choice worth a screen: its rows belong on this one.
+            rows.extend(inside)
+        else:
+            rows.append(Group(directory=directory, items=inside))
     return tuple(rows)
+
+
+def _fold_root(rows: Sequence[Item], threshold: int) -> tuple[Item, ...]:
+    """The repository root's own loose files, folded into one row like any directory's.
+
+    The root is the one level with no row of its own on a screen above it, so `./` is the
+    only place its loose files can be answered in one keystroke. Every other directory
+    already has that row — which is why no other level folds its own paths this way.
+    """
+    loose = [row for row in rows if isinstance(row, Candidate) and "/" not in row.path]
+    if len(loose) < threshold:
+        return tuple(rows)
+
+    folded = Group(directory="", items=tuple(loose))
+    kept: list[Item] = []
+    for row in rows:
+        if row is loose[0]:
+            kept.append(folded)
+        elif row not in loose:
+            kept.append(row)
+    return tuple(kept)
 
 
 @dataclass(frozen=True, slots=True)

@@ -539,6 +539,61 @@ def test_the_preparation_screen_shows_every_projects_paths_with_the_project_dimm
     assert not any("install-things" in row for row in paths), "a command is not a path"
 
 
+def test_a_folder_whose_remembered_answers_disagree_stays_one_row(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """A folder used to be opened out into its own rows the moment its paths disagreed,
+    because one checkbox could only lie about them. `◐` says *some of these*, so the
+    folder keeps its row — and the answers under it keep themselves."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP4a")
+    ui = FakeUi(["preparation", [], "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="acme", verb=Verb.CLONE, path="web/.env"),
+            Step(project="acme", verb=Verb.SKIP, path="web/a.log"),
+            Step(project="acme", verb=Verb.SKIP, path="web/b.log"),
+        )
+    )
+
+    settings.run(context)
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert [row.split(" | ")[0] for row in rows if "acme/" in row] == [
+        "acme/web/ · 3 ignored paths"
+    ]
+    answers = {s.path: s.verb for s in context.prepare_store().load().for_project("acme")}
+    assert answers == {"web/.env": Verb.CLONE, "web/a.log": Verb.SKIP, "web/b.log": Verb.SKIP}, (
+        "an untouched screen changes nothing, mix and all"
+    )
+
+
+def test_answering_a_mixed_folder_brings_every_path_under_it_in(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """One keystroke on a folder is the point of the folder. A mix goes *in* — the answer
+    somebody reaching for a directory row is after — and the press after it takes the
+    whole subtree out."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP4b")
+    ui = FakeUi(["preparation", ["acme/web/ · 3 ignored paths"], "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="acme", verb=Verb.CLONE, path="web/.env"),
+            Step(project="acme", verb=Verb.SKIP, path="web/a.log"),
+            Step(project="acme", verb=Verb.SKIP, path="web/b.log"),
+        )
+    )
+
+    settings.run(context)
+
+    assert {s.verb for s in context.prepare_store().load().for_project("acme")} == {Verb.CLONE}
+
+
 def test_a_remembered_path_arrives_ticked_and_can_be_taken_back_out(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from lane.environment import EditorLaunch
 from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Summary
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Node, Row, Summary
 
 
 class FakeEnvironment:
@@ -194,7 +194,7 @@ class FakeUi:
         self,
         title: str,
         columns: Sequence[Column],
-        rows: Callable[[], Sequence[Row[T]]],
+        rows: Callable[[], Sequence[Node[T]]],
         *,
         checked: Iterable[T] = (),
         summary: Summary[T] | None = None,
@@ -203,34 +203,77 @@ class FakeUi:
     ) -> frozenset[T]:
         """Records the whole screen, then answers it with one scripted keystroke run.
 
-        The answer is **what to toggle**, in order, the way the keys would arrive — so
-        the script is the user's hand rather than a restatement of the result. *"Tick the
-        first row and the third, then accept"* is:
+        The answer is **what to answer**, in order, the way the keys would arrive — so
+        the script is the user's hand rather than a restatement of the result. *"Bring
+        the first row in and the third, then accept"* is:
 
             FakeUi([["apps/web/node_modules", 2]])
 
         `[]` is the untouched screen: one `Enter` and nothing in. A row is named by its
-        value, its position, or any of its cell texts, exactly as in `browse`.
+        value, its position, or any of its cell texts, exactly as in `browse` — **at any
+        depth**, because a folder is a screen you go into and a test should not have to
+        spell out the walk to reach it. Naming a folder answers every leaf beneath it,
+        which is what `Space` on it does; naming one whose leaves are all in takes them
+        all out again.
+
+        A position means a row of the screen the checklist *opens* on, since that is the
+        one level a script can point at without walking.
         """
         self.checklists += 1
         if fill is not None:
             fill(lambda: None)
 
-        table = self._paint(title, rows(), on_render)
+        self._paint_tree(title, rows(), on_render)
         ticked = set(checked)
         answer = self._next(title)
         if not isinstance(answer, list | tuple | set | frozenset):
-            raise TypeError(f"check() needs a list of rows to toggle, got {answer!r}")
+            raise TypeError(f"check() needs a list of rows to answer, got {answer!r}")
 
         for one in answer:
-            value = table[_index_of(title, table, one)].value
-            ticked.symmetric_difference_update({value})
-            # Repainted as the real widget does, so a tick is on screen and recorded.
-            self._paint(title, rows(), on_render)
+            flat = _flatten(rows())
+            index = _index_of(title, [node.row for node in flat], one)
+            leaves = set(flat[index].leaves)
+            # The widget's own rule: a folder that is all in goes out, and anything else
+            # — out, or a mix — comes in.
+            if leaves <= ticked:
+                ticked -= leaves
+            else:
+                ticked |= leaves
+            # Repainted as the real widget does, so an answer is on screen and recorded.
+            self._paint_tree(title, rows(), on_render)
 
         if summary is not None:
             self.told.append(Told("summary", summary(frozenset(ticked))))
         return frozenset(ticked)
+
+    def _paint_tree[T](
+        self,
+        title: str,
+        nodes: Sequence[Node[T]],
+        on_render: Callable[[str], None] | None,
+    ) -> None:
+        """Record the screen the checklist opens on, and every level under it.
+
+        `row` is what the top level draws — the thing "two hundred paths is not a
+        screen" is a claim about. A level you would have to open a folder to see is
+        recorded as `nested`, indented by depth, so a test can still say what is in
+        there without pretending it was on the first screen.
+        """
+        self.told.append(Told("table", title))
+
+        def record(node: Node[T], depth: int) -> None:
+            text = " | ".join(f"{cell.lead}{cell.text}" for cell in node.row.cells)
+            self.told.append(Told("row" if not depth else "nested", "  " * depth + text))
+            for line in node.row.detail:
+                self.told.append(Told("panel", line))
+            for child in node.children:
+                record(child, depth + 1)
+
+        for node in nodes:
+            record(node, 0)
+        if on_render is not None:
+            for node in _flatten(nodes):
+                on_render(" ".join(f"{cell.lead}{cell.text}" for cell in node.row.cells))
 
     def _paint[T](
         self,
@@ -328,6 +371,15 @@ class FakeUi:
 
     def unanswered(self) -> int:
         return len(self._answers)
+
+
+def _flatten[T](nodes: Sequence[Node[T]]) -> list[Node[T]]:
+    """Every row of every level, in the order the screens would show them."""
+    found: list[Node[T]] = []
+    for node in nodes:
+        found.append(node)
+        found.extend(_flatten(node.children))
+    return found
 
 
 def _index_of(title: str, table: Sequence[Row[object]], answer: object) -> int:

@@ -251,6 +251,10 @@ def _run_preparation(context: Context) -> None:
 
     There is no lane here, so there is no `in lane` column and nothing is applied: the
     answers are written, and the next enter of any lane in that project acts on them.
+
+    This is where a **mixed** folder actually turns up: entering a lane only ever offers
+    paths nobody has answered, so its folders start out agreeing, while this screen shows
+    every answer ever given and they can disagree freely. `◐` is what says so.
     """
     ui = context.ui
     store = context.prepare_store()

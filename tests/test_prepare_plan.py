@@ -181,31 +181,97 @@ def test_the_settings_view_of_a_step_says_what_was_stored(tmp_path: Path) -> Non
     assert Step(project="a", verb=Verb.RUN, command="c").describe() == "run"
 
 
-# -- grouping: a folder of loose ignored files is one row, not forty ---------------
+# -- the tree: the top of it first, not two hundred rows of leaves ----------------
 
 
 def _candidates(*paths: str) -> tuple[prepare.Candidate, ...]:
     return tuple(prepare.Candidate(path=path) for path in paths)
 
 
-def test_a_directory_of_loose_ignored_files_becomes_one_group(tmp_path: Path) -> None:
+def _labels(items: tuple[prepare.Item, ...]) -> list[str]:
+    return [item.label for item in items]
+
+
+def test_a_directory_of_loose_ignored_files_becomes_one_folder(tmp_path: Path) -> None:
     """`--directory` collapses a *fully* ignored directory, but one tracked file in it
     stops that — and then git reports every ignored file inside separately. A real
     repository produced 55 rows from four ignore patterns that way."""
     del tmp_path
-    rows = prepare.group(_candidates(*[f"logs/day{n}.log" for n in range(1, 41)]))
+    rows = prepare.tree(_candidates(*[f"logs/day{n}.log" for n in range(1, 41)]))
 
     assert len(rows) == 1
-    group = rows[0]
-    assert isinstance(group, prepare.Group)
-    assert group.directory == "logs"
-    assert len(group.candidates) == 40
-    assert group.label == "logs/ · 40 ignored files"
+    folder = rows[0]
+    assert isinstance(folder, prepare.Group)
+    assert folder.directory == "logs"
+    assert len(folder.candidates) == 40
+    assert folder.label == "logs/ · 40 ignored paths"
 
 
-def test_each_directory_groups_separately_and_the_order_is_kept(tmp_path: Path) -> None:
+def test_a_folder_holds_its_children_and_they_hold_theirs(tmp_path: Path) -> None:
+    """One level of the tree per screen: entering a folder shows what is directly under
+    it, which may be more folders. The rows are the branching points, not the leaves."""
     del tmp_path
-    rows = prepare.group(
+    leaves = ("node_modules", "dist", ".env")
+    paths = [f"packages/p{n}/{leaf}" for n in range(1, 6) for leaf in leaves]
+    rows = prepare.tree(_candidates(*paths))
+
+    assert _labels(rows) == ["packages/ · 15 ignored paths"]
+    packages = rows[0]
+    assert isinstance(packages, prepare.Group)
+    assert _labels(packages.items) == [f"packages/p{n}/ · 3 ignored paths" for n in range(1, 6)]
+
+    first = packages.items[0]
+    assert isinstance(first, prepare.Group)
+    assert _labels(first.items) == [f"packages/p1/{leaf}" for leaf in leaves]
+
+
+def test_two_hundred_ignored_paths_draw_a_handful_of_rows(tmp_path: Path) -> None:
+    """The complaint this whole shape answers: choosing among two hundred flat rows is
+    not a screen. The top level shows where the tree branches and nothing else."""
+    del tmp_path
+    paths = [
+        f"{top}/pkg{n}/{leaf}"
+        for top in ("apps", "packages", "services")
+        for n in range(1, 21)
+        for leaf in ("node_modules", "dist", ".env")
+    ]
+    rows = prepare.tree(_candidates(*paths, "node_modules", ".env"))
+
+    assert len(paths) == 180
+    assert _labels(rows) == [
+        "apps/ · 60 ignored paths",
+        "packages/ · 60 ignored paths",
+        "services/ · 60 ignored paths",
+        "node_modules",
+        ".env",
+    ]
+
+
+def test_a_chain_of_directories_with_no_choice_in_it_is_one_row(tmp_path: Path) -> None:
+    """A directory with one child is not a choice, and a screen offering it is a
+    keystroke that asks nothing. The chain joins up into the row it was always about."""
+    del tmp_path
+    rows = prepare.tree(_candidates("apps/web/frontend/node_modules"))
+
+    assert _labels(rows) == ["apps/web/frontend/node_modules"]
+    assert isinstance(rows[0], prepare.Candidate)
+
+
+def test_a_level_of_fewer_than_three_rows_is_drawn_in_its_parent(tmp_path: Path) -> None:
+    """A folder row costs a keystroke to reach the rows inside it, so it has to save
+    more than one to be worth it. Two becomes one: a wash. Three is where it pays."""
+    del tmp_path
+    assert len(prepare.tree(_candidates("web/.env", "web/.env.local"))) == 2
+    assert len(prepare.tree(_candidates("web/.env", "web/.env.local", "web/x.log"))) == 1
+
+
+def test_a_folder_that_would_open_on_two_rows_is_spliced_into_its_parent(
+    tmp_path: Path,
+) -> None:
+    """The same rule one level up: `apps/` holding a lone file and one folder opens on
+    two rows, so those two rows belong on the screen above it."""
+    del tmp_path
+    rows = prepare.tree(
         _candidates(
             "apps/api/.env",
             "apps/web/.env",
@@ -215,77 +281,51 @@ def test_each_directory_groups_separately_and_the_order_is_kept(tmp_path: Path) 
         )
     )
 
-    assert [row.label for row in rows] == [
+    assert _labels(rows) == [
         "apps/api/.env",
-        "apps/web/ · 3 ignored files",
+        "apps/web/ · 3 ignored paths",
         "node_modules",
-    ], "one row per directory that has several, and lone paths left as themselves"
+    ]
 
 
-def test_a_directory_with_only_a_couple_of_files_is_not_grouped(tmp_path: Path) -> None:
-    """A group row costs a keystroke to reach the individual answers, so it has to save
-    more than one row to be worth it. Two becomes one: a wash. Three is where it pays."""
+def test_a_whole_ignored_directory_is_a_leaf_beside_its_siblings(tmp_path: Path) -> None:
+    """`node_modules` is one path with one answer, and the tree says nothing about what
+    each path is — it groups on the separators git already put there."""
     del tmp_path
-    assert len(prepare.group(_candidates("web/.env", "web/.env.local"))) == 2
-    assert len(prepare.group(_candidates("web/.env", "web/.env.local", "web/x.log"))) == 1
+    rows = prepare.tree(_candidates("a/node_modules", "a/b.log", "a/c.log", "a/d.log"))
 
-
-def test_a_whole_ignored_directory_is_never_folded_into_a_group(tmp_path: Path) -> None:
-    """`node_modules` is one path with one answer. Folding it in with its siblings would
-    make a group whose answer means two different things."""
-    del tmp_path
-    rows = prepare.group(_candidates("a/node_modules", "a/b.log", "a/c.log", "a/d.log"))
-
-    assert [row.label for row in rows] == ["a/ · 4 ignored files"], (
-        "grouping is by parent directory and says nothing about what each path is"
-    )
+    assert _labels(rows) == ["a/ · 4 ignored paths"]
+    folder = rows[0]
+    assert isinstance(folder, prepare.Group)
+    assert _labels(folder.items) == ["a/node_modules", "a/b.log", "a/c.log", "a/d.log"]
 
 
 def test_loose_files_at_the_repository_root_group_under_a_visible_name(tmp_path: Path) -> None:
     del tmp_path
-    rows = prepare.group(_candidates(".env", "debug.log", ".DS_Store"))
+    rows = prepare.tree(_candidates(".env", "debug.log", ".DS_Store"))
 
-    assert [row.label for row in rows] == ["./ · 3 ignored files"]
+    assert _labels(rows) == ["./ · 3 ignored paths"]
     assert isinstance(rows[0], prepare.Group)
     assert rows[0].directory == ""
 
 
-def test_a_folder_whose_paths_disagree_is_not_folded(tmp_path: Path) -> None:
-    """One checkbox has two states, so a directory with two paths in and one out has no
-    honest tick. It is opened out into its own rows instead of made to lie — which is
-    what replaced drilling into a folder to answer it file by file."""
+def test_a_folder_is_folded_whatever_its_paths_were_answered(tmp_path: Path) -> None:
+    """A folder used to be opened out when its paths disagreed, because one checkbox
+    cannot say "some of these". The mark can (`◐`), so the shape no longer has to."""
     del tmp_path
-    candidates = _candidates("w/a", "w/b", "w/c")
+    rows = prepare.tree(_candidates("w/a", "w/b", "w/c"))
 
-    folded = prepare.group(candidates, checked=frozenset({"w/a", "w/b", "w/c"}))
-    assert len(folded) == 1
-    assert isinstance(folded[0], prepare.Group)
-
-    opened = prepare.group(candidates, checked=frozenset({"w/a"}))
-    assert [item.path for item in opened if isinstance(item, prepare.Candidate)] == [
-        "w/a",
-        "w/b",
-        "w/c",
-    ]
+    assert len(rows) == 1
+    assert isinstance(rows[0], prepare.Group)
+    assert rows[0].label == "w/ · 3 ignored paths"
 
 
-def test_a_folder_with_nothing_answered_is_folded(tmp_path: Path) -> None:
-    """The screen a path is first answered on has nothing checked, so everything folds —
-    a disagreement can only ever arrive from answers already on disk."""
-    del tmp_path
-    folded = prepare.group(_candidates("w/a", "w/b", "w/c"))
-
-    assert len(folded) == 1
-    assert isinstance(folded[0], prepare.Group)
-    assert folded[0].label == "w/ · 3 ignored files"
-
-
-def test_a_group_sits_where_its_first_file_was(tmp_path: Path) -> None:
-    """Discovery's order is git's, which is sorted, and the screen keeps it — a group is
+def test_a_folder_sits_where_its_first_file_was(tmp_path: Path) -> None:
+    """Discovery's order is git's, which is sorted, and the screen keeps it — a folder is
     anchored at its first member rather than hoisted or pushed to the end. Otherwise
     `logs/` shows up after `node_modules`, which reads as a shuffle."""
     del tmp_path
-    rows = prepare.group(
+    rows = prepare.tree(
         _candidates(
             "coverage",
             *[f"logs/day{n}.log" for n in range(1, 5)],
@@ -294,9 +334,22 @@ def test_a_group_sits_where_its_first_file_was(tmp_path: Path) -> None:
         )
     )
 
-    assert [row.label for row in rows] == [
+    assert _labels(rows) == [
         "coverage",
-        "logs/ · 4 ignored files",
+        "logs/ · 4 ignored paths",
         "node_modules",
-        "web/ · 4 ignored files",
+        "web/ · 4 ignored paths",
     ]
+
+
+def test_every_leaf_beneath_a_folder_is_what_it_stands_for(tmp_path: Path) -> None:
+    """A folder is presentation and never a step for its directory, so what it stands
+    for is every path under it, however deep — that is what one keystroke answers."""
+    del tmp_path
+    paths = [f"packages/p{n}/{leaf}" for n in range(1, 6) for leaf in ("node_modules", "dist")]
+    rows = prepare.tree(_candidates(*paths))
+    folder = rows[0]
+    assert isinstance(folder, prepare.Group)
+
+    assert len(folder.candidates) == 10
+    assert folder.paths[0] == "packages/p1/node_modules"

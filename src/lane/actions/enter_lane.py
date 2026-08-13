@@ -160,12 +160,17 @@ def _what_the_lane_ignores(context: Context, lane: Lane, unanswered: list[str]) 
 
 
 def _ask(context: Context, repo: Path, candidates: tuple[Candidate, ...]) -> tuple[Step, ...]:
-    """One screen, one row per path or per folder, one keystroke per answer.
+    """One screen, one keystroke per answer, and the top of the tree rather than all of it.
 
-    A queue of prompts is the wrong shape, and so is a row you have to go *into*: entering
-    a lane is something the user does several times a day on the way to their editor. This
-    is a batch decision over a set, so it looks like one — `Space` on each row that should
-    come in, `Enter` to get on with it.
+    A queue of prompts is the wrong shape, and so is a row you have to go *into* to change
+    an answer: entering a lane is something the user does several times a day on the way to
+    their editor. This is a batch decision over a set, so it looks like one — `Space` on
+    each row that should come in, `Enter` to get on with it.
+
+    Going *into* a **folder** is a different thing and is the one the screen keeps: two
+    hundred ignored paths scattered under different packages is a real repository, and
+    choosing among two hundred flat rows is not a screen. A folder is answered whole
+    without ever being opened, so the drilling is for looking rather than for answering.
 
     The same `Sheet` settings opens, with a lane in hand rather than without one.
     """

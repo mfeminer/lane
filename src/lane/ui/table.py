@@ -19,9 +19,10 @@ digit shortcuts AGENTS.md removed. Choosing a row opens a two-entry menu instead
 which costs a keystroke and no new vocabulary. Going back is a **visible row** at
 the end of the table, not a key — as everywhere else.
 
-A screen whose rows each carry a two-state answer is **not** this widget: it is
-`checklist.py`, which binds `Space` and where `Enter` accepts the screen rather than
-acting on the row. That is a separate component for exactly those two reasons.
+A screen whose rows each carry their own answer is **not** this widget: it is
+`checklist.py`, which binds `Space`, draws a tree one level at a time, and where `Enter`
+accepts the level rather than acting on the row unless the row is a folder to open. That
+is a separate component for exactly those reasons.
 
 ## Layout gives the room to the columns that answer the question
 
@@ -56,7 +57,7 @@ CURSOR_WIDTH = 2
 """The `❯ ` in front of the row under the cursor, and the space in front of the rest."""
 
 MARK_WIDTH = 2
-"""A second gutter, for a widget whose rows carry a mark — `checklist.py`'s tick.
+"""A second gutter, for a widget whose rows carry a mark — `checklist.py`'s `✓`/`◐`.
 
 Here rather than there because `fit` has to know how much room the prefix takes
 before it can decide which columns survive, and there is one such calculation.
