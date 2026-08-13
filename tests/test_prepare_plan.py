@@ -1,8 +1,8 @@
 """What preparation will ask and what it will do, decided before either happens.
 
 The two properties worth holding on to: **only paths with no answer are ever asked
-about**, so a second lane in the same project asks nothing; and **an answered path that
-is already in the lane is left alone** unless the user asked for it to be refreshed,
+about**, so a second lane in the same project asks nothing; and **a path that is already
+in the lane is left alone**, whether the answer was given a minute ago or last month,
 because that path is the lane's now.
 """
 
@@ -26,7 +26,6 @@ def test_a_path_with_no_answer_becomes_something_to_ask_about(tmp_path: Path) ->
         steps=(),
         ignored=["node_modules", ".env"],
         lane_path=_lane(tmp_path),
-        linkable=frozenset({".env"}),
     )
 
     assert [candidate.path for candidate in plan.candidates] == ["node_modules", ".env"]
@@ -63,25 +62,6 @@ def test_a_candidate_says_whether_the_path_is_already_in_the_lane(tmp_path: Path
     assert present == {"node_modules": True, "vendor": False}
 
 
-def test_link_is_dropped_from_the_cycle_when_git_says_a_symlink_is_not_ignored(
-    tmp_path: Path,
-) -> None:
-    """`node_modules/` matches directories only, so a symlink of that name shows up as
-    an untracked file — `● 1 uncommitted` in the listing, over a link the user asked
-    for. git answers this, so lane does not offer what it cannot deliver."""
-    plan = prepare.plan(
-        project="acme",
-        steps=(),
-        ignored=["node_modules", "dist"],
-        lane_path=_lane(tmp_path),
-        linkable=frozenset({"dist"}),
-    )
-
-    cycles = {candidate.path: candidate.cycle() for candidate in plan.candidates}
-    assert cycles["node_modules"] == (Verb.SKIP, Verb.CLONE)
-    assert cycles["dist"] == (Verb.SKIP, Verb.CLONE, Verb.LINK)
-
-
 def test_a_clone_that_is_already_there_does_nothing(tmp_path: Path) -> None:
     lane = _lane(tmp_path)
     (lane / "node_modules").mkdir()
@@ -96,17 +76,6 @@ def test_a_clone_that_is_already_there_does_nothing(tmp_path: Path) -> None:
     assert plan.effects == ()
 
 
-def test_a_refreshing_clone_overwrites_what_is_there(tmp_path: Path) -> None:
-    lane = _lane(tmp_path)
-    (lane / "node_modules").mkdir()
-    step = Step(project="acme", verb=Verb.CLONE, path="node_modules", refresh=True)
-
-    plan = prepare.plan(project="acme", steps=(step,), ignored=["node_modules"], lane_path=lane)
-
-    assert [(e.subject, e.overwrites) for e in plan.effects] == [("node_modules", True)]
-    assert plan.effects[0].phrase() == "Replacing node_modules…"
-
-
 def test_a_clone_that_is_missing_is_cloned_without_being_asked_about(tmp_path: Path) -> None:
     plan = prepare.plan(
         project="acme",
@@ -115,21 +84,21 @@ def test_a_clone_that_is_missing_is_cloned_without_being_asked_about(tmp_path: P
         lane_path=_lane(tmp_path),
     )
 
-    assert [(e.subject, e.overwrites) for e in plan.effects] == [("node_modules", False)]
+    assert [effect.subject for effect in plan.effects] == ["node_modules"]
     assert plan.candidates == ()
     assert plan.effects[0].phrase() == "Cloning node_modules…"
 
 
-def test_a_link_that_is_already_a_link_is_left_alone(tmp_path: Path) -> None:
-    """Even a link whose target has gone. It is *there*, it is the lane's, and lane
-    does not silently take it away — `exists()` alone would follow it and call it
-    missing."""
+def test_a_path_that_is_a_broken_link_is_still_left_alone(tmp_path: Path) -> None:
+    """A symlink whose target has gone — left by an older lane, which had `link` as an
+    answer. It is *there*, it is the lane's, and lane does not silently take it away;
+    `exists()` alone would follow it and call it missing."""
     lane = _lane(tmp_path)
     (lane / ".env").symlink_to(tmp_path / "gone")
 
     plan = prepare.plan(
         project="acme",
-        steps=(Step(project="acme", verb=Verb.LINK, path=".env"),),
+        steps=(Step(project="acme", verb=Verb.CLONE, path=".env"),),
         ignored=[".env"],
         lane_path=lane,
     )
@@ -204,10 +173,7 @@ def test_the_settings_view_of_a_step_says_what_was_stored(tmp_path: Path) -> Non
     """Settings has no lane in hand, so it describes the answer rather than an effect."""
     del tmp_path
     assert Step(project="a", verb=Verb.CLONE, path="x").describe() == "clone"
-    assert Step(project="a", verb=Verb.CLONE, path="x", refresh=True).describe() == (
-        "clone, refreshed"
-    )
-    assert Step(project="a", verb=Verb.LINK, path="x").describe() == "link"
+    assert Step(project="a", verb=Verb.CLONE, path="x").describe() == "clone"
     assert Step(project="a", verb=Verb.SKIP, path="x").describe() == "skip"
     assert Step(project="a", verb=Verb.RUN, command="c", directory="web").describe() == (
         "run · web"
@@ -218,8 +184,8 @@ def test_the_settings_view_of_a_step_says_what_was_stored(tmp_path: Path) -> Non
 # -- grouping: a folder of loose ignored files is one row, not forty ---------------
 
 
-def _candidates(*paths: str, linkable: bool = True) -> tuple[prepare.Candidate, ...]:
-    return tuple(prepare.Candidate(path=p, present=False, linkable=linkable) for p in paths)
+def _candidates(*paths: str) -> tuple[prepare.Candidate, ...]:
+    return tuple(prepare.Candidate(path=path) for path in paths)
 
 
 def test_a_directory_of_loose_ignored_files_becomes_one_group(tmp_path: Path) -> None:
@@ -284,44 +250,34 @@ def test_loose_files_at_the_repository_root_group_under_a_visible_name(tmp_path:
     assert rows[0].directory == ""
 
 
-def test_a_group_offers_link_only_when_every_path_in_it_can_be_linked(tmp_path: Path) -> None:
-    """One answer for the whole group, so it can only offer what holds for all of it."""
+def test_a_folder_whose_paths_disagree_is_not_folded(tmp_path: Path) -> None:
+    """One checkbox has two states, so a directory with two paths in and one out has no
+    honest tick. It is opened out into its own rows instead of made to lie — which is
+    what replaced drilling into a folder to answer it file by file."""
     del tmp_path
-    all_linkable = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
-    assert isinstance(all_linkable, prepare.Group)
-    assert Verb.LINK in all_linkable.verbs()
+    candidates = _candidates("w/a", "w/b", "w/c")
 
-    mixed = prepare.Group(
-        directory="w",
-        candidates=(
-            prepare.Candidate(path="w/a", present=False, linkable=True),
-            prepare.Candidate(path="w/b", present=False, linkable=False),
-            prepare.Candidate(path="w/c", present=False, linkable=True),
-        ),
-    )
-    assert Verb.LINK not in mixed.verbs()
+    folded = prepare.group(candidates, checked=frozenset({"w/a", "w/b", "w/c"}))
+    assert len(folded) == 1
+    assert isinstance(folded[0], prepare.Group)
+
+    opened = prepare.group(candidates, checked=frozenset({"w/a"}))
+    assert [item.path for item in opened if isinstance(item, prepare.Candidate)] == [
+        "w/a",
+        "w/b",
+        "w/c",
+    ]
 
 
-def test_a_group_says_what_its_paths_are_answered_as(tmp_path: Path) -> None:
-    """The row has to say what will happen, and for a group that can be two things at
-    once — so `mixed`, with the panel naming the split."""
+def test_a_folder_with_nothing_answered_is_folded(tmp_path: Path) -> None:
+    """The screen a path is first answered on has nothing checked, so everything folds —
+    a disagreement can only ever arrive from answers already on disk."""
     del tmp_path
-    group = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
-    assert isinstance(group, prepare.Group)
+    folded = prepare.group(_candidates("w/a", "w/b", "w/c"))
 
-    assert group.summary({"w/a": Verb.SKIP, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == "skip"
-    assert group.summary({"w/a": Verb.CLONE, "w/b": Verb.CLONE, "w/c": Verb.CLONE}) == "clone"
-    assert group.summary({"w/a": Verb.CLONE, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == "mixed"
-
-
-def test_a_group_counts_the_split_for_the_panel(tmp_path: Path) -> None:
-    del tmp_path
-    group = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
-    assert isinstance(group, prepare.Group)
-
-    assert group.breakdown({"w/a": Verb.CLONE, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == (
-        "1 clone, 2 skip"
-    )
+    assert len(folded) == 1
+    assert isinstance(folded[0], prepare.Group)
+    assert folded[0].label == "w/ · 3 ignored files"
 
 
 def test_a_group_sits_where_its_first_file_was(tmp_path: Path) -> None:

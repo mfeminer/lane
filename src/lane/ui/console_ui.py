@@ -15,7 +15,7 @@ Both accept Esc everywhere, and Ctrl-C behaves like Esc inside a prompt.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from prompt_toolkit.input import Input
 from prompt_toolkit.output import Output
@@ -23,9 +23,10 @@ from rich.console import Console
 from rich.text import Text
 
 from lane.ui import render, splash
+from lane.ui.checklist import check as check_list
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Toggle
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Summary
 from lane.ui.splash import Line
 from lane.ui.table import browse as browse_table
 
@@ -78,7 +79,6 @@ class ConsoleUi:
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
-        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
@@ -95,7 +95,32 @@ class ConsoleUi:
             back,
             fill=fill,
             cursor=cursor,
-            toggle=toggle,
+            on_render=on_render,
+            input=input,
+            output=output,
+        )
+
+    def check[T](
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Callable[[], Sequence[Row[T]]],
+        *,
+        checked: Iterable[T] = (),
+        summary: Summary[T] | None = None,
+        fill: Fill | None = None,
+        on_render: Callable[[str], None] | None = None,
+        input: Input | None = None,
+        output: Output | None = None,
+    ) -> frozenset[T]:
+        """Hand off to the checklist widget. No way-back row to supply: it has none."""
+        return check_list(
+            title,
+            columns,
+            rows,
+            checked=checked,
+            summary=summary,
+            fill=fill,
             on_render=on_render,
             input=input,
             output=output,

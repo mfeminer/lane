@@ -20,7 +20,7 @@ effect looks like a bug.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -37,9 +37,10 @@ from lane.config import (
     home,
 )
 from lane.context import Context
-from lane.prepare import Step, Verb, apply
+from lane.prepare import Candidate, Step, Verb, apply
+from lane.prepare.sheet import Sheet, inside_from
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
-from lane.ui.seam import Abandoned, Cell, Choice, Column, Fill, Row
+from lane.ui.seam import Abandoned, Cell, Choice, Column, Row
 
 BACK = "← Back to the menu"
 
@@ -53,28 +54,32 @@ _LABELS = {
     "lanes_root": "lanes root",
     "editor": "editor",
     "preparation": "preparation",
+    "commands": "commands",
 }
 
 PREPARATION = "preparation"
 """A row that is a *destination* rather than a setting, so it is a noun (§4).
 
-It leads to one screen listing every project's steps, not to a project list and then a
-page each: the lanes table already draws rows from several projects in one table with a
-dimmed lead, so this is two levels of nesting instead of three.
+It leads to one screen covering every project, not to a project list and then a page
+each: the lanes table already draws rows from several projects in one table with a dimmed
+lead, so this is two levels of nesting instead of three. And that screen is the very one
+entering a lane opens — same component, second door.
 """
+
+COMMANDS = "commands"
+"""The other half of what `prepare.toml` holds, and the half that is not a checkbox: a
+command is typed rather than discovered, and it carries a directory and a guard to edit.
+A row of its own rather than a second level under `preparation`, so that `preparation`
+can be the shared screen and nothing else."""
 
 PREPARE_BACK = "← Back to settings"
 """Scoped deliberately, as ADR 0002 requires — one step back, not out of settings."""
 
-ADD_STEP = "\x00add\x00"
+ADD_COMMAND = "\x00add\x00"
 
-PREPARE_COLUMNS = (
-    Column("path"),
-    # Informs the decision `verb` records; it does not answer the screen's question, so it
-    # is the one that goes when the terminal is narrow. Same order as the per-enter screen:
-    # two screens showing the same concept do not shuffle their columns.
-    Column("size", drop=1),
-    Column("verb"),
+COMMAND_COLUMNS = (
+    Column("command"),
+    Column("where", drop=1),
 )
 
 
@@ -134,6 +139,9 @@ def _run_list(context: Context) -> None:
         if key == PREPARATION:
             _run_preparation(context)
             continue
+        if key == COMMANDS:
+            _run_commands(context)
+            continue
         if key == "projects_root":
             projects_root = _ask_projects_root(context, current.projects_root)
             if projects_root is None:
@@ -184,18 +192,33 @@ def _rows(context: Context, current: Config) -> list[Row[str]]:
         row("lanes_root", _text(current.lanes_root)),
         row("editor", current.editor or DEFAULT_EDITOR),
         row(PREPARATION, _prepared_phrase(context)),
+        row(COMMANDS, _commands_phrase(context)),
     ]
 
 
 def _prepared_phrase(context: Context) -> str:
-    """How much is there, the way the other three rows say what they are set to."""
-    remembered = context.prepare_store().load()
-    steps, projects = len(remembered.steps), len(remembered.projects())
+    """How much is in, the way the other three rows say what they are set to.
+
+    In and out rather than a total, because that *is* the answer this screen holds: a
+    count of steps would say how many questions have been asked, not what they said.
+    """
+    steps = [
+        step
+        for step in context.prepare_store().load().steps
+        if step.verb is not Verb.RUN and step.path
+    ]
     if not steps:
         return "nothing yet"
-    step_word = "step" if steps == 1 else "steps"
-    project_word = "project" if projects == 1 else "projects"
-    return f"{steps} {step_word} in {projects} {project_word}"
+    inside = sum(1 for step in steps if step.verb is Verb.CLONE)
+    word = "path" if inside == 1 else "paths"
+    return f"{inside} {word} in, {len(steps) - inside} out"
+
+
+def _commands_phrase(context: Context) -> str:
+    commands = [step for step in context.prepare_store().load().steps if step.verb is Verb.RUN]
+    if not commands:
+        return "nothing yet"
+    return f"{len(commands)} step" + ("" if len(commands) == 1 else "s")
 
 
 def _text(path: Path | None) -> str:
@@ -215,20 +238,19 @@ def _detail(context: Context, key: str, text: str) -> tuple[str, ...]:
     return tuple(lines)
 
 
-# -- preparation ------------------------------------------------------------------
+# -- preparation: the same screen entering a lane shows ---------------------------
 
 
 def _run_preparation(context: Context) -> None:
-    """Every project's steps, in one table you act on one row at a time.
+    """Which ignored paths come into a lane — every project's, on one checklist.
 
-    The same shape as the settings list itself and the lanes table, and for the same
-    reason: looking and acting are the same widget. The project is a dimmed lead on the
-    subject, exactly as the listing does when lanes span projects — which is what makes
-    a second level of nesting unnecessary.
+    **The same component `enter` opens**, over the same rows, answered with the same
+    keystroke. Not a screen that resembles it: resemblance drifts, and this one had
+    already drifted into a table you pressed `Enter` on, chose *change* in, and then
+    picked a verb from — three screens to move one path.
 
-    This is where a decision made months ago is changed, which is the whole reason the
-    per-enter screen can remember every answer without a "remember this?" column: the
-    remedy for a wrong answer is one row here.
+    There is no lane here, so there is no `in lane` column and nothing is applied: the
+    answers are written, and the next enter of any lane in that project acts on them.
     """
     ui = context.ui
     store = context.prepare_store()
@@ -238,104 +260,162 @@ def _run_preparation(context: Context) -> None:
     remembered = store.load()
     if remembered.problem is not None:
         ui.warn(remembered.problem)
+
+    paths = tuple(step for step in remembered.steps if step.verb is not Verb.RUN and step.path)
+    if not paths:
+        # §12: a screen built around a list draws no frame over an empty one, and a
+        # checklist has no action row to keep it alive — every row it has is a path.
+        ui.blank()
+        ui.detail("Nothing has been answered yet. Entering a lane is what asks.")
+        return
+
+    sheet = Sheet(
+        _candidates(paths),
+        source=lambda one: _source_of(context, one),
+        inside=inside_from(paths),
+        lead=True,
+    )
+
+    ui.blank()
+    try:
+        chosen = ui.check(
+            _prepared_title(paths),
+            sheet.columns,
+            sheet.rows,
+            checked=sheet.checked,
+            summary=sheet.summary,
+            fill=sheet.fill,
+        )
+    except Abandoned:
+        return
+
+    answered = sheet.steps(chosen)
+    # One write, not one per path: `add` reloads and rewrites the file each time, which
+    # over fifty rows is fifty read-modify-write cycles and fifty chances to be
+    # interrupted half way through the set the user just accepted.
+    keys = {step.key for step in answered}
+    store.save([*(step for step in remembered.steps if step.key not in keys), *answered])
+    _report_preparation(context, remembered.steps, answered)
+
+
+def _candidates(steps: Sequence[Step]) -> list[Candidate]:
+    """Ordered by project, then path — and never rearranged while on screen."""
+    ordered = sorted(steps, key=lambda step: (step.project.lower(), step.path.lower()))
+    return [Candidate(path=step.path, project=step.project) for step in ordered]
+
+
+def _source_of(context: Context, candidate: Candidate) -> Path:
+    root = context.projects_root
+    if root is None:
+        return Path("/nonexistent") / candidate.path
+    return root / candidate.project / candidate.path
+
+
+def _prepared_title(steps: Sequence[Step]) -> str:
+    """Answers "what am I looking at" rather than repeating the screen's own name (§1)."""
+    count = len(steps)
+    word = "path" if count == 1 else "paths"
+    projects = len({step.project for step in steps})
+    project_word = "project" if projects == 1 else "projects"
+    return f"{count} answered {word} in {projects} {project_word}"
+
+
+def _report_preparation(context: Context, before: Sequence[Step], answered: Sequence[Step]) -> None:
+    """Say what changed, and say the thing that changes a decision where it was made."""
+    ui = context.ui
+    was = {(step.project, step.path): step.verb for step in before}
+    changed = [step for step in answered if was.get((step.project, step.path)) is not step.verb]
+
+    ui.blank()
+    if not changed:
+        ui.ok("Nothing changed.")
+        return
+
+    brought_in = [step for step in changed if step.verb is Verb.CLONE]
+    if brought_in:
+        _warn_about_cloning(context)
+    for step in changed:
+        state = "in" if step.verb is Verb.CLONE else "out"
+        ui.ok(f"{step.project}/{step.path} — {state}")
+
+
+# -- preparation: the commands, which are not paths -------------------------------
+
+
+def _run_commands(context: Context) -> None:
+    """A `run` step is typed rather than discovered, and carries a directory and a guard.
+
+    None of that is a checkbox, so this stays the list you act on a row of — the settings
+    list's own shape, and the lanes table's. It is a second row rather than a second level
+    under `preparation` because the two are different kinds of thing, and folding a typed
+    command into a screen of discovered paths would be the resemblance this change exists
+    to remove.
+    """
+    ui = context.ui
+    store = context.prepare_store()
+
+    ui.heading("lane settings · commands")
+    ui.detail(f"  {store.path}")
     ui.blank()
 
     cursor = 0
     while True:
-        rows = _prepare_rows(store.load().steps)
+        rows = _command_rows(store.load().steps)
 
         def _rows_now(rows: list[Row[Step | str]] = rows) -> list[Row[Step | str]]:
             return rows
 
         try:
             chosen, cursor = ui.browse(
-                "preparation",
-                PREPARE_COLUMNS,
-                _rows_now,
-                back=PREPARE_BACK,
-                fill=_measure_into(context, rows),
-                cursor=cursor,
+                "commands", COMMAND_COLUMNS, _rows_now, back=PREPARE_BACK, cursor=cursor
             )
         except Abandoned:
             return
 
-        if chosen == ADD_STEP:
-            _add_step(context)
+        if chosen == ADD_COMMAND:
+            _add_command(context)
             continue
         assert isinstance(chosen, Step)
-        _act_on_step(context, chosen)
+        _act_on_command(context, chosen)
 
 
-def _prepare_rows(steps: Sequence[Step]) -> list[Row[Step | str]]:
-    """Ordered by project, then subject — and never rearranged while on screen."""
-    ordered = sorted(steps, key=lambda step: (step.project.lower(), step.subject.lower()))
+def _command_rows(steps: Sequence[Step]) -> list[Row[Step | str]]:
+    """Ordered by project, then command — and never rearranged while on screen."""
+    ordered = sorted(
+        (step for step in steps if step.verb is Verb.RUN),
+        key=lambda step: (step.project.lower(), step.command.lower()),
+    )
     rows: list[Row[Step | str]] = [
         Row(
             value=step,
             cells=(
-                Cell(step.subject, lead=f"{step.project}/"),
-                _MEASURING if step.verb is not Verb.RUN else Cell("—", tone="dim"),
-                Cell(step.describe(), tone="dim" if step.verb is Verb.SKIP else ""),
+                Cell(step.command, lead=f"{step.project}/"),
+                Cell(step.directory or "the lane root", tone="dim"),
             ),
-            detail=_step_detail(step),
+            detail=_command_detail(step),
         )
         for step in ordered
     ]
     # An action row, like the visible way back: a screen whose only purpose is to let you
-    # add the first step cannot answer an empty list with a line of prose (§12).
-    rows.append(Row(value=ADD_STEP, cells=(Cell("add a step"), Cell(""), Cell(""))))
+    # add the first command cannot answer an empty list with a line of prose (§12).
+    rows.append(Row(value=ADD_COMMAND, cells=(Cell("add a command"), Cell(""))))
     return rows
 
 
-_MEASURING = Cell("measuring…", tone="dim")
+def _command_detail(step: Step) -> tuple[str, ...]:
+    if step.unless:
+        return (f"Skipped when {step.unless} is already in the lane.",)
+    return ("Runs on every enter — nothing guards it.",)
 
 
-def _step_detail(step: Step) -> tuple[str, ...]:
-    lines = [f"{step.project}: {step.subject}"]
-    if step.verb is Verb.RUN and step.unless:
-        lines.append(f"Skipped when {step.unless} is already in the lane.")
-    elif step.verb is Verb.RUN:
-        lines.append("Runs on every enter — nothing guards it.")
-    elif step.verb is Verb.CLONE and step.refresh:
-        lines.append("Replaced on every enter, including anything the lane changed.")
-    elif step.verb is Verb.LINK:
-        lines.append("A symlink: always current, and the lane writes into the main clone.")
-    return tuple(lines)
-
-
-def _measure_into(context: Context, rows: list[Row[Step | str]]) -> Fill:
-    """Sizes behind the screen, the lanes table's own shape and its own `fill`.
-
-    A step configured months ago is worth re-measuring before it is changed, and `du` on
-    a large tree is too slow to hold up the first paint.
-    """
-    root = context.projects_root
-
-    def fill(notify: Callable[[], None]) -> None:
-        if root is None:
-            return
-        for index, row in enumerate(rows):
-            step = row.value
-            if not isinstance(step, Step) or step.verb is Verb.RUN:
-                continue
-            size = apply.measure(root / step.project / step.path)
-            rows[index] = replace(
-                row,
-                cells=(row.cells[0], Cell(apply.size_phrase(size), tone="dim"), row.cells[2]),
-            )
-            notify()
-
-    return fill
-
-
-def _act_on_step(context: Context, step: Step) -> None:
+def _act_on_command(context: Context, step: Step) -> None:
     """Two verbs for the row under the cursor, exactly as the lanes table offers two."""
     try:
         verb = context.ui.choose(
-            f"{step.project}/{step.subject}",
+            f"{step.project}/{step.command}",
             [
-                Choice("change", "change", "answer this one differently"),
-                Choice("forget", "forget", "and be asked about it again"),
+                Choice("change", "change", "edit the command, where it runs, or its guard"),
+                Choice("forget", "forget", "and stop running it"),
             ],
         )
     except Abandoned:
@@ -343,74 +423,24 @@ def _act_on_step(context: Context, step: Step) -> None:
 
     if verb == "forget":
         context.prepare_store().forget(step)
-        context.ui.ok(f"Forgot {step.project}/{step.subject} — it will be asked about again.")
+        context.ui.ok(f"Forgot {step.project}/{step.command}.")
         return
 
-    if step.verb is Verb.RUN:
-        _change_command(context, step)
-        return
-    _change_path_verb(context, step)
-
-
-def _change_path_verb(context: Context, step: Step) -> None:
-    """The one place `refresh` can be set — see `prepare.Step.refresh` for why."""
-    chosen = context.ui.choose(
-        f"What should lane do with {step.subject}",
-        [
-            Choice("skip", (Verb.SKIP, False), "leave it out of the lane"),
-            Choice("clone", (Verb.CLONE, False), "copy it in when it is missing"),
-            Choice(
-                "clone, refreshed",
-                (Verb.CLONE, True),
-                "replace it on every enter, including what the lane changed",
-            ),
-            Choice("link", (Verb.LINK, False), "a symlink to the main clone"),
-        ],
-    )
-    verb, refresh = chosen
-    context.prepare_store().add(replace(step, verb=verb, refresh=refresh))
-    _warn_about_verb(context, verb)
-    context.ui.ok(f"{step.project}/{step.subject} — {verb}")
-
-
-def _change_command(context: Context, step: Step) -> None:
     command = context.ui.text("Command to run", default=step.command)
     directory = context.ui.text("Where to run it, relative to the lane", default=step.directory)
     unless = context.ui.text("Skip it when this path is already in the lane", default=step.unless)
+    context.prepare_store().forget(step)
     _save_command(context, step.project, command, directory, unless)
 
 
-def _add_step(context: Context) -> None:
-    """A `run` step exists only here: the per-enter screen is one row per *discovered*
-    path, and a command is not one."""
+def _add_command(context: Context) -> None:
     project = choose_project(context, "Which project?")
     if project is None:
         return
-
-    verb = context.ui.choose(
-        f"What should lane do in {project.name}",
-        [
-            Choice("clone", Verb.CLONE, "copy an ignored path in from the main clone"),
-            Choice("link", Verb.LINK, "symlink an ignored path to the main clone"),
-            Choice("run", Verb.RUN, "run a command in the lane"),
-            Choice("skip", Verb.SKIP, "never bring a path in, and stop being asked"),
-        ],
-    )
-
-    if verb is Verb.RUN:
-        command = context.ui.text("Command to run")
-        directory = context.ui.text("Where to run it, relative to the lane")
-        unless = context.ui.text("Skip it when this path is already in the lane")
-        _save_command(context, project.name, command, directory, unless)
-        return
-
-    path = context.ui.text("Which path, relative to the repository root")
-    if not path.strip():
-        context.ui.error("A path is required.")
-        return
-    context.prepare_store().add(Step(project=project.name, verb=verb, path=path.strip().strip("/")))
-    _warn_about_verb(context, verb)
-    context.ui.ok(f"{project.name}/{path.strip()} — {verb}")
+    command = context.ui.text("Command to run")
+    directory = context.ui.text("Where to run it, relative to the lane")
+    unless = context.ui.text("Skip it when this path is already in the lane")
+    _save_command(context, project.name, command, directory, unless)
 
 
 def _save_command(
@@ -435,30 +465,24 @@ def _save_command(
     context.ui.ok(f"{project}/{command.strip()} — run")
 
 
-def _warn_about_verb(context: Context, verb: Verb) -> None:
+def _warn_about_cloning(context: Context) -> None:
     """Say the thing that changes the decision, where the decision is being made.
 
     doctor reports the copy-on-write question too, but nobody consults doctor before
     configuring something they expect to be free — so it is said in the same words here.
     """
-    ui = context.ui
-    if verb is Verb.LINK:
-        ui.warn("A symlink is always current, and anything the lane writes there goes into")
-        ui.detail("  the main clone. Use 'clone' for a path the lane will modify.")
-        return
-    if verb is not Verb.CLONE:
-        return
     projects_root, lanes_root = context.projects_root, context.config.lanes_root
     if projects_root is None or lanes_root is None:
         return
-    if not apply.cloning_available(projects_root, lanes_root):
-        ui.warn(COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root))
-        ui.detail("  Put both roots on one volume, or use 'link' or 'run' for large paths.")
+    if apply.cloning_available(projects_root, lanes_root):
+        return
+    context.ui.warn(COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root))
+    context.ui.detail("  Put both roots on one volume, or leave the large paths out.")
 
 
 COPY_ON_WRITE_UNAVAILABLE = (
     "Copy-on-write is not available: {projects} and {lanes} are on different volumes, "
-    "so a 'clone' step is a real copy — slow, and it uses real disk."
+    "so bringing a path in is a real copy — slow, and it uses real disk."
 )
 """One sentence, shared by doctor and by settings, so they cannot say it differently."""
 

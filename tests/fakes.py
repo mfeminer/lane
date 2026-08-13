@@ -6,13 +6,13 @@ repositories. The filesystem runs for real too.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lane.environment import EditorLaunch
 from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Toggle
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Summary
 
 
 class FakeEnvironment:
@@ -116,6 +116,10 @@ class FakeUi:
         self._answers = list(answers)
         self.told: list[Told] = []
         self.asked: list[str] = []
+        self.checklists = 0
+        """How many times the checklist was opened — the one screen with two callers, so
+        "settings opens the same component entering a lane does" is a fact a test can
+        check rather than a resemblance it has to eyeball."""
 
     # -- the script ----------------------------------------------------------
     def push(self, *answers: object) -> None:
@@ -167,7 +171,6 @@ class FakeUi:
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
-        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
     ) -> tuple[T, int]:
         """Records the whole table, then answers it from the script.
@@ -176,45 +179,81 @@ class FakeUi:
         has settled by the time it is read. The real UI runs it on a thread; that
         difference is the only reason "render what is known, fill the rest in" can
         be asserted without sleeps.
-
-        With a `toggle`, an answer that names a row carrying an answer *changes* it and
-        the script carries on — exactly as `Enter` does on the real screen. So *"change
-        the first row, change the third, then go on"* is:
-
-            FakeUi(["apps/web/node_modules", 2, "continue"])
         """
         if fill is not None:
             fill(lambda: None)
 
-        def paint() -> list[Row[T]]:
-            """Record the table the way the real widget draws it — once per repaint."""
-            table = list(rows())
-            self.told.append(Told("table", title))
-            for row in table:
-                self.told.append(
-                    Told("row", " | ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
-                )
-                for line in row.detail:
-                    self.told.append(Told("panel", line))
-            if on_render is not None:
-                for row in table:
-                    on_render(" ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
-                on_render(back)
-            return table
+        table = self._paint(title, rows(), on_render, back=back)
+        answer = self._next(title)
+        if isinstance(answer, str) and answer.lower() in {"back", back.lower()}:
+            raise Abandoned
+        index = _index_of(title, table, answer)
+        return table[index].value, index
 
-        table = paint()
-        while True:
-            answer = self._next(title)
-            if isinstance(answer, str) and answer.lower() in {"back", back.lower()}:
-                raise Abandoned
-            index = _index_of(title, table, answer)
-            if toggle is not None and toggle(table[index].value):
-                # A row that carries an answer: choosing it changed it, and there is more
-                # to do on this screen. The table is read again exactly as a repaint
-                # would, so what changed is on screen and recorded.
-                table = paint()
-                continue
-            return table[index].value, index
+    def check[T](
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Callable[[], Sequence[Row[T]]],
+        *,
+        checked: Iterable[T] = (),
+        summary: Summary[T] | None = None,
+        fill: Fill | None = None,
+        on_render: Callable[[str], None] | None = None,
+    ) -> frozenset[T]:
+        """Records the whole screen, then answers it with one scripted keystroke run.
+
+        The answer is **what to toggle**, in order, the way the keys would arrive — so
+        the script is the user's hand rather than a restatement of the result. *"Tick the
+        first row and the third, then accept"* is:
+
+            FakeUi([["apps/web/node_modules", 2]])
+
+        `[]` is the untouched screen: one `Enter` and nothing in. A row is named by its
+        value, its position, or any of its cell texts, exactly as in `browse`.
+        """
+        self.checklists += 1
+        if fill is not None:
+            fill(lambda: None)
+
+        table = self._paint(title, rows(), on_render)
+        ticked = set(checked)
+        answer = self._next(title)
+        if not isinstance(answer, list | tuple | set | frozenset):
+            raise TypeError(f"check() needs a list of rows to toggle, got {answer!r}")
+
+        for one in answer:
+            value = table[_index_of(title, table, one)].value
+            ticked.symmetric_difference_update({value})
+            # Repainted as the real widget does, so a tick is on screen and recorded.
+            self._paint(title, rows(), on_render)
+
+        if summary is not None:
+            self.told.append(Told("summary", summary(frozenset(ticked))))
+        return frozenset(ticked)
+
+    def _paint[T](
+        self,
+        title: str,
+        table: Sequence[Row[T]],
+        on_render: Callable[[str], None] | None,
+        *,
+        back: str | None = None,
+    ) -> list[Row[T]]:
+        """Record a screen the way the real widget draws it — once per repaint."""
+        self.told.append(Told("table", title))
+        for row in table:
+            self.told.append(
+                Told("row", " | ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
+            )
+            for line in row.detail:
+                self.told.append(Told("panel", line))
+        if on_render is not None:
+            for row in table:
+                on_render(" ".join(f"{cell.lead}{cell.text}" for cell in row.cells))
+            if back is not None:
+                on_render(back)
+        return list(table)
 
     def text(
         self,

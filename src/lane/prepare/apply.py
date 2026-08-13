@@ -199,30 +199,6 @@ def _copy(source: Path, staged: Path) -> None:
 # -- linking ---------------------------------------------------------------------
 
 
-def link(source: Path, target: Path) -> Outcome:
-    """A symlink at `target` pointing at `source`.
-
-    Absolute, because the main clone and the lanes root are two unrelated trees and a
-    relative link between them would be a long walk that breaks when either moves.
-
-    Staged and swapped like a clone, so replacing an existing path is one rename
-    rather than a window where the path is missing.
-    """
-    if not _exists(source):
-        return Outcome(ok=False, detail=f"{source} is not there any more")
-
-    staged = staged_path(target)
-    try:
-        _remove(staged)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        staged.symlink_to(source)
-        _replace(staged, target)
-    except OSError as exc:
-        _remove(staged)
-        return Outcome(ok=False, detail=_reason(exc))
-    return Outcome(ok=True)
-
-
 # -- running ---------------------------------------------------------------------
 
 

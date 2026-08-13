@@ -474,7 +474,7 @@ def _configured(xdg: Path, projects_root: Path, lanes_root: Path, name: str) -> 
     return config_dir
 
 
-def test_settings_has_a_preparation_row_saying_how_much_is_there(
+def test_settings_has_a_preparation_row_saying_how_much_is_in(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     config_dir = _configured(xdg, projects_root, lanes_root, "cfgP1")
@@ -492,24 +492,41 @@ def test_settings_has_a_preparation_row_saying_how_much_is_there(
     settings.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
-    assert any("preparation" in row and "2 steps in 2 projects" in row for row in rows)
+    assert any("preparation" in row and "1 path in, 1 out" in row for row in rows)
 
 
-def test_the_preparation_screen_lists_every_projects_steps_with_the_project_dimmed(
+def test_settings_opens_the_same_screen_entering_a_lane_does(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """One component, two callers — asserted on the call rather than on resemblance,
+    because resemblance is exactly what drifts."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP2")
+    ui = FakeUi(["preparation", [], "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    settings.run(context)
+
+    assert ui.checklists == 1, "the checklist, not a table of rows you go into"
+
+
+def test_the_preparation_screen_shows_every_projects_paths_with_the_project_dimmed(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """One screen for every project rather than a project list and then a page each: the
     lanes table already solves "rows from several projects in one table" with a dimmed
     lead, so this is two levels of nesting instead of three."""
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP2")
-    ui = FakeUi(["preparation", "back", "back"])
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP3")
+    ui = FakeUi(["preparation", [], "back"])
     context = _context(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
     context.prepare_store().save(
         (
-            Step(project="zeta", verb=Verb.LINK, path=".env"),
-            Step(project="acme", verb=Verb.CLONE, path="node_modules", refresh=True),
+            Step(project="zeta", verb=Verb.CLONE, path=".env"),
+            Step(project="acme", verb=Verb.CLONE, path="node_modules"),
             Step(project="acme", verb=Verb.RUN, command="install-things", directory="web"),
         )
     )
@@ -517,41 +534,18 @@ def test_the_preparation_screen_lists_every_projects_steps_with_the_project_dimm
     settings.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
-    prepared = [row for row in rows if "acme/" in row or "zeta/" in row]
-    assert [row.split(" | ")[0] for row in prepared] == [
-        "acme/install-things",
-        "acme/node_modules",
-        "zeta/.env",
-    ], "ordered by project, then subject, and never rearranging"
-    assert any("clone, refreshed" in row for row in prepared)
-    assert any("run · web" in row for row in prepared)
-    assert any("add a step" in row for row in rows)
+    paths = [row for row in rows if "acme/" in row or "zeta/" in row]
+    assert [row.split(" | ")[0] for row in paths] == ["acme/node_modules", "zeta/.env"]
+    assert not any("install-things" in row for row in paths), "a command is not a path"
 
 
-def test_changing_a_step_asks_one_question_and_returns_to_the_list(
+def test_a_remembered_path_arrives_ticked_and_can_be_taken_back_out(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP3")
-    ui = FakeUi(["preparation", "acme/node_modules", "change", "link", "back", "back"])
-    context = _context(
-        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
-    )
-    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
-
-    settings.run(context)
-
-    assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.LINK]
-    assert ui.unanswered() == 0, "the list came back, and 'back' answered it"
-
-
-def test_a_clone_step_can_be_set_to_refresh_on_every_enter(
-    xdg: Path, projects_root: Path, lanes_root: Path
-) -> None:
-    """The only place `refresh` can be set. On the screen where an answer is first given
-    the path is absent, so `clone` and a refreshing `clone` do the same thing — a screen
-    has no business offering a distinction it cannot demonstrate."""
+    """The complaint this replaced: changing an answer used to be Enter, change, pick.
+    It is now one keystroke on the row, from the same screen entering a lane shows."""
     config_dir = _configured(xdg, projects_root, lanes_root, "cfgP4")
-    ui = FakeUi(["preparation", "acme/node_modules", "change", "clone, refreshed", "back", "back"])
+    ui = FakeUi(["preparation", ["acme/node_modules"], "back"])
     context = _context(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
@@ -559,37 +553,112 @@ def test_a_clone_step_can_be_set_to_refresh_on_every_enter(
 
     settings.run(context)
 
-    step = context.prepare_store().load().for_project("acme")[0]
-    assert step.verb is Verb.CLONE
-    assert step.refresh
+    assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.SKIP]
 
 
-def test_forgetting_a_step_means_the_path_is_asked_about_again(
+def test_a_path_left_out_can_be_brought_back_in_from_settings(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
-    """The remedy the whole "every answer is remembered" decision rests on."""
     config_dir = _configured(xdg, projects_root, lanes_root, "cfgP5")
-    ui = FakeUi(["preparation", "acme/node_modules", "forget", "back", "back"])
+    ui = FakeUi(["preparation", ["acme/vendor"], "back"])
     context = _context(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
-    context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="node_modules"),))
+    context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="vendor"),))
 
     settings.run(context)
 
-    assert context.prepare_store().load().steps == ()
+    assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.CLONE]
+
+
+def test_the_running_total_says_per_lane_where_there_is_no_lane_in_hand(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """Accepting here copies nothing — it answers for every lane in that project from now
+    on. `coming in` would say something imminent that is not about to happen."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP8")
+    ui = FakeUi(["preparation", [], "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    settings.run(context)
+
+    said = [told.text for told in ui.told if told.kind == "summary"]
+    assert said and said[-1].endswith("in each lane"), said
+
+
+def test_backing_out_of_the_preparation_screen_changes_nothing(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP6")
+    ui = FakeUi(["preparation", FakeUi.ABANDON, "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
+
+    settings.run(context)
+
+    assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.CLONE]
+
+
+def test_with_no_paths_at_all_the_screen_says_so_rather_than_drawing_a_frame(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """§12: a screen built around a list does not render the list's frame when the list
+    is empty — and a checklist has no action row to keep it alive, since every row it
+    draws is a path."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP7")
+    ui = FakeUi(["preparation", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert ui.checklists == 0, "no checklist over nothing"
+    assert ui.said("Nothing has been answered yet")
+
+
+# -- settings · commands ----------------------------------------------------------
+
+
+def test_settings_has_a_commands_row_and_lists_the_run_steps(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """A command is not a path: it is typed rather than discovered, and it has a
+    directory and a guard to edit. So it keeps the list you act on a row of."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgC1")
+    ui = FakeUi(["commands", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="acme", verb=Verb.CLONE, path="node_modules"),
+            Step(project="acme", verb=Verb.RUN, command="install-things", directory="web"),
+        )
+    )
+
+    settings.run(context)
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert any("commands" in row and "1 step" in row for row in rows)
+    assert any("acme/install-things" in row for row in rows)
+    assert not any("node_modules" in row for row in rows), "a path is not a command"
 
 
 def test_a_command_step_can_be_added(xdg: Path, projects_root: Path, lanes_root: Path) -> None:
     """`run` exists only here: the preparation screen is one row per discovered path, and
     a command is not a discovered path."""
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP6")
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgC2")
     ui = FakeUi(
         [
-            "preparation",
-            "add a step",
+            "commands",
+            "add a command",
             "p",
-            "run",
             "install-things",
             "web",
             "web/node_modules",
@@ -612,52 +681,58 @@ def test_a_command_step_can_be_added(xdg: Path, projects_root: Path, lanes_root:
     )
 
 
-def test_with_no_steps_at_all_the_screen_still_offers_add_a_step(
+def test_forgetting_a_command_leaves_the_paths_alone(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgC3")
+    ui = FakeUi(["commands", "acme/install-things", "forget", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save(
+        (
+            Step(project="acme", verb=Verb.CLONE, path="node_modules"),
+            Step(project="acme", verb=Verb.RUN, command="install-things"),
+        )
+    )
+
+    settings.run(context)
+
+    assert [s.path for s in context.prepare_store().load().steps] == ["node_modules"]
+
+
+def test_with_no_commands_at_all_the_screen_still_offers_add_a_command(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """§12 is about *data* rows: a screen whose only purpose is to let you add the first
-    step cannot answer with a line of prose."""
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP7")
-    ui = FakeUi(["preparation", "back", "back"])
+    command cannot answer with a line of prose."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgC4")
+    ui = FakeUi(["commands", "back", "back"])
     context = _context(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
     settings.run(context)
 
-    assert any("add a step" in told.text for told in ui.told if told.kind == "row")
+    assert any("add a command" in told.text for told in ui.told if told.kind == "row")
 
 
-def test_adding_a_clone_step_warns_when_copy_on_write_is_not_possible(
+def test_bringing_a_path_in_warns_when_copy_on_write_is_not_possible(
     xdg: Path, projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Said where it changes a decision, in the same words doctor uses — doctor is not
     something a user consults before configuring something they expect to be free."""
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP8")
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgC5")
     monkeypatch.setattr(apply, "cloning_available", _never)
-    ui = FakeUi(["preparation", "add a step", "p", "clone", "vendor", "back", "back"])
+    ui = FakeUi(["preparation", ["acme/vendor"], "back"])
     context = _context(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
+    context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="vendor"),))
 
     settings.run(context)
 
     assert ui.said("copy-on-write")
-    assert context.prepare_store().load().for_project("p")[0].verb is Verb.CLONE
-
-
-def test_adding_a_link_step_says_the_lane_will_write_into_the_main_clone(
-    xdg: Path, projects_root: Path, lanes_root: Path
-) -> None:
-    config_dir = _configured(xdg, projects_root, lanes_root, "cfgP9")
-    ui = FakeUi(["preparation", "add a step", "p", "link", "vendor", "back", "back"])
-    context = _context(
-        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
-    )
-
-    settings.run(context)
-
-    assert ui.said("main clone")
 
 
 # -- doctor on copy-on-write ------------------------------------------------------

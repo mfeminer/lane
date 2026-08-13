@@ -12,7 +12,7 @@ through to the next statement.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -91,16 +91,13 @@ that, "render what is known and fill the rest in" could only be tested with slee
 """
 
 
-type Toggle[T] = Callable[[T], bool]
-"""Change the row's own answer in place. True if it did.
+type Summary[T] = Callable[[frozenset[T]], str]
+"""What the caller can add to a checklist's running count that the widget cannot know.
 
-False means this row is not one that carries an answer — the widget then accepts it,
-which is how one screen has both rows you cycle through and rows you choose. So `Enter`
-still means "act on the row under the cursor" everywhere, and the screen needs no key of
-its own: acting on a row that has an answer is changing it.
-
-The answer belongs to the action, exactly as the rows already do: the widget calls this
-and repaints from `rows()`. Nothing about what an answer *means* lives below the seam.
+The widget counts *how many* are in, because it owns the ticks. *How much* — the total
+size of what is about to be brought into the lane — is the action's, because the sizes
+are. Both end up on one line so the answer to "what have I just decided" is never off
+the top of a scrolling screen.
 """
 
 
@@ -136,7 +133,6 @@ class Ui(Protocol):
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
-        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
     ) -> tuple[T, int]:
         """A table with a cursor over it: the row under the cursor, and where it was.
@@ -152,11 +148,38 @@ class Ui(Protocol):
         cursor where the user left it rather than at the top.
 
         The visible `back` row and Ctrl-C both raise `Abandoned`, as in `choose`.
+        """
+        ...
 
-        With a `toggle`, this is a screen whose rows carry an answer the user changes in
-        place rather than a screen they pick one row from. `Enter` changes a row that has
-        an answer and returns one that does not, so a screen can have both — a row per
-        decision, and a row that means "go on" — while binding no new key.
+    def check[T](
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Callable[[], Sequence[Row[T]]],
+        *,
+        checked: Iterable[T] = (),
+        summary: Summary[T] | None = None,
+        fill: Fill | None = None,
+        on_render: Callable[[str], None] | None = None,
+    ) -> frozenset[T]:
+        """Every row in or out, changed under the cursor: what was ticked on `Enter`.
+
+        The third screen shape, and the one for a decision taken over a *set*: `choose`
+        asks one question, `browse` is a screen you stand in and act on one row of, and
+        this is a screen where every row carries its own two-state answer and one
+        keystroke changes it.
+
+        `Space` toggles the row under the cursor and `Enter` accepts the whole screen —
+        which is what makes a dozen answers a dozen keystrokes and one more, and it is
+        the only place in lane where `Enter` does not act on the row. Both were decided
+        deliberately; see `checklist.py`.
+
+        `checked` is what arrives already answered, so settings can open the same screen
+        over decisions made months ago and show them as they stand.
+
+        There is no `back` row: a checklist has nothing to choose between, so the way out
+        is the footer hint, exactly as `text` and `confirm` do it. `Ctrl-C` raises
+        `Abandoned` as everywhere else.
         """
         ...
 

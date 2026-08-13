@@ -154,7 +154,7 @@ def test_an_answered_path_that_is_already_there_is_left_alone(
 def test_an_unanswered_path_is_asked_about_on_one_screen(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(["continue"])
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/", ".env"))
     _tree(repo / "node_modules")
@@ -166,16 +166,15 @@ def test_an_unanswered_path_is_asked_about_on_one_screen(
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("node_modules" in row for row in rows)
     assert any(".env" in row for row in rows)
-    assert any("continue" in row for row in rows)
     assert len(ui.asked) == 1, "one screen, not a queue of questions"
 
 
-def test_every_row_starts_at_skip_and_continuing_writes_nothing(
+def test_every_row_starts_out_and_accepting_writes_nothing_in(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """The default has to be the answer that changes nothing: one Enter records every
-    visible answer, including the rows nobody touched."""
-    ui = FakeUi(["continue"])
+    """The untouched answer has to be the one that changes nothing: one Enter records
+    every visible answer, including the rows nobody ticked."""
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules")
@@ -197,7 +196,7 @@ def test_every_row_starts_at_skip_and_continuing_writes_nothing(
 def test_the_screen_says_it_will_be_remembered_and_where_to_change_it(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(["continue"])
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules")
@@ -207,10 +206,10 @@ def test_the_screen_says_it_will_be_remembered_and_where_to_change_it(
     assert ui.said("Answers are remembered per project")
 
 
-def test_changing_a_row_to_clone_brings_the_path_in_and_remembers_it(
+def test_ticking_a_row_brings_the_path_in_and_remembers_it(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(["node_modules", "continue"])
+    ui = FakeUi([["node_modules"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "pkg")
@@ -224,12 +223,35 @@ def test_changing_a_row_to_clone_brings_the_path_in_and_remembers_it(
     ]
 
 
+def test_a_dozen_paths_are_a_dozen_keystrokes_and_one_screen(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The complaint this screen was rebuilt for: changing an answer used to mean going
+    into the path and back out again, once per path."""
+    ui = FakeUi([[f"pkg{n}/node_modules" for n in range(12)]])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("node_modules/",))
+    for n in range(12):
+        (repo / f"pkg{n}").mkdir()
+        (repo / f"pkg{n}" / "main.py").write_text("tracked\n")
+        _tree(repo / f"pkg{n}" / "node_modules", "pkg")
+    git(["add", "-A"], cwd=repo)
+    git(["commit", "--quiet", "-m", "packages"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    lane = _lane(context, repo)
+
+    enter_lane.enter(context, lane)
+
+    assert len(ui.asked) == 1, "one screen, and no sub-screen under it"
+    assert all((lane.path / f"pkg{n}/node_modules/pkg").exists() for n in range(12))
+
+
 def test_a_second_lane_in_the_same_project_asks_nothing(
     projects_root: Path, lanes_root: Path
 ) -> None:
     """The whole point of remembering: this is the screen's second appearance, and it
     does not appear."""
-    first_ui = FakeUi(["node_modules", "continue"])
+    first_ui = FakeUi([["node_modules"]])
     context = _context(ui=first_ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "pkg")
@@ -244,8 +266,9 @@ def test_a_second_lane_in_the_same_project_asks_nothing(
     assert (second.path / "node_modules" / "pkg").exists(), "and it was prepared anyway"
 
 
-def test_space_cycles_through_the_verbs_and_wraps(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi([".env", ".env", ".env", "continue"])
+def test_ticking_twice_leaves_the_path_out(projects_root: Path, lanes_root: Path) -> None:
+    """Two answers and only two — there is no third press to get lost in."""
+    ui = FakeUi([[".env", ".env"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
@@ -253,51 +276,36 @@ def test_space_cycles_through_the_verbs_and_wraps(projects_root: Path, lanes_roo
 
     enter_lane.enter(context, lane)
 
-    assert [s.verb for s in context.prepare_store().load().for_project("demo")] == [Verb.SKIP], (
-        "skip → clone → link → skip"
-    )
+    assert [s.verb for s in context.prepare_store().load().for_project("demo")] == [Verb.SKIP]
     assert not (lane.path / ".env").exists()
 
 
-def test_link_is_not_offered_for_a_path_ignored_as_a_directory_only(
+def test_a_ticked_path_already_in_the_lane_is_left_alone(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """`node_modules/` matches directories, and a symlink is not one — so linking it
-    would put `● 1 uncommitted` in the listing over a link the user asked for. git
-    answers this, and the panel says so."""
-    ui = FakeUi(["node_modules", "node_modules", "continue"])
+    """The one rule the checkbox cannot carry, so it is stated once and holds always:
+    a tick never overwrites what the lane already has. Anything else silently destroys
+    work done inside the lane."""
+    ui = FakeUi([["node_modules"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
-    _tree(repo / "node_modules")
+    _tree(repo / "node_modules", "fresh")
     lane = _lane(context, repo)
+    _tree(lane.path / "node_modules", "mine")
 
     enter_lane.enter(context, lane)
 
-    assert [s.verb for s in context.prepare_store().load().for_project("demo")] == [Verb.SKIP], (
-        "two presses went skip → clone → skip, with no link in between"
-    )
-    assert any("link" in told.text and "not offered" in told.text for told in ui.told)
+    assert (lane.path / "node_modules" / "mine").exists(), "the lane's own copy survives"
+    assert not (lane.path / "node_modules" / "fresh").exists()
+    assert not any(told.kind == "progress" for told in ui.told), "and nothing was done"
 
 
-def test_link_is_offered_for_a_path_ignored_by_name(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi([".env", ".env", "continue"])
-    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
-    repo = _project(projects_root, ignore=(".env",))
-    (repo / ".env").write_text("SECRET=1\n")
-    lane = _lane(context, repo)
-
-    enter_lane.enter(context, lane)
-
-    assert (lane.path / ".env").is_symlink()
-    assert (lane.path / ".env").readlink() == repo / ".env"
-
-
-def test_a_path_already_in_the_lane_says_the_answer_overwrites_it(
+def test_a_path_already_in_the_lane_says_so_on_its_row(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """The fact that changes what the answer means, on the row, in words — so the
-    destructive case names itself before it happens."""
-    ui = FakeUi(["node_modules", "continue"])
+    """A tick that does nothing has to look different from one that does, or the row is
+    lying about what accepting the screen will do."""
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "fresh")
@@ -307,15 +315,31 @@ def test_a_path_already_in_the_lane_says_the_answer_overwrites_it(
     enter_lane.enter(context, lane)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
-    assert any("overwrites" in row for row in rows)
-    assert (lane.path / "node_modules" / "fresh").exists()
-    assert not (lane.path / "node_modules" / "mine").exists(), "the user asked for that"
+    assert any("already there" in row for row in rows)
+
+
+def test_the_running_total_says_what_is_about_to_be_copied(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Forty rows do not fit on a screen, so the one line saying what you have decided —
+    and what it costs — has to be somewhere you are already looking."""
+    ui = FakeUi([["node_modules"]])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("node_modules/",))
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "big").write_bytes(b"\0" * 300_000)
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    said = [told.text for told in ui.told if told.kind == "summary"]
+    assert said and said[-1].endswith("coming in"), said
+    assert "KB" in said[-1]
 
 
 def test_sizes_arrive_after_the_rows_do(projects_root: Path, lanes_root: Path) -> None:
     """`du` on a large tree is slow, so the rows are complete first and the sizes fill in
     behind — the lanes table's own shape, and its own `fill`."""
-    ui = FakeUi(["continue"])
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     (repo / "node_modules").mkdir()
@@ -351,26 +375,6 @@ def test_backing_out_of_the_screen_changes_nothing_and_launches_nothing(
 
 
 # -- applying without asking ------------------------------------------------------
-
-
-def test_a_refreshing_clone_replaces_what_is_there_on_every_enter(
-    projects_root: Path, lanes_root: Path
-) -> None:
-    ui = FakeUi()
-    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
-    repo = _project(projects_root, ignore=("node_modules/",))
-    _tree(repo / "node_modules", "current")
-    lane = _lane(context, repo)
-    _tree(lane.path / "node_modules", "stale")
-    context.prepare_store().save(
-        (Step(project="demo", verb=Verb.CLONE, path="node_modules", refresh=True),)
-    )
-
-    enter_lane.enter(context, lane)
-
-    assert (lane.path / "node_modules" / "current").exists()
-    assert not (lane.path / "node_modules" / "stale").exists()
-    assert ui.said("Replacing node_modules")
 
 
 def test_a_command_runs_when_its_guard_path_is_missing(
@@ -548,7 +552,7 @@ def test_an_unreadable_answers_file_says_so_and_still_enters(
     projects_root: Path, lanes_root: Path
 ) -> None:
     environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
-    ui = FakeUi(["continue"])
+    ui = FakeUi([[]])
     context = _context(
         ui=ui, projects_root=projects_root, lanes_root=lanes_root, environment=environment
     )
@@ -568,12 +572,12 @@ def test_an_unreadable_answers_file_says_so_and_still_enters(
 # -- secrets ----------------------------------------------------------------------
 
 
-def test_cloning_a_path_that_looks_like_secrets_says_link_keeps_one_copy(
+def test_bringing_in_a_path_that_looks_like_secrets_says_every_lane_gets_a_copy(
     projects_root: Path, lanes_root: Path
 ) -> None:
     """Copying a `.env` into every lane multiplies the number of places a secret lives.
     Closing the lane removes them — a refused close does not."""
-    ui = FakeUi([".env", "continue"])
+    ui = FakeUi([[".env"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
@@ -581,13 +585,13 @@ def test_cloning_a_path_that_looks_like_secrets_says_link_keeps_one_copy(
     enter_lane.enter(context, _lane(context, repo))
 
     assert ui.said("looks like it holds secrets")
-    assert ui.said("link")
+    assert ui.said("every lane")
 
 
 def test_a_path_that_does_not_look_like_secrets_says_nothing_about_them(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(["node_modules", "continue"])
+    ui = FakeUi([["node_modules"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules")
@@ -603,7 +607,7 @@ def test_a_path_that_does_not_look_like_secrets_says_nothing_about_them(
 def test_a_prepared_lane_is_still_clean_to_git(projects_root: Path, lanes_root: Path) -> None:
     """Only paths git ignores in the lane are ever written, which is what keeps
     preparation out of the listing's `state` cell and out of the close flow's checks."""
-    ui = FakeUi(["node_modules", ".env", ".env", "continue"])
+    ui = FakeUi([["node_modules", ".env"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/", ".env"))
     _tree(repo / "node_modules")
@@ -613,7 +617,7 @@ def test_a_prepared_lane_is_still_clean_to_git(projects_root: Path, lanes_root: 
     enter_lane.enter(context, lane)
 
     assert (lane.path / "node_modules").exists()
-    assert (lane.path / ".env").is_symlink()
+    assert (lane.path / ".env").exists()
     assert context.git.status(lane.path, "main").dirty_count == 0
 
 
@@ -631,18 +635,18 @@ def test_a_tracked_path_is_never_offered(projects_root: Path, lanes_root: Path) 
     assert (lane.path / "file0.txt").read_text() == "content 0\n"
 
 
-def test_closing_a_lane_with_a_linked_path_leaves_the_target_alone(
+def test_closing_a_lane_leaves_the_main_clones_copy_alone(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """Being wrong here deletes the main clone's copy, which every other lane shares.
-    So it is measured rather than assumed."""
-    ui = FakeUi([".env", ".env", "continue"])
+    """Being wrong here deletes the main clone's copy, which every other lane is made
+    from. So it is measured rather than assumed."""
+    ui = FakeUi([[".env"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
     lane = _lane(context, repo)
     enter_lane.enter(context, lane)
-    assert (lane.path / ".env").is_symlink()
+    assert (lane.path / ".env").exists()
 
     context.git.remove_worktree(repo, lane.path, force=True)
 
@@ -696,7 +700,7 @@ def test_a_folder_of_loose_ignored_files_is_one_row_not_forty(
 ) -> None:
     """The whole point: a directory git could not collapse must not become forty rows on
     the way to the editor."""
-    ui = FakeUi(["continue"])
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("*.log",))
     _litter(repo, "logs", *[f"day{n}.log" for n in range(1, 41)])
@@ -704,14 +708,16 @@ def test_a_folder_of_loose_ignored_files_is_one_row_not_forty(
     enter_lane.enter(context, _lane(context, repo))
 
     rows = [told.text for told in ui.told if told.kind == "row"]
-    assert len(rows) == 2, f"one group row and continue, not forty: {rows}"
+    assert len(rows) == 1, f"one row, not forty: {rows}"
     assert any("logs/ · 40 ignored files" in row for row in rows)
 
 
-def test_answering_a_whole_folder_at_once_answers_every_path_in_it(
+def test_one_keystroke_on_a_folder_brings_in_every_path_inside_it(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(["logs/ · 3 ignored files", "clone all", "continue"])
+    """A folder is one checkbox: ticking it means all of them, and there is no third
+    state for it to land in."""
+    ui = FakeUi([["logs/ · 3 ignored files"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("*.log",))
     _litter(repo, "logs", "a.log", "b.log", "c.log")
@@ -725,15 +731,15 @@ def test_answering_a_whole_folder_at_once_answers_every_path_in_it(
         ("logs/a.log", Verb.CLONE),
         ("logs/b.log", Verb.CLONE),
         ("logs/c.log", Verb.CLONE),
-    ], "one step per path — a group is never a step for its directory"
+    ], "one step per path — a folder is never a step for its directory"
 
 
-def test_a_group_answer_never_writes_the_directory_itself(
+def test_a_folder_answer_never_writes_the_directory_itself(
     projects_root: Path, lanes_root: Path
 ) -> None:
     """The directory is only *partly* ignored — that is why its files were listed one by
     one — so it holds tracked work too. Cloning the directory would overwrite it."""
-    ui = FakeUi(["logs/ · 3 ignored files", "clone all", "continue"])
+    ui = FakeUi([["logs/ · 3 ignored files"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("*.log",))
     _litter(repo, "logs", "a.log", "b.log", "c.log")
@@ -746,99 +752,22 @@ def test_a_group_answer_never_writes_the_directory_itself(
     assert context.git.status(lane.path, "main").dirty_count == 1, "only the file it edited"
 
 
-def test_a_folder_can_be_answered_one_file_at_a_time(projects_root: Path, lanes_root: Path) -> None:
-    """A folder that mixes secrets with junk is the case that needs this: clone the `.env`
-    files, leave the logs out."""
-    ui = FakeUi(
-        [
-            "web/ · 4 ignored files",
-            "one by one…",
-            "web/.env",  # skip -> clone
-            "web/.env.local",  # skip -> clone
-            "continue",  # back to the folder list
-            "continue",  # and on to the editor
-        ]
-    )
-    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
-    repo = _project(projects_root, ignore=(".env*", "*.log"))
-    _litter(repo, "web", ".env", ".env.local", "a.log", "b.log")
-    lane = _lane(context, repo)
-
-    enter_lane.enter(context, lane)
-
-    assert (lane.path / "web" / ".env").exists()
-    assert (lane.path / "web" / ".env.local").exists()
-    assert not (lane.path / "web" / "a.log").exists()
-    assert not (lane.path / "web" / "b.log").exists()
-    assert {(s.path, s.verb) for s in context.prepare_store().load().for_project("demo")} == {
-        ("web/.env", Verb.CLONE),
-        ("web/.env.local", Verb.CLONE),
-        ("web/a.log", Verb.SKIP),
-        ("web/b.log", Verb.SKIP),
-    }
-
-
-def test_a_partly_answered_folder_reads_as_mixed_and_the_panel_counts_it(
+def test_a_folder_whose_answers_disagree_is_drawn_as_its_own_rows(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi(
-        [
-            "web/ · 3 ignored files",
-            "one by one…",
-            "web/.env",
-            "continue",
-            "continue",
-        ]
-    )
+    """A folder is a folder only while its paths agree. Where they do not, one checkbox
+    could only lie about them — so the folder is opened out instead, which is the whole
+    of what replaced drilling into it."""
+    ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env*", "*.log"))
     _litter(repo, "web", ".env", "a.log", "b.log")
+    lane = _lane(context, repo)
+    context.prepare_store().save((Step(project="demo", verb=Verb.CLONE, path="web/.env"),))
 
-    enter_lane.enter(context, _lane(context, repo))
+    enter_lane.enter(context, lane)
 
-    assert any("mixed" in told.text for told in ui.told if told.kind == "row")
-    assert any("1 clone, 2 skip" in told.text for told in ui.told if told.kind == "panel")
-
-
-def test_link_is_not_offered_for_a_folder_holding_something_that_cannot_be_linked(
-    projects_root: Path, lanes_root: Path
-) -> None:
-    """One answer for the whole folder can only offer what holds for all of it."""
-    offered: list[str] = []
-    ui = FakeUi(["a/ · 3 ignored files", "skip all", "continue"])
-    original = ui.choose
-
-    def watch(title: str, options: object, **kwargs: object) -> object:
-        assert isinstance(options, list)
-        offered.extend(option.label for option in options)
-        return original(title, options, **kwargs)  # type: ignore[arg-type]
-
-    ui.choose = watch  # type: ignore[method-assign, assignment]
-    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
-    # `node_modules/` is ignored as a directory only, so it cannot become a symlink.
-    repo = _project(projects_root, ignore=("*.log", "node_modules/"))
-    _litter(repo, "a", "x.log", "y.log")
-    (repo / "a" / "node_modules").mkdir()
-    (repo / "a" / "node_modules" / "pkg").write_text("pkg\n")
-
-    enter_lane.enter(context, _lane(context, repo))
-
-    assert "clone all" in offered
-    assert "link all" not in offered, "one of them cannot be linked, so the group cannot"
-
-
-def test_backing_out_of_a_folder_returns_to_the_list_not_out_of_entering(
-    projects_root: Path, lanes_root: Path
-) -> None:
-    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
-    ui = FakeUi(["web/ · 3 ignored files", FakeUi.ABANDON, "continue"])
-    context = _context(
-        ui=ui, projects_root=projects_root, lanes_root=lanes_root, environment=environment
-    )
-    repo = _project(projects_root, ignore=("*.log",))
-    _litter(repo, "web", "a.log", "b.log", "c.log")
-
-    enter_lane.enter(context, _lane(context, repo))
-
-    assert ui.unanswered() == 0, "the folder list came back, and 'continue' answered it"
-    assert environment.launched, "and entering carried on"
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert not any("ignored files" in row for row in rows), "no folder row over a disagreement"
+    assert any("web/a.log" in row for row in rows)
+    assert any("web/b.log" in row for row in rows)

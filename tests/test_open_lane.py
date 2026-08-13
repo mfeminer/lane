@@ -385,8 +385,7 @@ def test_opening_a_lane_ends_by_entering_it(
             "Fix pagination",
             "branch",
             "bugfix/fix-pagination",
-            "node_modules",
-            "continue",
+            ["node_modules"],
         ]
     )
     context = make_context(ui, projects_root, lanes_root)

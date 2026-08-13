@@ -115,42 +115,6 @@ def test_clone_reports_a_missing_source_rather_than_raising(tmp_path: Path) -> N
     assert "nope" in outcome.detail
 
 
-# -- link ------------------------------------------------------------------------
-
-
-def test_link_points_at_the_source(tmp_path: Path) -> None:
-    source = _tree(tmp_path / "source")
-    target = tmp_path / "lane" / "node_modules"
-
-    assert apply.link(source, target).ok
-
-    assert target.is_symlink()
-    assert target.readlink() == source, "absolute: the two trees are far apart"
-    assert (target / "deep" / "inner.txt").read_text() == "inner\n"
-
-
-def test_link_over_an_existing_path_replaces_it_and_spares_the_source(tmp_path: Path) -> None:
-    source = _tree(tmp_path / "source")
-    target = _tree(tmp_path / "target")
-
-    assert apply.link(source, target).ok
-
-    assert target.is_symlink()
-    assert (source / "deep" / "inner.txt").read_text() == "inner\n"
-
-
-def test_link_replacing_an_existing_link_does_not_follow_it(tmp_path: Path) -> None:
-    first = _tree(tmp_path / "first")
-    second = _tree(tmp_path / "second")
-    target = tmp_path / "target"
-
-    assert apply.link(first, target).ok
-    assert apply.link(second, target).ok
-
-    assert target.readlink() == second
-    assert (first / "top.txt").exists(), "the old target was a link; its target survives"
-
-
 # -- run -------------------------------------------------------------------------
 
 

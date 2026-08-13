@@ -449,123 +449,7 @@ def test_a_table_with_no_rows_is_only_a_way_back(keys: PipeInput) -> None:
         browse("nothing", COLUMNS, list, BACK, input=keys, output=SizedOutput())
 
 
-# -- rows that carry an answer: Enter changes the one under the cursor ------------
-
-
-PREPARE_COLUMNS = (
-    Column("path"),
-    Column("size", drop=1),
-    Column("verb"),
-)
-
-
-class _Answers:
-    """A screen's own answers, owned by the caller exactly as `rows` already is.
-
-    The widget calls `toggle` and repaints; nothing about what an answer *means* lives
-    below the seam.
-    """
-
-    def __init__(self) -> None:
-        self.verbs = {"node_modules": "skip", "dist": "skip"}
-        self.toggled: list[str] = []
-
-    def rows(self) -> list[Row[str]]:
-        table = [
-            Row(
-                value=path,
-                cells=(Cell(path), Cell("1.2 GB", tone="dim"), Cell(self.verbs[path])),
-            )
-            for path in ("node_modules", "dist")
-        ]
-        table.append(Row(value="continue", cells=(Cell("continue"), Cell(""), Cell(""))))
-        return table
-
-    def toggle(self, value: str) -> bool:
-        if value == "continue":
-            return False
-        self.toggled.append(value)
-        cycle = ("skip", "clone", "link")
-        here = cycle.index(self.verbs[value])
-        self.verbs[value] = cycle[(here + 1) % len(cycle)]
-        return True
-
-
-def _toggling(keys: PipeInput, sent: str, answers: _Answers) -> tuple[str, int]:
-    keys.send_text(sent)
-    return browse(
-        "3 paths lane has not been told about",
-        PREPARE_COLUMNS,
-        answers.rows,
-        BACK,
-        toggle=answers.toggle,
-        input=keys,
-        output=SizedOutput(120, 40),
-    )
-
-
-def test_enter_changes_the_row_under_the_cursor_and_stays(keys: PipeInput) -> None:
-    """`Enter` means "act on the row under the cursor" here as everywhere else; on a row
-    that carries an answer, acting on it is changing it."""
-    answers = _Answers()
-    result = _toggling(keys, "\r\x1b[B\x1b[B\r", answers)
-
-    assert answers.toggled == ["node_modules"], "the row under the cursor, and only it"
-    assert answers.verbs == {"node_modules": "clone", "dist": "skip"}
-    assert result == ("continue", 2), "the row with no answer to change is the one returned"
-
-
-def test_enter_cycles_and_wraps(keys: PipeInput) -> None:
-    answers = _Answers()
-    _toggling(keys, "\r\r\r\x1b[B\x1b[B\r", answers)
-    assert answers.verbs["node_modules"] == "skip", "skip → clone → link → skip"
-
-
-def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
-    """The answer is the caller's, so the only way it reaches the screen is the repaint
-    reading `rows()` again. Driven from the paints rather than by a sleep, the way the
-    fill's own repaint test is."""
-    answers = _Answers()
-    painted: list[str] = []
-    changed = threading.Event()
-
-    def watch(line: str) -> None:
-        painted.append(line)
-        if "clone" in line:
-            changed.set()
-
-    def finish(notify: object) -> None:
-        del notify
-        keys.send_text("\r")
-        changed.wait(30)
-        keys.send_text("\x1b[B\x1b[B\r")
-
-    browse(
-        "3 paths",
-        PREPARE_COLUMNS,
-        answers.rows,
-        BACK,
-        toggle=answers.toggle,
-        fill=finish,
-        on_render=watch,
-        input=keys,
-        output=SizedOutput(120, 40),
-    )
-
-    assert any("node_modules" in line and "skip" in line for line in painted), "before"
-    assert any("node_modules" in line and "clone" in line for line in painted), "and after"
-
-
-def test_space_is_treated_as_any_other_unknown_key(keys: PipeInput) -> None:
-    """Pinned for space specifically because it is the keystroke most likely to arrive
-    here by habit — a list of rows carrying answers is where `fzf --multi` and `tig` would
-    take it. It has to be harmless rather than half-bound: nothing changes, and the table
-    stays up, exactly as for any key the table does not know."""
-    answers = _Answers()
-    result = _toggling(keys, " \x1b[B\x1b[B\r", answers)
-
-    assert answers.toggled == [], "the space went nowhere"
-    assert result == ("continue", 2), "and the table stayed up"
+# -- the binding set ------------------------------------------------------------
 
 
 def _ignore(result: object) -> None:
@@ -574,54 +458,34 @@ def _ignore(result: object) -> None:
 
 
 def test_the_table_binds_exactly_the_pickers_keys_and_nothing_else() -> None:
-    """The whole vocabulary, whether or not rows carry an answer. Asserted on the binding
-    table rather than by driving keys, because a bound handler that happens to do nothing
-    still swallows the keystroke — which is not the same as leaving the key unbound."""
+    """Asserted on the binding table rather than by driving keys, because a bound handler
+    that happens to do nothing still swallows the keystroke — which is not the same as
+    leaving the key unbound.
+
+    A screen whose rows each carry a two-state answer is `checklist.py`, a widget of its
+    own, and `Space` is bound *there*. That is what keeps this set the picker's exactly.
+    """
     state = {"index": 0, "top": 0, "rows": 0, "opening": 1}
-    answers = _Answers()
-    expected = {Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC}
+    bound = {
+        key for binding in bindings_for(state, _rows, _ignore).bindings for key in binding.keys
+    }
 
-    for label, bindings in (
-        ("plain", bindings_for(state, _rows, None, _ignore)),
-        ("with a toggle", bindings_for(state, answers.rows, answers.toggle, _ignore)),
-    ):
-        bound = {key for binding in bindings.bindings for key in binding.keys}
-        assert bound == expected, f"{label} binds {bound - expected} beyond the picker's set"
+    assert bound == {Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC}
 
 
-def test_the_footer_is_the_same_one_hint_whether_rows_carry_an_answer_or_not() -> None:
-    """One hint string per widget, not one per call site (docs/CONVENTIONS.md §2) — and
-    with no key of its own there is nothing extra for this screen to announce."""
+def test_space_is_treated_as_any_other_unknown_key(keys: PipeInput) -> None:
+    """Pinned for space specifically because it is the one key the checklist next door
+    binds. In the lanes table it has to be harmless rather than half-bound: nothing
+    happens and the table stays up, exactly as for any key the table does not know."""
+    assert _browse(keys, " \x1b[B\r") == ("local", 1)
+
+
+def test_the_footer_is_the_hint_and_does_not_name_space() -> None:
+    """One hint string per widget (docs/CONVENTIONS.md §2) — with no key of its own,
+    this screen has nothing extra to announce."""
     from lane.ui.picker import HINT
 
-    answers = _Answers()
-    lines = paint(
-        "t", PREPARE_COLUMNS, answers.rows(), BACK, cursor=0, top=0, width=120, height=40
-    ).lines
+    lines = _lines()
 
     assert HINT in lines[-1]
     assert "space" not in lines[-1].lower()
-
-
-def test_the_verb_column_survives_a_forty_column_terminal() -> None:
-    """§13: the column that answers the screen's own question is never dropped and
-    never truncated at any width the screen promises to support. `size` goes, the path
-    truncates, `clone · overwrites` stays whole."""
-    rows = [
-        Row(
-            value="node_modules",
-            cells=(
-                Cell("apps/web/node_modules"),
-                Cell("1.2 GB", tone="dim"),
-                Cell("clone · overwrites", tone="warn"),
-            ),
-        )
-    ]
-    lines = paint(
-        "3 paths", PREPARE_COLUMNS, rows, BACK, cursor=0, top=0, width=40, height=40
-    ).lines
-    row = next(line for line in lines if "clone · overwrites" in line)
-
-    assert "1.2 GB" not in row, "size is the droppable column"
-    assert "…" in row, "and the path is what gives way"
-    assert len(row) <= 40
