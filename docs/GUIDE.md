@@ -231,12 +231,12 @@ Preparing demo/broken-pagination
 
   14 paths lane has not been told about
 
-    path                          size      in lane
-❯ ✓ apps/web/node_modules         1.2 GB
-  ✓ apps/web/ · 12 ignored files  4.2 MB
-    apps/console/dist             340 MB    already there
+    path                    size      in lane
+❯ ✓ node_modules            1.2 GB
+  ◐ apps/ · 12 ignored paths  4.2 MB
+    console/dist            340 MB    already there
 
-  2 of 3 in · 1.2 GB coming in
+  2 of 14 in · 1.2 GB coming in
   ↑↓ move · space toggle · enter accept · ctrl-c back out
 ```
 
@@ -246,7 +246,9 @@ and carries on to your editor. A dozen paths costs a dozen keystrokes and one mo
 
 That's the one place in lane where `Enter` doesn't act on the row you're on, and it's
 deliberate: on this screen the row's answer is `Space`'s job, so `Enter` is free to mean
-"done". The footer says so, every time.
+"done" — except on a folder row, which is a screen you can go *into*, and there `Enter`
+does exactly what it does everywhere else in lane: it opens the thing under the cursor.
+The footer says which of the two you're about to get, every time.
 
 Every row starts **out**, so pressing `Enter` straight away is safe: nothing is copied, and
 lane stops asking. Answers are remembered, so the **second** lane in that project asks
@@ -260,34 +262,54 @@ The sizes are why the screen is worth reading — they're what stops you bringin
 local database by accident. They're measured while you're already reading the rows, so they
 appear a moment after the rest.
 
-### Folders, not forty rows
+### Folders, not two hundred rows
 
 git can only collapse a directory it ignores *entirely*. Put one tracked file in it and
 every ignored file inside gets listed separately — a real repository with four ignore
-patterns produced **55 rows, 40 of them from a single `logs/`**. So lane folds loose
-ignored files into one row per folder, once there are three or more of them:
+patterns produced **55 rows, 40 of them from a single `logs/`**, and a monorepo with a
+`node_modules`, a `dist` and a `.env` under every package reaches a couple of hundred.
+Choosing among two hundred flat rows isn't a screen, it's an ordeal.
+
+So the screen shows you the **top** of the tree — where it actually branches — and you go
+in from there:
 
 ```
-    path                          size      in lane
-❯ ✓ logs/ · 40 ignored files       12 MB
+    path                        size      in lane
+❯ ◐ packages/ · 180 ignored paths  8.4 GB
+    node_modules                1.2 GB
+    .env                        1.4 KB
 ```
 
-One `Space` answers all forty.
-
-**A folder is a folder only while its files agree.** A checkbox has two states, so if
-you've already answered some of a folder's files in and others out, there's no honest tick
-for it — lane draws its files as their own rows instead:
+`Enter` opens `packages/`, and you're on the level below it, with a visible way back:
 
 ```
-    path                     size     in lane
-❯ ✓ apps/web/.env            1.4 KB
-  ✓ apps/web/.env.local      1.4 KB
-    apps/web/app1.log        220 KB
-    …
+  packages/ · 180 ignored paths
+
+    path                        size      in lane
+❯ ✓ packages/api/ · 3 ignored paths  1.1 GB
+  ◐ packages/web/ · 3 ignored paths  2.2 GB
+    ← Back
 ```
 
-That's what replaced drilling into a folder to answer it file by file: the screen opens it
-out itself, exactly when opening it out is the only truthful thing to do.
+**One `Space` on a folder answers everything under it**, however deep — all 180 of them
+from that first row, if that's what you want. Nobody has to descend into fourteen packages
+one at a time. Press it on a folder that's all in and it takes all of it back out.
+
+**`◐` means some in, some out.** A path has two answers and a tick says both; a folder
+stands for everything beneath it, so it has three, and a mix gets its own mark rather than
+being rounded to one of the others. A `Space` on a mixed folder brings the **whole** thing
+in (the press after that takes it all out), so the row's panel tells you how many paths
+that is before you press it.
+
+Levels with nothing to choose between don't get a screen of their own:
+
+* a directory holding a single thing is joined onto it — `apps/web/frontend/node_modules`
+  stays one row rather than three keystrokes;
+* a level that would open on fewer than three rows is drawn where it is instead, since a
+  folder has to save more than the one keystroke it costs.
+
+Your place is kept: come back out of a folder and the level above is exactly as you left
+it, cursor included.
 
 > **A folder row is never an answer about the folder itself.** That directory is only
 > *partly* ignored — that's why its files were listed one by one — so it holds your tracked

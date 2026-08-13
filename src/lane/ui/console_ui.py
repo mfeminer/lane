@@ -26,7 +26,7 @@ from lane.ui import render, splash
 from lane.ui.checklist import check as check_list
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Row, Summary
+from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Node, Row, Summary
 from lane.ui.splash import Line
 from lane.ui.table import browse as browse_table
 
@@ -104,7 +104,7 @@ class ConsoleUi:
         self,
         title: str,
         columns: Sequence[Column],
-        rows: Callable[[], Sequence[Row[T]]],
+        rows: Callable[[], Sequence[Node[T]]],
         *,
         checked: Iterable[T] = (),
         summary: Summary[T] | None = None,
@@ -113,7 +113,8 @@ class ConsoleUi:
         input: Input | None = None,
         output: Output | None = None,
     ) -> frozenset[T]:
-        """Hand off to the checklist widget. No way-back row to supply: it has none."""
+        """Hand off to the checklist widget. No way-back row to supply: it draws its own,
+        on every level that has one to go back to."""
         return check_list(
             title,
             columns,

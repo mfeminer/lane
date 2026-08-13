@@ -92,20 +92,26 @@ whole mechanism, and it is why almost nothing needs binding:
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
 | `Ctrl-C` | back out |
-| `Space` | tick the row under the cursor — **the checklist only** |
+| `Space` | answer the row under the cursor — **the checklist only** |
 
 **That table is the whole vocabulary**, and the last row is the only key any screen has
 ever been allowed to add. It belongs to `ui/checklist.py`, the screen where every row
-carries a two-state answer, and it was taken deliberately rather than slipped in:
+carries its own answer, and it was taken deliberately rather than slipped in:
 
 - `Space` toggling a multi-select is not this tool's invention — it is what every other
   multi-select in a terminal does — and it is what makes a dozen answers cost a dozen
-  keystrokes instead of a dozen round trips into a sub-screen.
-- **`Enter` there accepts the whole screen** rather than acting on the row, which is the
-  one place in lane it does not mean "act on the row under the cursor". That difference is
-  the reason `Space` had to exist: the previous screen cycled the row with `Enter` and then
-  had no key left to accept with, so it grew a `continue` row to stand in for one.
-- The checklist's footer names both, because a screen that adds a key announces it. The
+  keystrokes instead of a dozen round trips into a sub-screen. On a **folder** row it
+  answers every path beneath it at once, which is what stops two hundred ignored paths
+  being two hundred keystrokes.
+- **`Enter` there opens the folder under the cursor, and anywhere else accepts the level
+  you are standing in** — the root being the screen, and inside a folder being that
+  folder. Opening is `Enter` doing exactly what it does in the lanes table; accepting is
+  the one place in lane it does not mean "act on the row", and it applies where and only
+  where the row has nothing to open. That difference is the reason `Space` had to exist:
+  the previous screen cycled the row with `Enter` and then had no key left to accept
+  with, so it grew a `continue` row to stand in for one.
+- The checklist's footer names both, and names which of `open` / `go up` / `accept`
+  applies to the row under the cursor, because a screen that adds a key announces it. The
   lanes table's footer does not, because it adds none.
 
 One widget, one key. **A new screen still introduces none.** It describes Ctrl-C *at a prompt*; what it
@@ -430,12 +436,15 @@ and the progress indication for a long step ("Fetching origin…") is telling. S
 
 **There are three screen shapes and they answer different kinds of question.** `choose`
 asks one question. `browse` is a screen the user stands in and acts on one row of.
-**`check` is a screen where every row carries its own two-state answer** — which ignored
+**`check` is a screen where every row carries its own answer** — which ignored
 paths come into a lane — so it is a decision over a *set* rather than a question with an
-answer, and it returns everything that was ticked when `Enter` was pressed. It takes the
-same columns and `rows` callable `browse` does, plus what arrives already ticked and an
-optional `summary` for the running count; it has no `back` row, because a checklist has
-nothing to choose between and §2's footer hint is the right amount of visibility.
+answer, and it returns every **leaf** that was in when `Enter` was pressed. It takes the
+same columns `browse` does and a `rows` callable returning a **tree** of them, one level
+per screen, plus what arrives already answered and an optional `summary` for the running
+count. A leaf has two answers; a folder stands for everything under it and has three,
+`◐` being the mix. Its root has no `back` row, because there is nothing above it and §2's
+footer hint is the right amount of visibility — every level inside a folder has one,
+because it has somewhere to go back to.
 
 **`browse` is a screen the user stands in, not a question they are asked** — that
 is the whole difference between it and `choose`. It takes columns and a *callable*
@@ -491,7 +500,11 @@ treatment** — `ui/table.py` and `ui/checklist.py`, below the seam, with
 `tests/test_table.py` and `tests/test_checklist.py` driving them through pipe
 input. The checklist reuses the table's layout (`fit`, `clip`, `window`, `vertical`,
 `row_fragments`) rather than growing a second one, and adds a two-character mark gutter in
-front of every row for the tick. Its layout is a pure `paint(…, width, height)` returning the lines it would
+front of every row for the tick. **The drill-down is the widget's, not the action's**:
+`Walk` holds which level is on screen and where the cursor was parked on the way into
+each, so the seam is called once for the whole tree. Threading "now descend into this
+one" back out through the action would put the widget's own state in the caller's hands,
+which is the shape `Abandoned` exists to avoid. Its layout is a pure `paint(…, width, height)` returning the lines it would
 draw, which is how narrow terminals, scrolling and the panel are asserted without
 one. Session-level tests replace the seam whole and never reach it: a script drives
 "select the second lane, close it" as `FakeUi([1, "close", True])`, matching a row
@@ -570,10 +583,17 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **A folder row is never a step for the folder** — it stands for the paths inside it and
   stores one step each. A partly ignored directory holds tracked work, so a step for the
   directory itself would overwrite it.
-- **A preparation row has exactly two answers, and a folder row is not folded unless its
-  paths agree** — a checkbox has two states, so a folder holding some paths that are in and
-  some that are out is drawn as its own rows rather than made to show a tick that is false
-  for half of it.
+- **A leaf has two answers and a folder has three** — in, out, and `◐` for a mix. A
+  folder is folded whatever its paths were answered, because the mark can now say "some of
+  these"; what it must never do is show a tick that is false for half of what it stands
+  for. This replaced *"a folder is not folded unless its paths agree"*, which was the
+  honest workaround for a mark with two states and which cost the screen its shape: a
+  disagreement opened a folder out into a flat run of rows.
+- **A folder is a screen you go into, and one keystroke on it answers everything under
+  it** — around two hundred ignored paths is a real repository, and choosing among two
+  hundred flat rows is not a screen. The tree comes from grouping discovery's own answer
+  on `/`; a level of fewer than three rows is drawn in its parent rather than behind a
+  keystroke that offers no choice.
 - **One component answers "which paths come into a lane", opened from both doors** —
   entering a lane and settings · preparation call the same `Ui.check` over the same
   `prepare.Sheet`. Two screens that merely resemble each other drift, and these two had:
@@ -612,7 +632,7 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **The lanes screen binds no key the picker does not** — arrows, `Enter`,
   `Ctrl-C`. A letter key for a verb would be this tool's invention, however visible
   the legend.
-- **The table binds exactly the picker's keys** — a screen whose rows carry a two-state
+- **The table binds exactly the picker's keys** — a screen whose rows carry their own
   answer is a different widget, `checklist.py`, and that is where `Space` lives. Asserted on
   both binding tables themselves, because a bound handler that happens to do nothing still
   swallows the keystroke, which is not the same as leaving a key unbound.
@@ -848,10 +868,18 @@ than two.
   and sameness cannot. It had already drifted: entering cycled a row in place while
   settings made you press `Enter`, choose *change*, and pick a verb — three screens to move
   one path, a dozen times over for a dozen paths.
-- **A row is in or out, and there is no third state.** Ticked means the path comes into the
-  lane, unticked means it stays out; both are remembered. Every row starts wherever the
+- **A path is in or out, and there is no third state.** Ticked means the path comes into
+  the lane, unticked means it stays out; both are remembered. Every row starts wherever the
   stored answer left it, and on the screen where a path is first answered that is *out* —
-  so one `Enter` is always safe.
+  so one `Enter` is always safe. **`◐` is not a third answer for a path**: it is a folder
+  row saying that the paths under it were answered differently, and no path is ever stored
+  as anything but in or out.
+- **`Space` on a folder sets every leaf under it to one answer, and a mix goes *in*.** All
+  out becomes all in, all in becomes all out, and a mix becomes all in — because *in* is
+  what somebody reaching for a directory row is after, and because the alternative
+  collapses a mix to *out*, which is the answer that quietly leaves work undone. The mix it
+  replaces is not recoverable, which is why the row's panel says how many it is about to
+  move before the key is pressed.
 - **A ticked path that is already in the lane is left alone rather than overwritten.** The
   checkbox cannot carry this, so it is stated once and holds always — and because it holds
   always, one function (`prepare.needed`) decides what every step does, where there used to
@@ -864,18 +892,27 @@ than two.
   The count is the widget's, because it owns the ticks; the size is the action's, because it
   owns the sizes. Paths already in the lane are left out of the total — a tick on one of
   those does nothing, and counting it would describe work lane is not going to do.
-- **Loose ignored files are grouped by folder**, because `--directory` only collapses a
-  directory git ignores *entirely*: one tracked file in it and every ignored file inside
-  is listed separately. Measured on a four-pattern repository: **55 rows, 40 of them from
-  one `logs/`**. A folder of three or more becomes one row, and **that row is one
-  checkbox**: ticking it means all of them.
-- **A folder is a folder only while its paths agree.** One checkbox has two states, so a
-  directory holding two `.env` files that are in and thirty logs that are out has no honest
-  tick — `prepare.group` does not fold it, and its files are drawn as their own rows. That
-  is what replaced drilling into a folder to answer it file by file: the screen opens it out
-  itself, exactly when opening it out is the only truthful thing to do. On the screen where
-  a path is first answered nothing is ticked, so everything folds; a disagreement can only
-  arrive from answers already on disk.
+- **The rows are a tree, one level of it per screen**, because `--directory` only
+  collapses a directory git ignores *entirely*: one tracked file in it and every ignored
+  file inside is listed separately. Measured on a four-pattern repository: **55 rows, 40 of
+  them from one `logs/`** — and a real monorepo reaches around two hundred, scattered
+  `node_modules`, `dist` and `.env` under package after package. `prepare.tree` groups
+  discovery's own answer on its separators; **no second git call and no walk of its own**.
+  A folder row is entered with `Enter` and answered whole with `Space`.
+- **A level of fewer than three rows is drawn in its parent.** A folder row costs one press
+  to reach the rows inside it, so it has to save more than one row to be worth having: two
+  folded into one is a wash, three saves two (`prepare.GROUP_FROM`). A directory with a
+  single child is the extreme of the same rule — no choice is being offered, so a chain
+  like `apps/web/frontend/node_modules` stays the one row it always was.
+- **The repository root is the one level that folds its own loose files**, into `./`. Every
+  other directory already has a row on the screen above it to be answered from; the root
+  has none, so `./` is the only place its loose files can be answered in one keystroke.
+- **A folder is folded whatever its paths were answered.** A directory holding two `.env`
+  files that are in and thirty logs that are out draws `◐`, which is exactly what it is.
+  This is the one thing the flat screen could not do: a checkbox has two states, so such a
+  folder had to be opened out into its own rows instead — truthful, and the flat run of
+  rows this shape exists to replace. A mix can still only arrive from answers already on
+  disk, since nothing is answered on the screen where a path is first offered.
 - **A folder is presentation, never a step for its directory.** The directory is only
   partly ignored — that is why its files were listed one by one — so it holds tracked work
   too, and cloning it would overwrite that. Ticking a folder stores one step per path.
@@ -1139,8 +1176,16 @@ All of it arrived at test-first:
   listing's `state` cell or the close flow's checks
 - forty loose ignored files in one directory drawing **one** row, answered by one
   keystroke — writing one step per path and never touching the directory, which a tracked
-  file in it proves — and a folder whose remembered answers disagree being drawn as its own
-  rows instead
+  file in it proves — and a folder whose remembered answers disagree keeping that one row
+  and drawing `◐` on it
+- nine ignored paths scattered under three packages opening on **one** row rather than
+  nine, the level below it being the packages rather than their files, and one keystroke
+  at the top of that tree writing nine steps and no step for a directory
+- a chain of directories with a single child collapsing to the one row it was always
+  about, and a level of two rows being drawn in its parent rather than behind a keystroke
+- `Enter` opening the folder under the cursor, `Enter` on a leaf inside one going back up
+  rather than ending the screen, and a level returned to having its rows and its cursor
+  exactly as they were left
 - the branch list merging a branch that is both local and remote into **one** row,
   excluding `origin/HEAD` (which `refname:short` renders as a bare `origin`), and
   putting the most recently committed first

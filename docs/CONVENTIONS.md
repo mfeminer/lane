@@ -74,19 +74,28 @@ have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
 **One screen adds one key, and it is `Space` on the checklist** (`ui/checklist.py`,
-reached through `Ui.check`). It is the screen where every row carries a two-state answer —
+reached through `Ui.check`). It is the screen where every row carries its own answer —
 which ignored paths come into a lane — and it spends the vocabulary budget deliberately
 rather than by accident:
 
-- `Space` toggles the row under the cursor. It is the universal multi-select convention,
+- `Space` answers the row under the cursor. It is the universal multi-select convention,
   it is what makes a dozen answers a dozen keystrokes, and the alternative — `Enter`
   cycling the row in place — is what this screen replaced, because it left the screen with
-  no key to *accept* with and forced a `continue` row to stand in for one.
-- `Enter` accepts the whole screen. **This is the one place `Enter` does not act on the
-  row under the cursor**, and the difference is the point: there is nothing to act on, the
-  row's answer is `Space`'s job. A screen where `Enter` meant both would need a third key.
-- The footer names both, because a screen that adds a key announces it (`checklist.HINT`).
-  The lanes table's footer does not, because the table adds none.
+  no key to *accept* with and forced a `continue` row to stand in for one. On a **folder**
+  row it answers every path beneath it at once, which is the whole point of the folder.
+- **`Enter` opens the row if it opens, and otherwise accepts the level you are standing
+  in.** A folder is a screen you go into, so `Enter` on one acts on the row exactly as it
+  does in the lanes table; on a leaf there is nothing to act on — the row's answer is
+  `Space`'s job — so it accepts, which at the root is the screen and inside a folder is
+  that folder. **This is still the one place `Enter` can mean "accept" rather than "act on
+  the row"**, and it is the same exception as before rather than a second one: it applies
+  where and only where the row has nothing to open. A screen where `Enter` both answered
+  the row *and* accepted would need a third key; this one needs none.
+- The footer names both, because a screen that adds a key announces it (`checklist.HINT`,
+  `checklist.hints()`) — and it names whichever of `open` / `go up` / `accept` `Enter`
+  will actually do to the row under the cursor, since that is the one thing about this
+  screen a footer could otherwise only half-say. The lanes table's footer names nothing,
+  because the table adds no key and `Enter` there always means the same thing.
 
 That is the whole exception, and it is one widget wide. **A new screen still introduces no
 key**; if it seems to need one, that is a decision for the maintainer, made in the open
@@ -114,7 +123,8 @@ The set, and only meaning each one carries:
 
 | Symbol | Means | Where |
 |---|---|---|
-| `✓` | this step or lane-fact succeeded / is fine; **and** this checklist row is *in* | `ui.ok`, table `✓ merged`, `checklist.py` |
+| `✓` | this step or lane-fact succeeded / is fine; **and** this checklist row is *in* — a leaf, or every path under a folder | `ui.ok`, table `✓ merged`, `checklist.py` |
+| `◐` | **some** of what this checklist row stands for is in and some is out | `checklist.py`, folder rows only |
 | `!` | worth your attention, not yet blocking or already handled | `ui.warn` |
 | `✗` | refused / failed | `ui.error` |
 | `●` | count of uncommitted/untracked files | table `state` cell |
@@ -128,10 +138,22 @@ chosen over inventing one (`[x]`, `●`, `▸`) because the set is small on purp
 because the two meanings never appear on the same screen. Colour is not what says it: the
 tick's presence is (§6).
 
-**`←` marks going back, not going on.** The checklist has no `←` row at all, and no
+**`◐` is the one symbol this set has gained, and a folder row is the whole reason.** A
+leaf has two answers and the pair `✓`/blank says both. A folder stands for every path
+beneath it, which can be all in, all out **or a mix** — and both existing marks already
+mean *all of them*, so a mix forced into either is a row that lies about paths not on
+screen. `✗` was never a candidate: it means refused/failed everywhere else in lane, and
+one symbol carries one meaning. *Out* still gets no glyph of its own — it is the absence
+of a mark, which is what it always was. Colour decorates `◐`; the glyph is what says it
+(§6), and the row's panel says it again in words.
+
+**`←` marks going back, not going on.** The checklist's **root** has no `←` row and no
 forward row either — `Enter` is the accept and `Ctrl-C` the way out, both named in the
 footer, which is what §2 already prescribes for a prompt whose only exit is a keystroke.
-Where a screen does need a trailing row, `←` is for the one that leaves *backwards*.
+A level **inside a folder** does have one, `← Back`, because unlike the root it has
+somewhere to go back *to*: one step back, so the plain label, exactly as every `choose`
+prompt uses it. Where a screen does need a trailing row, `←` is for the one that leaves
+*backwards*.
 
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
@@ -326,11 +348,13 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
 - **A column that answers the screen's own reason for existing is never dropped and
   never truncated, at any width the screen actually promises to support.** This is
   the stated invariant for the lanes table's `state`/`pr` (ADR 0002). On the checklist it
-  is the **tick**, which is a gutter rather than a column and so cannot be dropped at all.
-  What gives way there, in order: `in lane` (the cursor panel says the same thing in
-  words, so nothing is lost that cannot be got back), then `size` (which nothing repeats),
-  then the path truncates. **The footer degrades too rather than being clipped** — a way
-  out cut to `ctr…` is not a visible way out, so `checklist.HINTS` gives up the arrows,
+  is the **mark** (`✓`/`◐`/blank), which is a gutter rather than a column and so cannot be
+  dropped at all. What gives way there, in order: `in lane` (the cursor panel says the same
+  thing in words, so nothing is lost that cannot be got back), then `size` (which nothing
+  repeats), then the dim `Cell.lead` — which on a level inside a folder is the directory
+  every row on it shares and therefore identifies nothing — then the path truncates.
+  **The footer degrades too rather than being clipped** — a way
+  out cut to `ctr…` is not a visible way out, so `checklist.hints()` gives up the arrows,
   then what each key does, and never `ctrl-c back out`. **Built —
   Phase L, box L7, decision: abbreviate `state` before `pr` is ever endangered.**
   `Cell` (`seam.py`) gained a `short` field; `table.py`'s `_fit()` switches every
@@ -368,7 +392,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
 | What lane does to a path | the **verb** — `clone`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`); `link`, which was a verb and is not any more |
 | A path's answer, as the user sees it | **in** / **out** (of the lane) | on/off, included/excluded, yes/no, selected |
-| Several loose ignored files under one directory, shown as one row | a **folder** (of files) | group (used in the source for the type, not on screen), bundle, batch |
+| Ignored paths under one directory, shown as one row you can go into | a **folder** (of paths) | group (used in the source for the type, not on screen), bundle, batch, directory (git's word for the thing on disk, not for the row) |
+| A folder row whose paths are not all answered the same way | **mixed** (`◐`) | partial, some, indeterminate, half |
 | A path already in the lane, which a tick therefore leaves alone | **already there** | present, exists, installed |
 | The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
 | A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
@@ -385,9 +410,13 @@ the reason it always did — AGENTS.md calls `enter` and `close` "the two verbs"
 screen offers, and `action` would collide with the only other thing in the application that
 word names.
 
-**`mixed` is gone with it.** A folder whose files were answered differently used to read
-`mixed`; a checkbox has two states and cannot say that, so such a folder is not folded into
-one row at all — it is drawn as its own rows, which is truthful without a third word.
+**`mixed` is back, and it is a mark rather than a word.** A folder whose paths were
+answered differently once read `mixed` in a verb column; then the verb column went and a
+checkbox, having two states, could not say it — so such a folder was not folded into one
+row at all, and was drawn as its own rows instead. That was truthful and it was also the
+flat screen this drill-down replaced. `◐` says it in the gutter where the answer already
+lives, so the folder keeps its row and the word stays out of the columns: on screen the
+mix is a mark, and `mixed` is what to call it in prose, a commit message or a comment.
 
 If a new screen needs a term not in this table, add it here in the same change —
 this table is the thing to grep before reaching for a synonym.

@@ -12,11 +12,14 @@ two things:
 
 Neither is a difference in behaviour, and neither is allowed to become one.
 
-**A row is in or out.** Ticked means the path comes into the lane, unticked means it
-stays out; both are remembered, and every row starts wherever the stored answer left
-it. There is no third state, which is what makes a folder of loose files a single
-checkbox — and what makes a folder whose paths *disagree* get opened out into its own
-rows instead of being made to lie (see `prepare.group`).
+**A leaf is in or out.** Ticked means the path comes into the lane, unticked means it
+stays out; both are remembered, and every row starts wherever the stored answer left it.
+
+**A folder row is not a leaf, and it has three answers rather than two** — everything
+under it in, everything out, or a mix (`◐`). It is also a screen you can go into, one
+level of the tree per screen, because two hundred ignored paths drawn flat is not a
+screen (see `prepare.tree`). What it is *not*, at any depth, is a step for its own
+directory: it stands for the leaves beneath it and stores one step each.
 """
 
 from __future__ import annotations
@@ -26,8 +29,8 @@ from collections.abc import Callable, Container, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from lane.prepare import Candidate, Group, Item, Step, Verb, apply, group
-from lane.ui.seam import Cell, Column, Row
+from lane.prepare import Candidate, Group, Item, Step, Verb, apply, tree
+from lane.ui.seam import Cell, Column, Node, Row
 
 MEASURING = Cell("measuring…", tone="dim")
 ALREADY_THERE = "already there"
@@ -87,20 +90,38 @@ class Sheet:
             columns.append(Column("in lane", drop=2))
         return tuple(columns)
 
-    def rows(self) -> list[Row[Item]]:
+    def rows(self) -> list[Node[Item]]:
         with self._lock:
-            return [self._row(item) for item in self.items]
+            return [self._node(item, "") for item in self.items]
 
     @property
     def checked(self) -> frozenset[Item]:
-        """What arrives already answered — every row whose paths are all in."""
-        return frozenset(
-            item for item in self.items if all(self._is_inside(one) for one in _within(item))
-        )
+        """What arrives already answered — every **leaf** that is in.
 
-    def _row(self, item: Item) -> Row[Item]:
+        Only leaves: a folder's mark is worked out from what is under it, which is what
+        lets a folder whose paths disagree draw `◐` instead of being opened out into its
+        own rows to avoid a tick that would be false for half of it.
+        """
+        return frozenset(one for one in self.candidates if self._is_inside(one))
+
+    def _node(self, item: Item, within: str) -> Node[Item]:
+        """One row, and the level it opens on where it has one.
+
+        `within` is the directory this row is being drawn *inside*, which the row does
+        not have to repeat: it goes in the dim `Cell.lead` the lanes table already uses
+        for a project name repeated down a column, and is the first thing a narrow
+        terminal drops.
+        """
+        row = self._row(item, within)
+        if isinstance(item, Group):
+            inside = f"{item.directory}/" if item.directory else ""
+            return Node(row=row, children=tuple(self._node(one, inside) for one in item.items))
+        return Node(row=row)
+
+    def _row(self, item: Item, within: str = "") -> Row[Item]:
+        lead = f"{item.project}/" if self._lead else ""
         cells = [
-            Cell(item.label, lead=f"{item.project}/" if self._lead else ""),
+            Cell(item.label.removeprefix(within), lead=lead + within),
             self._size_cell(_within(item)),
         ]
         if self._lane:
@@ -119,7 +140,8 @@ class Sheet:
     def _detail(self, item: Item) -> tuple[str, ...]:
         lines: list[str] = []
         if isinstance(item, Group):
-            lines.append(f"{len(item.candidates)} ignored files, answered together.")
+            count = len(item.candidates)
+            lines.append(f"Enter opens it · space brings all {count} in, or takes all {count} out.")
         already = [one for one in _within(item) if one.present]
         if already and self._lane:
             lines.append(_left_alone(len(already), len(_within(item))))
@@ -187,15 +209,15 @@ class Sheet:
 
     # -- internals -----------------------------------------------------------
     def _group(self) -> tuple[Item, ...]:
-        """Fold each project's loose files separately: two projects both having a `logs/`
-        is one folder each, never one row spanning both."""
+        """A tree per project: two projects both having a `logs/` is one folder each,
+        never one row spanning both. Settings leads every row with its project, which is
+        what keeps the two apart on a screen showing several."""
         by_project: dict[str, list[Candidate]] = {}
         for candidate in self.candidates:
             by_project.setdefault(candidate.project, []).append(candidate)
         items: list[Item] = []
         for found in by_project.values():
-            inside = frozenset(one.path for one in found if self._is_inside(one))
-            items.extend(group(found, checked=inside))
+            items.extend(tree(found))
         return tuple(items)
 
     def _is_inside(self, candidate: Candidate) -> bool:

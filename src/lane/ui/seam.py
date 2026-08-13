@@ -81,6 +81,30 @@ class Row[T]:
     """Shown under the table while the cursor is on this row, and nowhere else."""
 
 
+@dataclass(frozen=True, slots=True)
+class Node[T]:
+    """One row of a checklist, and whatever it stands for.
+
+    A **leaf** has no children: it is one thing, with one two-state answer, and its
+    `value` is what comes back when the screen is accepted. A node **with** children is
+    a folder: a row you can go into, standing for every leaf beneath it however deep —
+    which is three answers rather than two, all in, all out or a mix.
+
+    The tree is the caller's; one level of it is a screen. Nothing about what the
+    answers *mean* lives here, exactly as with `Row`.
+    """
+
+    row: Row[T]
+    children: tuple[Node[T], ...] = ()
+
+    @property
+    def leaves(self) -> tuple[T, ...]:
+        """Every value beneath this row — what one keystroke on it answers."""
+        if not self.children:
+            return (self.row.value,)
+        return tuple(value for child in self.children for value in child.leaves)
+
+
 type Fill = Callable[[Callable[[], None]], None]
 """Fill in the cells that are slow to know, calling `notify` as each one lands.
 
@@ -155,31 +179,35 @@ class Ui(Protocol):
         self,
         title: str,
         columns: Sequence[Column],
-        rows: Callable[[], Sequence[Row[T]]],
+        rows: Callable[[], Sequence[Node[T]]],
         *,
         checked: Iterable[T] = (),
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
         on_render: Callable[[str], None] | None = None,
     ) -> frozenset[T]:
-        """Every row in or out, changed under the cursor: what was ticked on `Enter`.
+        """Every row in or out, changed under the cursor: what was in on `Enter`.
 
         The third screen shape, and the one for a decision taken over a *set*: `choose`
         asks one question, `browse` is a screen you stand in and act on one row of, and
-        this is a screen where every row carries its own two-state answer and one
+        this is a screen you stand in where every row carries its own answer and one
         keystroke changes it.
 
-        `Space` toggles the row under the cursor and `Enter` accepts the whole screen —
-        which is what makes a dozen answers a dozen keystrokes and one more, and it is
-        the only place in lane where `Enter` does not act on the row. Both were decided
+        `rows` is a **tree**, one level of it per screen, because two hundred ignored
+        paths drawn flat is not a screen. A `Node` with no children is a leaf and has the
+        two answers it always had; one with children is a folder standing for every leaf
+        beneath it, so it has three — all in, all out, or a mix — and only leaves are ever
+        returned. `Space` answers the row under the cursor, a folder and all of it at
+        once; `Enter` opens the folder under the cursor, and anywhere else accepts the
+        level you are standing in, which at the root is the screen. Both were decided
         deliberately; see `checklist.py`.
 
         `checked` is what arrives already answered, so settings can open the same screen
         over decisions made months ago and show them as they stand.
 
-        There is no `back` row: a checklist has nothing to choose between, so the way out
-        is the footer hint, exactly as `text` and `confirm` do it. `Ctrl-C` raises
-        `Abandoned` as everywhere else.
+        The root has no `back` row: it is the level with nothing above it, so the way out
+        is the footer hint, exactly as `text` and `confirm` do it. Every level inside a
+        folder has one. `Ctrl-C` raises `Abandoned` as everywhere else.
         """
         ...
 
