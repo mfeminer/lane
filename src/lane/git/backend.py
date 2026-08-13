@@ -38,6 +38,29 @@ class FetchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BranchRef:
+    """One branch a lane could be opened on, wherever it lives.
+
+    Local and remote are two places one branch can be, not two branches: a branch in
+    both is a single row, because the local ref is the one that gets checked out and
+    offering it twice would be offering the same answer twice.
+    """
+
+    name: str
+    """Never prefixed with the remote — `feature/thing`, not `origin/feature/thing`."""
+
+    local: bool
+    remote: bool
+    committed: int
+    """When its tip was committed, as a unix timestamp. 0 when it could not be read."""
+
+    @property
+    def remote_only(self) -> bool:
+        """Checking this out means creating a local branch that tracks the remote."""
+        return self.remote and not self.local
+
+
+@dataclass(frozen=True, slots=True)
 class WorktreeStatus:
     """Everything the listing and the close checks need about one lane.
 
@@ -136,6 +159,25 @@ class GitBackend(Protocol):
 
     def branch_exists(self, repo: Path, branch: str) -> bool: ...
 
+    def list_branches(self, repo: Path, remote: str = "origin") -> list[BranchRef]:
+        """Every branch a lane could be opened on, most recently committed first.
+
+        Local and `<remote>`'s branches merged into one row per name. Ordering is
+        what makes a several-hundred-branch list usable at all — the branch being
+        picked up is one somebody committed to recently — so it is part of the
+        contract rather than left to git's alphabetical default.
+        """
+        ...
+
+    def checkouts(self, repo: Path) -> dict[str, Path]:
+        """Which branch each worktree has checked out, the main clone included.
+
+        git refuses to check a branch out twice, so this is what lets lane say
+        *which* lane is holding one before git has to say it cannot. A detached
+        worktree holds no branch and so appears nowhere here.
+        """
+        ...
+
     def branch_merged(self, repo: Path, branch: str, base: str) -> bool:
         """Whether every commit on `branch` is already in `origin/<base>`.
 
@@ -212,6 +254,20 @@ class GitBackend(Protocol):
 
     def add_worktree_existing_branch(self, repo: Path, path: Path, branch: str) -> None: ...
 
+    def add_worktree_tracking_branch(
+        self, repo: Path, path: Path, branch: str, start_point: str
+    ) -> None:
+        """Create a local branch on a remote one, **tracking it**.
+
+        The other half of the upstream invariant, and the reason it is stated as *a
+        lane's branch never tracks anything but itself*: a branch lane creates gets
+        no upstream because the only candidate would be `origin/<base>`, and a bare
+        push would then land on the default branch. A branch adopted from the remote
+        tracks `origin/<itself>` — expected, what makes its unpushed count a real
+        measurement, and unable to reach the default branch because it is not it.
+        """
+        ...
+
     def add_worktree_detached(self, repo: Path, path: Path, start_point: str) -> None: ...
 
     def remove_worktree(self, repo: Path, path: Path, *, force: bool = False) -> None:
@@ -237,3 +293,14 @@ class GitBackend(Protocol):
         ...
 
     def head_commit(self, worktree: Path) -> str: ...
+
+    def merge_base(self, worktree: Path, left: str, right: str) -> str | None:
+        """Where two refs parted company, or None when one of them is not here.
+
+        This is a lane's starting commit: everything after it on HEAD is the
+        branch's own work, everything before it belongs to the base. For a branch
+        lane created there is nothing after it — the merge base *is* the head commit
+        — which is what makes one rule cover a lane that made its branch and a lane
+        that adopted one carrying weeks of somebody else's commits.
+        """
+        ...

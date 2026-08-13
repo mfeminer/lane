@@ -27,7 +27,7 @@ under it:
                     …the splash, and under it…
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  ❯ open        Open a new lane: pick a project, describe the task, start editing
+  ❯ open        New work, or a branch that already exists — your editor opens in it
     lanes       Every open lane, where it stands, and what to do with it
     settings    Configure lane
     doctor      Check git, gh, the editor and your paths
@@ -91,14 +91,23 @@ lane needs a terminal. Piped or redirected, it says so and exits non-zero —
 
 ## Opening a lane
 
-lane asks for everything up front, then creates the worktree:
+lane asks for everything up front, then creates the worktree. After the project it
+asks **what the lane is for**, and the two answers lead different ways:
 
 1. **Which project** — the last one you used is offered first.
-2. **What you're working on** — one line, in whatever language you think in. The
+2. **What is this lane for?**
+
+   - **new work** — you're starting something.
+   - **existing branch** — you're picking one up: a colleague pushed it, you
+     abandoned it a fortnight ago, or you want to read a pull request locally.
+
+### New work
+
+3. **What you're working on** — one line, in whatever language you think in. The
    lane name is derived from it and is always plain ASCII, capped at 40
    characters: `Login sayfası hatası` → `login-sayfasi-hatasi`.
-3. It fetches `origin` and works out the default branch.
-4. **How the lane should start:**
+4. It fetches `origin` and works out the default branch.
+5. **How the lane should start:**
 
    - **branch** — pick the name right there. You get `feature/`, `bugfix/`,
      `hotfix/`, `chore/`, `refactor/`, `docs/`, the bare lane name, or *other…* to
@@ -112,16 +121,67 @@ lane asks for everything up front, then creates the worktree:
    machine, so this lane can be `bugfix/…` while the next is `feature/…`. There's no
    global setting for it.
 
+### An existing branch
+
+lane fetches with `--prune` — so it isn't offering you branches that were deleted on
+the remote weeks ago — and then shows you every branch, local and on `origin`, one
+row each, **most recently committed first**:
+
+```
+  312 branches in Acme.Widgets
+
+  branch                            state                          age
+❯ feature/export-csv                                               today
+  chore/bump-dependencies           in lane Acme.Widgets/bump-deps  yesterday
+  feature/colleague-review          origin only                    2 days ago
+  main                              in the main clone              today
+  ← Back
+```
+
+The `state` column is the one that matters, because **git will not check a branch
+out twice**:
+
+| It says | What it means |
+|---|---|
+| *(nothing)* | yours to take |
+| `origin only` | you've never had it locally; lane creates the branch, tracking `origin/<it>` |
+| `in the main clone` | your main checkout has it — almost always the default branch |
+| `in lane <project>/<lane>` | another lane has it open |
+| `in another worktree` | a worktree that isn't lane's has it; the refusal names the path |
+
+Branches you can't take are **shown, not hidden**. A row that isn't there can't tell
+you why it isn't there, and the branch you're looking for is very often exactly the
+one another lane already has. Choose one and lane refuses with the reason — and for
+a branch held by a lane, it offers to **enter that lane instead**, which is usually
+what you wanted anyway. Say no and you're back on the list where you left the cursor.
+
+Then lane offers a **lane name**, derived from the branch, for you to edit:
+
+```
+Lane name [bugfix-a-long-branch-name-somebody-el]: _
+```
+
+It's offered rather than just used because the branch was named by somebody else for
+another purpose — so the 40-character cap cuts it somewhere nobody chose — and
+because the lane name is a directory you're about to live in. If a lane of that name
+is already open, lane says so and asks again. The prefix isn't stripped: it would
+save about seven characters and make `feature/x` and `bugfix/x` collide into one
+directory.
+
+There's no **detached** here. An existing branch is the opposite of detached.
+
 > **Why can't a lane just check out `main`?** Because your main clone already has it
 > checked out, and git refuses to have one branch in two worktrees. Detached mode is
 > the closest equivalent: identical content, no branch.
 
-Then the worktree appears at `<lanes root>/<project>/<lane>` and your editor opens
-in it.
+Either way, the worktree then appears at `<lanes root>/<project>/<lane>` and your
+editor opens in it.
 
-### New branches have no upstream, deliberately
+### What a lane's branch tracks
 
-A lane's branch is created with `--no-track`. That means a bare `git push` inside a
+**A lane's branch never tracks anything but itself.**
+
+A branch lane **creates** is made with `--no-track`, so a bare `git push` inside a
 lane **cannot** land on your default branch by accident. The first time you push:
 
 ```bash
@@ -129,6 +189,12 @@ git push -u origin <branch>
 ```
 
 lane reminds you of this when it opens the lane.
+
+A branch lane **adopts** from `origin` tracks `origin/<itself>`, which is what you'd
+expect and what makes the `↑ N unpushed` count in the listing a real measurement
+against a real remote branch. It can't reach your default branch either — it isn't
+your default branch. And an adopted branch that was already local keeps whatever
+upstream it already had; lane never gives it one it didn't have.
 
 ### Where the lane's notes live
 
@@ -558,6 +624,12 @@ When there's **no** evidence it landed, deleting could lose work, so lane asks:
 ```
 
 Decline and the branch is kept, with the exact command to remove it later.
+
+**A branch your lane adopted rather than created is treated the same way**, and
+that's deliberate: only the *local* branch is deleted and the one on `origin` is
+never touched, so a branch you picked up from the remote is a `git fetch` away from
+being back. Where nothing demonstrably landed — a purely local branch you took over,
+say — you get the same question above before anything goes.
 
 ### What protects your work
 

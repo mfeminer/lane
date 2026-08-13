@@ -529,8 +529,15 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **A folder row is never a step for the folder** — it stands for the paths inside it and
   stores one step each. A partly ignored directory holds tracked work, so a step for the
   directory itself would overwrite it.
-- **New branches are created with no upstream** — so a bare `git push` inside a
-  lane can never land on the default branch.
+- **A lane's branch never tracks anything but itself** — a branch lane *creates*
+  gets no upstream, because the only candidate would be `origin/<base>` and a bare
+  `git push` would then land on the default branch; a branch lane *adopts* from the
+  remote tracks `origin/<itself>`, which is what the user expects and what makes its
+  unpushed count a real measurement rather than a fallback count against the base.
+  This invariant used to read "new branches are created with no upstream", which
+  named the mechanism rather than the hazard — and the hazard is tracking the
+  **base**, not tracking at all. An adopted branch cannot reach the default branch,
+  because it is not the default branch.
 - **Commits on a detached HEAD are parked on `wip/<lane>` before removal, and that
   branch is never deleted** — deleting it would defeat the entire purpose of the
   rescue.
@@ -587,13 +594,24 @@ These must never regress. Each is one line of behaviour and one line of why.
   merged tells the user their work landed when it never existed. A `MERGED` pull
   request counts as reaching the base, in the listing as well as in the close flow;
   `has_own_commits` still gates it, so this cannot resurrect the vacuous case.
-- **The lane's starting commit is recorded in its metadata** — it is the only thing
-  that distinguishes "has done no work" from "work has landed"; both leave nothing
-  ahead of `origin/<base>`.
+- **The lane's starting commit is recorded in its metadata, and it is
+  `merge-base(HEAD, origin/<base>)`** — it is the only thing that distinguishes "has
+  done no work" from "work has landed"; both leave nothing ahead of `origin/<base>`.
+  It is **not** "when did this lane begin": it is *the commit from which everything
+  on HEAD is this branch's own work*. For a branch lane created at `origin/<base>`
+  those are the same commit, so this is the value lane has always recorded — one
+  rule, no branching on how the lane started. For a branch lane adopted, only the
+  merge base is right: recording the tip would make the listing say `no commits yet`
+  about a branch full of unmerged work, and make the close flow file "no commits of
+  its own — nothing to merge" as a *clean note* directly above the confirmation that
+  deletes them.
 - **Path identity is asked of the filesystem, never compared as strings** —
   `samefile`, not `resolve() == resolve()`. macOS and Windows are case-insensitive,
   so `/users/me/projects` and `/Users/me/Projects` are one directory while their
-  resolved strings differ; comparing strings once made every project vanish.
+  resolved strings differ; comparing strings once made every project vanish. It lives
+  in **`lane/paths.py`**, once: the backend compares what git reports against what
+  the user configured, and `open`'s branch list matches a worktree path to a lane, so
+  a private copy each would be two places for one invariant to be got wrong.
 - **`find_nested_repository` and `list_projects` use the same definition of
   "repository"** — when they disagreed, lane reported "no projects here" and then
   suggested a folder that had none either.
@@ -604,6 +622,12 @@ These must never regress. Each is one line of behaviour and one line of why.
   abandoning a clean no-op and rollback logic unnecessary.
 - **Branch deletion on close applies to the lane's own branches** — never the base
   branch, however often it was visited, and a detached lane has none of its own.
+  **A lane that adopted an existing branch is not an exception**, and this was
+  decided rather than inherited: closing deletes the *local* branch only, the remote
+  one is never touched, and where nothing demonstrably landed git's own unmerged
+  refusal still turns into the force-delete question. So a branch you merely
+  borrowed is either safely reproducible from `origin` or is one you were asked
+  about — which is the same protection every other branch gets, for the same reason.
 - **Closing a lane deletes its local branch** — leaving it behind is how a
   repository fills with dead branches, one per lane ever closed. The summary states
   it before the user confirms. Where the work demonstrably landed (git's ancestry
@@ -670,14 +694,60 @@ config file. Adding to that file is not a new configuration key and does not nee
 asking; it is also disposable, so lane must behave correctly when it is missing or
 corrupt. **Adding a new _configuration_ key does need asking.**
 
-**Opening a lane** — pick a project from `<projects_root>/<project>/.git`, take a
-one-line task description, derive the lane name from it, fetch origin, resolve the
-default branch, then ask for the mode. Branch mode offers `feature/`, `bugfix/`,
-`hotfix/`, `chore/`, `refactor/`, `docs/`, the bare lane name, and a free-text
-option. Detached mode sits at `origin/<default>` with no branch. Lane metadata —
-description, base branch, created timestamp, repo path — lives **outside the
-worktree** so it cannot dirty it (`<lanes_root>/<project>/.lane/<lane>`). Then
-launch the editor.
+**Opening a lane** — pick a project from `<projects_root>/<project>/.git`, then
+**one question with two answers**, and the flows diverge. Lane metadata —
+description, base branch, created timestamp, repo path, starting commit — lives
+**outside the worktree** so it cannot dirty it
+(`<lanes_root>/<project>/.lane/<lane>`), and either path ends by entering the lane.
+
+- **new work** — take a one-line task description, derive the lane name from it,
+  fetch origin, resolve the default branch, then ask for the mode. Branch mode
+  offers `feature/`, `bugfix/`, `hotfix/`, `chore/`, `refactor/`, `docs/`, the bare
+  lane name, and a free-text option. Detached mode sits at `origin/<default>` with
+  no branch.
+- **existing branch** — fetch with `--prune`, then pick from every local and
+  `origin` branch, merged one row per name. **Detached is not offered here**: an
+  existing branch is the opposite of detached.
+
+*Not everything a lane is opened for is new.* Picking up a branch a colleague
+pushed, coming back to something abandoned, reviewing a pull request locally — all
+of them start from a branch that already exists, and doing it by hand left the
+metadata describing something the lane is not. What the second path settles:
+
+- **Unavailable branches are shown, and refused when chosen** — never hidden, per
+  the rule that prerequisites are enforced where they are used. A row that is not
+  there cannot explain why it is not there, and the default branch (always held by
+  the main clone) plus every branch another lane has open is most of the interesting
+  list. The `state` cell says which, in words. A branch held by a lane **offers to
+  enter that lane instead**, because lane knows which one it is and that is a better
+  answer than an error.
+- **It is a `browse`, not a `choose`, and that was measured** — `picker.pick` draws
+  every option into one window with no scrolling of its own, so 300 branches is
+  **304 lines** with the cursor walking off the bottom of the terminal;
+  `table.paint` windows the same list and footers `1–19 of 300`. Ordered
+  most-recently-committed first, which is what puts the real answer in the first
+  screenful. **No filtering and no cap**: typing-to-narrow changes what every
+  printable key means inside a picker and is a decision for the maintainer, not a
+  convenience to slip in; a silent cap would read as "this is all there is".
+- **The lane name is `slugify(branch)`, shown for editing** — the branch was named
+  by somebody else for another purpose, so the forty-character cap cuts it in a
+  place nobody chose, and the name is a directory the user will live in. It is also
+  the only place a collision can be resolved: unlike a description, a branch name
+  cannot be reworded, so the prompt re-asks rather than refusing outright. **The
+  prefix is not stripped** — it would buy about seven characters of the cap and cost
+  a whole class of collision, since `feature/x` and `bugfix/x` both reduce to `x`
+  and a lane name is a directory name.
+- **The branch is the description.** The user typed nothing, and the branch is what
+  they chose. The listing's panel drops a description line that repeats the *branch*
+  line as well as one that repeats the name — the same rule, reaching a case it had
+  never met.
+- **Which worktree holds a branch is matched to a lane with `samefile`**, never as
+  strings — `git worktree list` reports the case on disk while a lanes root keeps
+  whichever case was typed. This is the invariant whose breach once made every
+  project vanish. The three ways a branch can be taken — a lane, the main clone, some
+  other worktree — are told apart by **asking, not by elimination**: not every
+  worktree is one of lane's, so "it is not a lane" does not mean "it is the main
+  clone", and naming the wrong place sends the user to look in it.
 
 **Preparing a lane** — a lane is a fresh checkout, so **everything `.gitignore` covers
 is missing from it**: dependency trees have to be rebuilt, and an ignored `.env` cannot
@@ -979,6 +1049,23 @@ All of it arrived at test-first:
 - forty loose ignored files in one directory drawing **one** row, answerable in one go or
   file by file — and a folder answered in one go writing one step per path and never
   touching the directory, which a tracked file in it proves
+- the branch list merging a branch that is both local and remote into **one** row,
+  excluding `origin/HEAD` (which `refname:short` renders as a bare `origin`), and
+  putting the most recently committed first
+- a branch that exists only on the remote adopted into a lane whose branch then
+  tracks `origin/<it>`, while an adopted **local** branch keeps whatever upstream it
+  already had and is never given one it did not
+- a branch checked out in the main clone **shown** and refused with the reason and
+  the path; one held by another lane naming that lane and offering to enter it, with
+  declining returning to the list rather than leaving the screen
+- the derived lane name offered with the branch's slug as its default, and a branch
+  slugging to an open lane's name re-asking rather than aborting
+- the starting commit of an adopted branch being the merge base, so a branch
+  carrying somebody else's unmerged commits reads `not merged yet` and never
+  `no commits yet` — and the starting commit of a new branch being unchanged, which
+  is what makes it one rule
+- the branch table surviving 40 columns with `state` intact, and an adopted lane's
+  panel drawing its branch once rather than twice
 
 ## Where things stand
 

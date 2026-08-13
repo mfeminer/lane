@@ -12,10 +12,15 @@ a gap: raise it rather than guessing, and add the answer here once it's settled.
 
 - **Every action-level screen opens with `ui.heading`, once, naming the screen**:
   `"lane doctor"`, `"lane settings"`, `"Closing <lane>"`. The
-  lanes table is the one exception, and it's deliberate: its title *answers* "what
+  lanes table is the original exception, and it's deliberate: its title *answers* "what
   am I looking at" (`"3 open lanes in demo"`) rather than repeating the word "lanes"
   — see ADR 0002. A new screen gets a heading unless it is, like the table, a screen
-  whose title can say something more useful than its own name.
+  whose title can say something more useful than its own name. **The branch list —
+  `open`'s second path — is the second such screen**, and it takes the exception on
+  exactly those terms: `"312 branches in Acme.Widgets"` answers what you are looking
+  at, and a `lane branches` heading above it would be the repetition this rule
+  exists to stop. Two screens is not a pattern to spread; a third needs the same
+  argument made again.
 - **One blank line between logical groups of output, none within a group.** A
   "group" is: the heading and its immediate context; each self-contained check or
   question; the final outcome. Doctor's tool checks, settings' three questions (no
@@ -331,6 +336,14 @@ One term per concept. The list, and the survivor where two forms were found:
 | What lane does to a path | the **verb** — `clone`, `link`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`) |
 | Several loose ignored files under one directory, shown as one row | a **folder** (of files) | group (used in the source for the type, not on screen), bundle, batch |
 | A folder whose files are not all answered the same way | **mixed** | partial, some, varies |
+| The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
+| A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
+| A branch that came into being with or during the lane | the lane **created** it | own, new, made |
+
+**adopted** and **created** are worth a row each even though nothing on screen says
+either word: they are how AGENTS.md's *"branch deletion applies to the lane's own
+branches"* is now read, and a session reaching for "borrowed" or "reused" in a
+comment would be describing the same distinction in a second vocabulary.
 
 `verb` is the column header on both preparation screens for that last reason. AGENTS.md
 already calls `enter` and `close` "the two verbs" the lanes screen offers, so the word is

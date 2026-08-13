@@ -17,7 +17,8 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from lane.git.backend import FetchResult, GitError, WorktreeStatus
+from lane.git.backend import BranchRef, FetchResult, GitError, WorktreeStatus
+from lane.paths import same_directory
 
 _TIMEOUT = 120
 _FETCH_TIMEOUT = 300
@@ -30,25 +31,6 @@ _FORCED_CONFIG = (
     "core.pager=cat",
     "advice.detachedHead=false",
 )
-
-
-def _same_directory(left: Path, right: Path) -> bool:
-    """Whether two paths are the same directory on disk.
-
-    Not a string comparison, deliberately. macOS and Windows filesystems are
-    case-insensitive, so a user who types `/users/me/projects` reaches the same
-    directory as `/Users/me/Projects` — but `Path.resolve()` keeps whichever case
-    was typed, while `git rev-parse --show-toplevel` reports the case on disk.
-    Comparing those two as strings made every project silently vanish.
-
-    `samefile` asks the filesystem (device and inode), which is immune to case,
-    trailing separators, `.` segments and symlinks alike.
-    """
-    try:
-        return left.samefile(right)
-    except OSError:
-        # One of them stopped existing between the check and here.
-        return False
 
 
 class CliGitBackend:
@@ -137,7 +119,7 @@ class CliGitBackend:
         top = self._line(["rev-parse", "--show-toplevel"], cwd=path)
         if top is None:
             return False
-        return _same_directory(Path(top), path)
+        return same_directory(Path(top), path)
 
     def version(self) -> str | None:
         return self._line(["--version"])
@@ -207,6 +189,84 @@ class CliGitBackend:
             ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
             cwd=repo,
         )
+
+    def list_branches(self, repo: Path, remote: str = "origin") -> list[BranchRef]:
+        """`for-each-ref`, sorted by git and merged by name here.
+
+        `%00` between the fields rather than a tab: a ref name cannot contain a NUL,
+        and `--sort=-committerdate` is git's own ordering rather than one recomputed
+        from a parsed date.
+
+        `refs/remotes/<remote>/HEAD` is a symbolic ref rather than a branch, and
+        `%(refname:short)` renders it as the bare remote name — so without dropping
+        it the list would offer a branch called `origin`.
+        """
+        done = self._run(
+            [
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)%00%(committerdate:unix)%00%(symref)",
+                "refs/heads",
+                f"refs/remotes/{remote}",
+            ],
+            cwd=repo,
+        )
+        if done.returncode != 0:
+            return []
+
+        prefix = f"{remote}/"
+        # Insertion order is git's order, so the merged result keeps it: whichever
+        # of the two refs was committed to most recently decides where it sits.
+        found: dict[str, BranchRef] = {}
+        for line in done.stdout.splitlines():
+            short, _, rest = line.partition("\0")
+            stamp, _, symref = rest.partition("\0")
+            if not short or symref:
+                # A symbolic ref is not a branch. `origin/HEAD` is the one that matters.
+                continue
+            is_remote = short == remote or short.startswith(prefix)
+            name = short.removeprefix(prefix) if is_remote else short
+            if not name or name == "HEAD":
+                continue
+            try:
+                committed = int(stamp)
+            except ValueError:
+                committed = 0
+            existing = found.get(name)
+            if existing is None:
+                found[name] = BranchRef(
+                    name=name, local=not is_remote, remote=is_remote, committed=committed
+                )
+                continue
+            found[name] = BranchRef(
+                name=name,
+                local=existing.local or not is_remote,
+                remote=existing.remote or is_remote,
+                # The first one seen was the more recent, since git sorted them.
+                committed=max(existing.committed, committed),
+            )
+        return list(found.values())
+
+    def checkouts(self, repo: Path) -> dict[str, Path]:
+        """`worktree list --porcelain`: paragraphs of `worktree`/`HEAD`/`branch` lines.
+
+        A detached worktree has no `branch` line and so contributes nothing, which is
+        correct — it is holding a commit, not a branch, and holds nothing against
+        checking that branch out somewhere else.
+        """
+        done = self._run(["worktree", "list", "--porcelain"], cwd=repo)
+        if done.returncode != 0:
+            return {}
+
+        held: dict[str, Path] = {}
+        path: Path | None = None
+        for line in done.stdout.splitlines():
+            keyword, _, value = line.partition(" ")
+            if keyword == "worktree":
+                path = Path(value)
+            elif keyword == "branch" and path is not None:
+                held[value.removeprefix("refs/heads/")] = path
+        return held
 
     # -- fetching ------------------------------------------------------------
     def fetch_prune(self, repo: Path, remote: str = "origin") -> FetchResult:
@@ -411,6 +471,21 @@ class CliGitBackend:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._out(["worktree", "add", str(path), branch], cwd=repo)
 
+    def add_worktree_tracking_branch(
+        self, repo: Path, path: Path, branch: str, start_point: str
+    ) -> None:
+        """`--track`, which is exactly what `--no-track` refuses next door.
+
+        The two are not in tension: `add_worktree_new_branch` withholds the upstream
+        because the only candidate would be the base branch. Here the candidate is
+        the branch itself, which is what the user is picking up.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._out(
+            ["worktree", "add", "--track", "-b", branch, str(path), start_point],
+            cwd=repo,
+        )
+
     def add_worktree_detached(self, repo: Path, path: Path, start_point: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._out(["worktree", "add", "--detach", str(path), start_point], cwd=repo)
@@ -436,3 +511,7 @@ class CliGitBackend:
 
     def head_commit(self, worktree: Path) -> str:
         return self._out(["rev-parse", "HEAD"], cwd=worktree).strip()
+
+    def merge_base(self, worktree: Path, left: str, right: str) -> str | None:
+        """`merge-base`, which exits non-zero when a ref is unknown or unrelated."""
+        return self._line(["merge-base", left, right], cwd=worktree)

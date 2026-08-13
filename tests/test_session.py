@@ -244,6 +244,7 @@ def test_a_whole_working_day_menu_open_menu_close_menu_quit(
             # menu -> open
             "open",
             "thing",  # project
+            "new work",  # not a branch that already exists
             "Fix the CSV export",  # description
             "branch",  # mode
             "bugfix/fix-the-csv-export",  # branch
@@ -294,11 +295,13 @@ def test_two_lanes_run_side_by_side_without_colliding(
         [
             "open",
             "thing",
+            "new work",
             "First job",
             "branch",
             "feature/first-job",
             "open",
             "thing",
+            "new work",
             "Second job",
             "branch",
             "bugfix/second-job",
@@ -376,6 +379,7 @@ def test_a_whole_working_day_with_a_lane_that_needs_preparing(
             # menu -> open, which ends by entering, which prepares
             "open",
             "thing",
+            "new work",
             "Fix the CSV export",
             "branch",
             "bugfix/fix-the-csv-export",
