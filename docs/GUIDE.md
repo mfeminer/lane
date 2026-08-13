@@ -147,6 +147,7 @@ out twice**:
 | `origin only` | you've never had it locally; lane creates the branch, tracking `origin/<it>` |
 | `in the main clone` | your main checkout has it — almost always the default branch |
 | `in lane <project>/<lane>` | another lane has it open |
+| `in another worktree` | a worktree that isn't lane's has it; the refusal names the path |
 
 Branches you can't take are **shown, not hidden**. A row that isn't there can't tell
 you why it isn't there, and the branch you're looking for is very often exactly the

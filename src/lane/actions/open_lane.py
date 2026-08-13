@@ -30,6 +30,7 @@ from lane.context import Context
 from lane.git.backend import BranchRef, GitError
 from lane.lanes import Lane, LaneMeta, LaneStore, age_phrase
 from lane.naming import sanitize_branch, slugify
+from lane.paths import same_directory
 from lane.projects import Project
 from lane.ui.seam import Cell, Choice, Column, Row
 
@@ -225,7 +226,7 @@ def _pick_branch(context: Context, project: Project) -> BranchRef | None:
     lanes = context.lane_store().list_lanes()
 
     def rows() -> list[Row[BranchRef]]:
-        return [_branch_row(branch, held, lanes) for branch in branches]
+        return [_branch_row(branch, project.path, held, lanes) for branch in branches]
 
     count = len(branches)
     title = f"{count} branch{'es' if count != 1 else ''} in {project.name}"
@@ -243,10 +244,12 @@ def _pick_branch(context: Context, project: Project) -> BranchRef | None:
         # is one the user is standing in.
         lane = _lane_at(lanes, holder)
         if lane is None:
-            ui.error(
-                f"'{chosen.name}' is checked out in the main clone, "
-                f"so git cannot check it out again."
+            where = (
+                "in the main clone"
+                if same_directory(holder, project.path)
+                else "in another worktree"
             )
+            ui.error(f"'{chosen.name}' is checked out {where}, so git cannot check it out again.")
             ui.detail(f"  {holder}")
             continue
 
@@ -259,21 +262,32 @@ def _pick_branch(context: Context, project: Project) -> BranchRef | None:
         return None
 
 
-def _branch_row(branch: BranchRef, held: dict[str, Path], lanes: list[Lane]) -> Row[BranchRef]:
+def _branch_row(
+    branch: BranchRef, repo: Path, held: dict[str, Path], lanes: list[Lane]
+) -> Row[BranchRef]:
     return Row(
         value=branch,
-        cells=(Cell(branch.name), _where_cell(branch, held, lanes), _age_cell(branch)),
+        cells=(Cell(branch.name), _where_cell(branch, repo, held, lanes), _age_cell(branch)),
     )
 
 
-def _where_cell(branch: BranchRef, held: dict[str, Path], lanes: list[Lane]) -> Cell:
-    """Can I take this, and what happens if I do — in words, never colour alone."""
+def _where_cell(branch: BranchRef, repo: Path, held: dict[str, Path], lanes: list[Lane]) -> Cell:
+    """Can I take this, and what happens if I do — in words, never colour alone.
+
+    Three ways a branch can be taken, and they are told apart by asking rather than by
+    elimination: not every worktree is one of lane's, so "it is not a lane" is not the
+    same as "it is the main clone" — a user can make one by hand, and a lane removed
+    from underneath git leaves an entry behind until something prunes it. Naming the
+    wrong place sends the user to look in it.
+    """
     holder = held.get(branch.name)
     if holder is not None:
         lane = _lane_at(lanes, holder)
-        if lane is None:
+        if lane is not None:
+            return Cell(f"in lane {lane.slug}", tone="warn", short="a lane")
+        if same_directory(holder, repo):
             return Cell("in the main clone", tone="warn", short="main clone")
-        return Cell(f"in lane {lane.slug}", tone="warn", short="a lane")
+        return Cell("in another worktree", tone="warn", short="a worktree")
     if branch.remote_only:
         # Not unavailable — taking it creates a local branch that tracks the remote.
         return Cell("origin only", tone="dim", short="origin")
@@ -295,11 +309,8 @@ def _lane_at(lanes: list[Lane], path: Path) -> Lane | None:
     comparing those two as strings once made every project vanish.
     """
     for lane in lanes:
-        try:
-            if lane.path.samefile(path):
-                return lane
-        except OSError:
-            continue
+        if same_directory(lane.path, path):
+            return lane
     return None
 
 

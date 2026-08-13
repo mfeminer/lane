@@ -553,6 +553,32 @@ def test_a_branch_checked_out_in_the_main_clone_is_shown_and_refused(
     assert LaneStore(lanes_root).list_lanes() == []
 
 
+def test_a_branch_held_by_a_worktree_that_is_not_a_lane_names_the_path(
+    project: tuple[Origin, Path], projects_root: Path, lanes_root: Path, tmp_path: Path
+) -> None:
+    """Not every worktree is lane's. A user can make one by hand, and a removed lane
+    leaves a stale entry until something prunes it — neither is the main clone, and
+    saying so would send the user to look in the wrong place."""
+    _, repo = project
+    by_hand = tmp_path / "by-hand"
+    git(["worktree", "add", "--quiet", "-b", "feature/by-hand", str(by_hand)], cwd=repo)
+    drawn: dict[str, str] = {}
+
+    class Recording(FakeUi):
+        def browse(self, title, columns, rows, **kwargs):  # type: ignore[no-untyped-def]
+            for row in rows():
+                drawn[row.cells[0].text] = row.cells[1].text
+            return super().browse(title, columns, rows, **kwargs)
+
+    ui = Recording(["thing", "existing branch", "feature/by-hand", "back"])
+    with pytest.raises(Abandoned):
+        open_lane.run(make_context(ui, projects_root, lanes_root))
+
+    assert drawn["feature/by-hand"] == "in another worktree"
+    assert drawn["main"] == "in the main clone", "and the main clone is still named as one"
+    assert ui.said(str(by_hand)), "the refusal points at where it actually is"
+
+
 def test_a_branch_held_by_another_lane_names_that_lane_and_offers_to_enter_it(
     project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
 ) -> None:

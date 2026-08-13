@@ -608,7 +608,10 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **Path identity is asked of the filesystem, never compared as strings** —
   `samefile`, not `resolve() == resolve()`. macOS and Windows are case-insensitive,
   so `/users/me/projects` and `/Users/me/Projects` are one directory while their
-  resolved strings differ; comparing strings once made every project vanish.
+  resolved strings differ; comparing strings once made every project vanish. It lives
+  in **`lane/paths.py`**, once: the backend compares what git reports against what
+  the user configured, and `open`'s branch list matches a worktree path to a lane, so
+  a private copy each would be two places for one invariant to be got wrong.
 - **`find_nested_repository` and `list_projects` use the same definition of
   "repository"** — when they disagreed, lane reported "no projects here" and then
   suggested a folder that had none either.
@@ -741,7 +744,10 @@ metadata describing something the lane is not. What the second path settles:
 - **Which worktree holds a branch is matched to a lane with `samefile`**, never as
   strings — `git worktree list` reports the case on disk while a lanes root keeps
   whichever case was typed. This is the invariant whose breach once made every
-  project vanish.
+  project vanish. The three ways a branch can be taken — a lane, the main clone, some
+  other worktree — are told apart by **asking, not by elimination**: not every
+  worktree is one of lane's, so "it is not a lane" does not mean "it is the main
+  clone", and naming the wrong place sends the user to look in it.
 
 **Preparing a lane** — a lane is a fresh checkout, so **everything `.gitignore` covers
 is missing from it**: dependency trees have to be rebuilt, and an ignored `.env` cannot

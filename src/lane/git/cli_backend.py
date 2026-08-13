@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from lane.git.backend import BranchRef, FetchResult, GitError, WorktreeStatus
+from lane.paths import same_directory
 
 _TIMEOUT = 120
 _FETCH_TIMEOUT = 300
@@ -30,25 +31,6 @@ _FORCED_CONFIG = (
     "core.pager=cat",
     "advice.detachedHead=false",
 )
-
-
-def _same_directory(left: Path, right: Path) -> bool:
-    """Whether two paths are the same directory on disk.
-
-    Not a string comparison, deliberately. macOS and Windows filesystems are
-    case-insensitive, so a user who types `/users/me/projects` reaches the same
-    directory as `/Users/me/Projects` — but `Path.resolve()` keeps whichever case
-    was typed, while `git rev-parse --show-toplevel` reports the case on disk.
-    Comparing those two as strings made every project silently vanish.
-
-    `samefile` asks the filesystem (device and inode), which is immune to case,
-    trailing separators, `.` segments and symlinks alike.
-    """
-    try:
-        return left.samefile(right)
-    except OSError:
-        # One of them stopped existing between the check and here.
-        return False
 
 
 class CliGitBackend:
@@ -137,7 +119,7 @@ class CliGitBackend:
         top = self._line(["rev-parse", "--show-toplevel"], cwd=path)
         if top is None:
             return False
-        return _same_directory(Path(top), path)
+        return same_directory(Path(top), path)
 
     def version(self) -> str | None:
         return self._line(["--version"])
