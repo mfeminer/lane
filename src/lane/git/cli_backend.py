@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from lane.git.backend import FetchResult, GitError, WorktreeStatus
@@ -75,6 +76,7 @@ class CliGitBackend:
         *,
         cwd: Path | None = None,
         timeout: int = _TIMEOUT,
+        stdin: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = [self._git]
         for setting in _FORCED_CONFIG:
@@ -85,6 +87,7 @@ class CliGitBackend:
         try:
             return subprocess.run(
                 command,
+                input=stdin,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -317,6 +320,58 @@ class CliGitBackend:
         if not commit or not self.rev_parse_verify(worktree, f"{commit}^{{commit}}"):
             return None
         return self._count_commits(worktree, f"{commit}..HEAD")
+
+    # -- what a fresh checkout is missing ------------------------------------
+    def ignored_paths(self, repo: Path) -> list[str]:
+        """`ls-files -o -i --exclude-standard --directory -z`, collapsed.
+
+        `--directory` is what makes the answer usable — one row for `node_modules/`
+        rather than one per file under it — and `-z` is what makes it machine-oriented
+        rather than a newline-separated list a filename can break.
+
+        The collapsing is not tidying. When an intermediate directory holds nothing
+        tracked, git reports that directory *and* everything ignored inside it, so a
+        `apps/web/node_modules` and an `apps` arrive together. Applying both would
+        write the same bytes twice, in an order-dependent way, so only the shallowest
+        row survives: a directory that is entirely ignored is one thing to decide
+        about.
+        """
+        done = self._run(
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
+            cwd=repo,
+        )
+        if done.returncode != 0:
+            return []
+
+        # git already sorts these, so a row's containing directory precedes it.
+        kept: list[str] = []
+        for raw in done.stdout.split("\0"):
+            path = raw.rstrip("/")
+            if not path:
+                continue
+            if any(path == inside or path.startswith(f"{inside}/") for inside in kept):
+                continue
+            kept.append(path)
+        return kept
+
+    def ignored_as_given(self, worktree: Path, paths: Sequence[str]) -> set[str]:
+        """`check-ignore --stdin -z`: one process for the whole list.
+
+        Deliberately **not** `--no-index`, which would report a tracked path as
+        ignored whenever a pattern happened to match it. Letting the index have its
+        say is what makes "never comes back" mean "lane must not write here".
+        """
+        if not paths:
+            return set()
+        done = self._run(
+            ["check-ignore", "--stdin", "-z"],
+            cwd=worktree,
+            stdin="\0".join(paths) + "\0",
+        )
+        # Exit code 1 means "none of them", which is an answer rather than a failure.
+        if done.returncode not in (0, 1):
+            return set()
+        return {line for line in done.stdout.split("\0") if line}
 
     def _count_commits(self, worktree: Path, rev_range: str) -> int:
         line = self._line(["rev-list", "--count", rev_range], cwd=worktree)

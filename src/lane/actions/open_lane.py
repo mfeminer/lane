@@ -11,10 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from lane.actions import enter_lane
 from lane.actions.picking import choose_project
 from lane.context import Context
 from lane.git.backend import GitError
-from lane.lanes import LaneMeta, LaneStore
+from lane.lanes import Lane, LaneMeta, LaneStore
 from lane.naming import sanitize_branch, slugify
 from lane.ui.seam import Choice
 
@@ -184,17 +185,14 @@ def _execute(context: Context, plan: _Plan) -> None:
     except GitError:
         start = ""
 
-    store.write_meta(
-        plan.project,
-        plan.lane_name,
-        LaneMeta(
-            description=plan.description,
-            base=plan.base,
-            created=LaneStore.timestamp(),
-            repo=str(repo),
-            start=start,
-        ),
+    meta = LaneMeta(
+        description=plan.description,
+        base=plan.base,
+        created=LaneStore.timestamp(),
+        repo=str(repo),
+        start=start,
     )
+    store.write_meta(plan.project, plan.lane_name, meta)
     context.state_store.remember_project(plan.project)
 
     suffix = f"  ({plan.branch})" if plan.branch else "  (detached)"
@@ -205,9 +203,15 @@ def _execute(context: Context, plan: _Plan) -> None:
         # first time so the absence does not read as a bug.
         ui.detail(f"  Push the first time with: git push -u origin {plan.branch}")
 
-    launch = context.environment.launch_editor(context.config.editor, lane_path)
-    if launch.launched:
-        ui.ok(launch.detail)
-    else:
-        ui.warn(f"{launch.detail} — open the lane yourself: {lane_path}")
-        ui.detail("  Change the editor command in settings.")
+    # And now the same thing that happens whenever you go into a lane: make it ready,
+    # then open the editor. One code path rather than two — the launch and its
+    # missing-editor warning used to exist here as well, and could drift.
+    #
+    # Preparation asks its own questions, and they come after the worktree exists. That
+    # is not a breach of *every question comes before the first irreversible step*:
+    # abandoning them leaves a complete lane that is merely unprepared, which the
+    # listing shows, the close flow can act on, and the next enter repairs.
+    enter_lane.enter(
+        context,
+        Lane(project=plan.project, name=plan.lane_name, path=lane_path, meta=meta),
+    )

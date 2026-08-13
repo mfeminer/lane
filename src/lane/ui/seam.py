@@ -91,6 +91,19 @@ that, "render what is known and fill the rest in" could only be tested with slee
 """
 
 
+type Toggle[T] = Callable[[T], bool]
+"""Change the row's own answer in place. True if it did.
+
+False means this row is not one that carries an answer — the widget then accepts it,
+which is how one screen has both rows you cycle through and rows you choose. `Space`
+ignores a False; `Enter` returns the row. One call for both, so `Enter` cannot drift
+from `Space`.
+
+The answer belongs to the action, exactly as the rows already do: the widget calls this
+and repaints from `rows()`. Nothing about what an answer *means* lives below the seam.
+"""
+
+
 class Ui(Protocol):
     """Asking and telling. Both are presentation; an action needs both."""
 
@@ -123,6 +136,7 @@ class Ui(Protocol):
         back: str = BACK_LABEL,
         fill: Fill | None = None,
         cursor: int = 0,
+        toggle: Toggle[T] | None = None,
         on_render: Callable[[str], None] | None = None,
     ) -> tuple[T, int]:
         """A table with a cursor over it: the row under the cursor, and where it was.
@@ -138,6 +152,11 @@ class Ui(Protocol):
         cursor where the user left it rather than at the top.
 
         The visible `back` row and Ctrl-C both raise `Abandoned`, as in `choose`.
+
+        With a `toggle`, this is a screen whose rows carry an answer the user changes
+        in place with `Space` rather than a screen they pick one row from. `Enter`
+        changes a row that has an answer and returns one that does not, so a screen can
+        have both — a row per decision, and a row that means "go on".
         """
         ...
 

@@ -60,6 +60,7 @@ menu` row, and the main menu ends with `quit`.
 | `↑` `↓` | move through a list or a table (`Home` / `End` jump to the ends) |
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question; `Enter` takes the default shown in `[y/N]` |
+| `Space` | change the answer on the row you're on — only where rows *have* answers |
 | `Ctrl-C` | back out, from anywhere |
 
 That's the whole list. No `q`, no vim keys, no number shortcuts — and `Esc` is not
@@ -70,6 +71,12 @@ one, Ctrl-A and Ctrl-E for the ends.
 The lanes table didn't add a key either — there's no `c` for close. That's why
 `Enter` on a row offers you its verbs instead of a legend telling you which letters
 do what.
+
+`Space` is the one exception, and only on the preparation screen below, where each row
+carries an answer you cycle rather than a thing you pick. It's what `fzf --multi`, `tig`
+and every package manager's checkbox prompt already use, so there was nothing to learn.
+`Enter` on one of those rows does the same as `Space`, so you never have to remember which
+one you're on.
 
 **Backing out is always safe.** Every question an action asks comes *before* its
 first irreversible step, so leaving half-way through leaves your disk exactly as it
@@ -134,6 +141,155 @@ uncommitted changes.
 
 ---
 
+## Preparing a lane
+
+A worktree is a fresh checkout, so **everything your `.gitignore` covers isn't in it**.
+That's git doing the right thing, and it's also what makes the lane unusable: dependency
+trees have to be rebuilt, and an ignored `.env` can't be rebuilt at all.
+
+lane fixes that as part of **entering** a lane — which is why `enter` now means "make the
+lane ready, then open the editor", and why opening a lane ends by entering it. It happens
+*every* time you go into a lane, not once when it's created, which is what makes an
+interrupted or failed preparation fix itself: go in again and it picks up where it stopped.
+Nothing anywhere remembers that a lane was left half-ready, because nothing needs to — the
+only state is whether the path is there.
+
+### What you're asked, and how often
+
+Once per project, per path. The first time lane sees an ignored path it doesn't have an
+answer for, it asks — all of them on one screen, because being asked three questions in a
+row on the way to your editor is a toll:
+
+```
+Preparing demo/broken-pagination
+  Answers are remembered per project — change them in settings · preparation.
+
+  3 paths lane has not been told about
+
+  path                       size      verb
+❯ apps/web/node_modules      1.2 GB    clone
+  apps/console/.env          1.4 KB    link
+  apps/console/dist          340 MB    skip
+  continue
+  ← Back without entering
+
+  ↑↓ move · space change · enter continue
+```
+
+`Space` (or `Enter`) cycles the row you're on. Every row starts at `skip`, so pressing
+`Enter` straight away is safe: nothing is copied, and lane stops asking. Answers are
+remembered, so the **second** lane in that project asks nothing at all and just comes up
+ready.
+
+The sizes are why the screen is worth reading — they're what stops you cloning a 20 GB
+local database by accident. They're measured while you're already reading the rows, so they
+appear a moment after the rest.
+
+### The three verbs
+
+| Verb | What it does | Good for |
+|---|---|---|
+| `clone` | a copy-on-write copy from your main clone | dependency trees, build caches — anything the lane might then modify |
+| `link` | a symlink to your main clone | large read-only assets; secrets, where one copy beats one per lane |
+| `run` | a command, in a directory you choose | `install`-style steps. Added from **settings → preparation**, not here |
+
+On APFS a `clone` is a copy-on-write clone: a 64 MB tree takes about a third of a
+millisecond and no extra disk until something writes to it. That's what makes this cheap
+rather than merely automatic. If your projects and lanes folders are on **different**
+volumes it can't be a clone at all and becomes a real copy — slow, and real disk. `doctor`
+tells you which you've got, and settings warns you when you add a `clone` step and the
+answer is no.
+
+A `link` is always current, because it *is* your main clone's copy. The flip side: anything
+the lane writes there goes into the main clone, so it's the wrong choice for a dependency
+tree you might reinstall inside the lane.
+
+`link` isn't offered for every path. `node_modules/` — with the trailing slash, which is how
+almost everyone writes it — matches *directories*, and a symlink isn't one. So a symlinked
+`node_modules` would show up as an untracked file, putting `● 1 uncommitted` on your lane
+over a link you asked for. lane asks git first and only offers `link` where git says it'll
+still be ignored. The panel says so when it isn't:
+
+```
+  Ignored as a directory only, so 'link' is not offered for this path.
+```
+
+For the same reason, a path your branch actually *tracks* is never offered at all — lane
+will not write over your files, and a prepared lane still reads `✓ clean`.
+
+### When a path is already there
+
+The row says so, in words, before you answer:
+
+```
+  path                       size      verb
+❯ apps/web/node_modules      1.2 GB    clone · overwrites
+```
+
+That matters because you may have patched something inside it. **lane never overwrites what
+your lane changed** unless you asked for that path to be refreshed — an answered `clone` is
+"put it here if it's missing", and it leaves what's there alone. `clone, refreshed`, which
+you can only set in settings, is the one that replaces it on every enter.
+
+### Changing an answer later
+
+**settings → preparation** lists every step across every project, with the project dimmed
+in front of the path:
+
+```
+lane settings · preparation
+  /Users/you/.config/lane/prepare.toml
+
+  path                              verb                size
+❯ acme-web/apps/web/node_modules    clone                1.2 GB
+  acme-web/apps/web/.env            link                 1.4 KB
+  acme-web/yarn install             run · apps/web       —
+  demo/vendor                       skip                 84 MB
+  add a step
+  ← Back to settings
+```
+
+`Enter` on a row offers `change` and `forget`. **forget** is the one that matters: it makes
+lane ask about that path again next time, which is why nothing on the per-enter screen needs
+a "remember this?" column. `add a step` is where a `run` command comes from — a command
+isn't a path lane can discover, so it can only be added here. It asks for the command, where
+to run it, and a path that means "don't bother" (`unless`), so `yarn install unless
+node_modules` runs on a lane that needs it and skips one that doesn't.
+
+### About secrets
+
+Copying a `.env` into every lane multiplies the number of places that secret lives. Closing
+the lane takes it with the worktree — but a close you refused or interrupted doesn't. So when
+you answer `clone` for something that looks like a secret, lane says so once:
+
+```
+! apps/console/.env looks like it holds secrets, and 'clone' puts a copy in every lane.
+  'link' keeps one copy in the main clone — change it in settings.
+```
+
+It's a suggestion, not a refusal.
+
+### When it goes wrong
+
+A step that fails says so and names what to do; the **other steps still run**, and the
+editor **still opens** — a lane that's mostly ready beats one you can't get into.
+
+```
+✗ Could not clone apps/web/node_modules: No such file or directory
+  The lane still opens; entering it again tries this step once more.
+```
+
+`Ctrl-C` during a step stops there and tells you where it stopped. Nothing is left half
+copied: every clone is written beside its target and moved into place in one step, so the
+path is either the old one or the new one. Go into the lane again and it finishes the job.
+
+```
+! Interrupted while cloning apps/web/node_modules
+  Entering the lane again finishes the job.
+```
+
+---
+
 ## Your lanes
 
 `lanes` is one screen. Arrow keys move a cursor over the rows, and whatever you do
@@ -190,7 +346,7 @@ Press `Enter` on a row and you get its two verbs:
 ```
 demo/broken-pagination
 
-  ❯ enter    relaunch the editor in this lane
+  ❯ enter    prepare the lane, then open the editor in it
     close    safety checks, then remove the worktree
     ← Back
 
@@ -199,7 +355,8 @@ demo/broken-pagination
 
 Close a lane and you stay right here, one row shorter, so closing three of them
 doesn't mean three trips back to the menu. Enter one and lane gets out of the way —
-you're in the editor now.
+you're in the editor now. If entering has something to ask you first, that's
+[preparation](#preparing-a-lane); back out of it and you're right back at this table.
 
 ### It doesn't wait for GitHub
 
@@ -369,6 +526,15 @@ it can see, and which copy of lane is running. It works on a machine where *none
 of what it inspects is installed — it's the action that explains a missing
 prerequisite, so it's never hidden behind one.
 
+It also answers the one question about [preparation](#preparing-a-lane) you can't see for
+yourself — whether a `clone` can actually be a copy-on-write clone:
+
+```
+! Copy-on-write is not available: /Users/you/Projects and /Volumes/Work/Lanes are on
+  different volumes, so a 'clone' step is a real copy — slow, and it uses real disk.
+  Put both roots on one volume, or use 'link' or 'run' for large paths.
+```
+
 If no projects turn up, lane says how many subfolders it looked at, and if your
 repositories are nested one level too deep (`<root>/<org>/<repo>`) it points at the
 folder you should use instead.
@@ -391,6 +557,34 @@ editor = "cursor"                       # code, zed, idea, subl...
 Three settings, and `projects_root` is the important one: the folder your projects
 **sit in**, one repository per subfolder. Settings won't accept a folder that
 contains no repositories, because everything else depends on it being right.
+
+### The preparation answers
+
+`~/.config/lane/prepare.toml`, same modes, **a separate file on purpose**: it's an
+unbounded list rather than three settings, and lane rewrites `config.toml` whenever the
+version stamp changes, carrying over the keys it knows about — which this isn't one of.
+
+```toml
+version = "0.0.3"          # managed by lane
+
+[[step]]
+project = "acme-web"
+path = "apps/web/node_modules"
+verb = "clone"
+
+[[step]]
+project = "acme-web"
+verb = "run"
+command = "yarn install"
+directory = "apps/web"
+unless = "apps/web/node_modules"
+```
+
+Projects are named, not pathed, so moving your whole projects folder keeps every answer;
+*renaming a project* means lane asks about it again, exactly as that project also gets a
+fresh lanes folder. Delete the file and you've reset every answer without touching your
+three settings. If it's unreadable lane says so and simply asks again — nothing else
+breaks.
 
 ### Environment overrides
 
@@ -445,6 +639,19 @@ which way it's wrong.
 
 **My editor didn't open** — the lane was still created; check `doctor` for whether
 your editor command is on PATH. lane prints the path so you can open it yourself.
+
+**lane keeps asking me about the same path** — you answered it for a *different* project
+name, or the project directory was renamed. Answers are keyed by project name; check
+**settings → preparation**.
+
+**A path I said `clone` for isn't in my lane** — it has to exist in your main clone for
+there to be anything to copy, and it has to be ignored by the lane's own `.gitignore`. A
+lane branched from an older base that predates the `.gitignore` entry ignores nothing, so
+nothing is offered.
+
+**`clone` is slow and eating disk** — your projects and lanes folders are on different
+volumes, so it can't be a copy-on-write clone. `doctor` says so explicitly; use `link` or
+`run` for the big paths, or put both folders on one volume.
 
 ---
 

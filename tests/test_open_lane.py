@@ -349,3 +349,55 @@ def test_nested_repositories_are_pointed_at(projects_root: Path, lanes_root: Pat
 
     assert ui.said("nested")
     assert ui.said(str(org))
+
+
+# -- opening ends by entering ----------------------------------------------------
+
+
+def test_opening_a_lane_ends_by_entering_it(
+    project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
+) -> None:
+    """One code path rather than two: `open` created the worktree, and everything that
+    happens to a lane you are about to work in happens in `enter`. Before this, the
+    editor launch and its missing-editor warning existed twice."""
+    _origin, repo = project
+    (repo / ".gitignore").write_text("node_modules/\n")
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "pkg").write_text("pkg\n")
+
+    ui = FakeUi(
+        [
+            "thing",
+            "Fix pagination",
+            "branch",
+            "bugfix/fix-pagination",
+            ("space", "node_modules"),
+            "continue",
+        ]
+    )
+    context = make_context(ui, projects_root, lanes_root)
+
+    open_lane.run(context)
+
+    lane_path = lanes_root / "thing" / "fix-pagination"
+    assert (lane_path / "node_modules" / "pkg").read_text() == "pkg\n", (
+        "the new lane was prepared, not just created"
+    )
+    assert ui.said("Preparing thing/fix-pagination")
+
+
+def test_opening_a_lane_in_a_project_with_nothing_ignored_asks_nothing_extra(
+    project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
+) -> None:
+    ui = FakeUi(["thing", "Fix pagination", "branch", "bugfix/fix-pagination"])
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    context = make_context(ui, projects_root, lanes_root, environment=environment)
+
+    open_lane.run(context)
+
+    assert ui.unanswered() == 0
+    assert environment.launched, "and the editor still opened"
+    assert not ui.said("Preparing")

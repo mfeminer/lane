@@ -18,10 +18,11 @@ import pytest
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.input.base import PipeInput
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import DummyOutput
 
 from lane.ui.seam import Abandoned, Cell, Column, Row
-from lane.ui.table import browse, paint
+from lane.ui.table import bindings_for, browse, paint
 
 BACK = "← Back to the menu"
 
@@ -446,3 +447,195 @@ def test_a_table_with_no_rows_is_only_a_way_back(keys: PipeInput) -> None:
     keys.send_text("\r")
     with pytest.raises(Abandoned):
         browse("nothing", COLUMNS, list, BACK, input=keys, output=SizedOutput())
+
+
+# -- multi-select rows: Space changes the row under the cursor --------------------
+
+
+PREPARE_COLUMNS = (
+    Column("path"),
+    Column("size", drop=1),
+    Column("verb"),
+)
+
+
+class _Answers:
+    """A screen's own answers, owned by the caller exactly as `rows` already is.
+
+    The widget calls `toggle` and repaints; nothing about what an answer *means* lives
+    below the seam.
+    """
+
+    def __init__(self) -> None:
+        self.verbs = {"node_modules": "skip", "dist": "skip"}
+        self.toggled: list[str] = []
+
+    def rows(self) -> list[Row[str]]:
+        table = [
+            Row(
+                value=path,
+                cells=(Cell(path), Cell("1.2 GB", tone="dim"), Cell(self.verbs[path])),
+            )
+            for path in ("node_modules", "dist")
+        ]
+        table.append(Row(value="continue", cells=(Cell("continue"), Cell(""), Cell(""))))
+        return table
+
+    def toggle(self, value: str) -> bool:
+        if value == "continue":
+            return False
+        self.toggled.append(value)
+        cycle = ("skip", "clone", "link")
+        here = cycle.index(self.verbs[value])
+        self.verbs[value] = cycle[(here + 1) % len(cycle)]
+        return True
+
+
+def _toggling(keys: PipeInput, sent: str, answers: _Answers) -> tuple[str, int]:
+    keys.send_text(sent)
+    return browse(
+        "3 paths lane has not been told about",
+        PREPARE_COLUMNS,
+        answers.rows,
+        BACK,
+        toggle=answers.toggle,
+        input=keys,
+        output=SizedOutput(120, 40),
+    )
+
+
+def test_space_changes_the_row_under_the_cursor(keys: PipeInput) -> None:
+    answers = _Answers()
+    _toggling(keys, " \x1b[B\x1b[B\r", answers)
+
+    assert answers.toggled == ["node_modules"], "the row under the cursor, and only it"
+    assert answers.verbs == {"node_modules": "clone", "dist": "skip"}
+
+
+def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
+    """The answer is the caller's, so the only way it reaches the screen is the repaint
+    reading `rows()` again. Driven from the paints rather than by a sleep, the way the
+    fill's own repaint test is."""
+    answers = _Answers()
+    painted: list[str] = []
+    changed = threading.Event()
+
+    def watch(line: str) -> None:
+        painted.append(line)
+        if "clone" in line:
+            changed.set()
+
+    def finish(notify: object) -> None:
+        del notify
+        keys.send_text(" ")
+        changed.wait(30)
+        keys.send_text("\x1b[B\x1b[B\r")
+
+    browse(
+        "3 paths",
+        PREPARE_COLUMNS,
+        answers.rows,
+        BACK,
+        toggle=answers.toggle,
+        fill=finish,
+        on_render=watch,
+        input=keys,
+        output=SizedOutput(120, 40),
+    )
+
+    assert any("node_modules" in line and "skip" in line for line in painted), "before"
+    assert any("node_modules" in line and "clone" in line for line in painted), "and after"
+
+
+def test_space_cycles_and_wraps(keys: PipeInput) -> None:
+    answers = _Answers()
+    _toggling(keys, "   \x1b[B\x1b[B\r", answers)
+    assert answers.verbs["node_modules"] == "skip", "skip → clone → link → skip"
+
+
+def test_space_does_nothing_at_all_without_a_toggle(keys: PipeInput) -> None:
+    """The key belongs to multi-select rows, not to lists in general."""
+    assert _browse(keys, " \r") == ("improve", 0)
+
+
+def _ignore(result: object) -> None:
+    """Stand in for `Application.exit`: nothing here runs a handler."""
+    del result
+
+
+def test_a_table_without_a_toggle_does_not_bind_space_at_all() -> None:
+    """AGENTS.md claims no existing screen gained a key, and a handler that is bound and
+    then no-ops does not honour that: the keystroke is still consumed here rather than
+    falling through as any unrecognised key does. Asserted on the binding table, because
+    that is the only place the two are distinguishable."""
+    state = {"index": 0, "top": 0, "rows": 0, "opening": 1}
+    answers = _Answers()
+
+    plain = bindings_for(state, _rows, None, _ignore)
+    toggling = bindings_for(state, answers.rows, answers.toggle, _ignore)
+
+    assert plain.get_bindings_for_keys((" ",)) == []
+    assert toggling.get_bindings_for_keys((" ",)) != []
+    # Everything else is bound either way — the picker's set, unchanged. `Enter` and
+    # `Ctrl-C` arrive under their control-code names, which is prompt_toolkit's normalising
+    # rather than anything of ours.
+    for key in (Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC):
+        assert plain.get_bindings_for_keys((key,)) != [], f"{key} is bound either way"
+
+
+def test_enter_on_a_row_that_toggles_toggles_and_stays(keys: PipeInput) -> None:
+    """So `Enter` still means "act on the row under the cursor" everywhere, with no
+    carve-out — and it cannot drift from `Space`, because it is the same call."""
+    answers = _Answers()
+    result = _toggling(keys, "\r\x1b[B\x1b[B\r", answers)
+
+    assert answers.verbs["node_modules"] == "clone"
+    assert result == ("continue", 2), "the row that does not toggle is the one returned"
+
+
+def test_the_footer_says_what_space_does_when_there_is_something_to_toggle() -> None:
+    from lane.ui.picker import HINT, TOGGLE_HINT
+
+    answers = _Answers()
+    plain = paint(
+        "t", PREPARE_COLUMNS, answers.rows(), BACK, cursor=0, top=0, width=120, height=40
+    ).lines
+    toggling = paint(
+        "t",
+        PREPARE_COLUMNS,
+        answers.rows(),
+        BACK,
+        cursor=0,
+        top=0,
+        width=120,
+        height=40,
+        toggles=True,
+    ).lines
+
+    assert HINT in plain[-1]
+    assert TOGGLE_HINT in toggling[-1]
+    assert "space" in TOGGLE_HINT
+
+
+def test_the_verb_column_survives_a_forty_column_terminal() -> None:
+    """§13: the column that answers the screen's own question is never dropped and
+    never truncated at any width the screen promises to support. `size` goes, the path
+    truncates, `clone · overwrites` stays whole."""
+    rows = [
+        Row(
+            value="node_modules",
+            cells=(
+                Cell("apps/web/node_modules"),
+                Cell("1.2 GB", tone="dim"),
+                Cell("clone · overwrites", tone="warn"),
+            ),
+        )
+    ]
+    lines = paint(
+        "3 paths", PREPARE_COLUMNS, rows, BACK, cursor=0, top=0, width=40, height=40
+    ).lines
+    row = next(line for line in lines if "clone · overwrites" in line)
+
+    assert "1.2 GB" not in row, "size is the droppable column"
+    assert "…" in row, "and the path is what gives way"
+    assert len(row) <= 40

@@ -457,7 +457,7 @@ def run(context: Context) -> None:
             verb = ui.choose(
                 lane.slug,
                 [
-                    Choice("enter", "enter", "relaunch the editor in this lane"),
+                    Choice("enter", "enter", "prepare the lane, then open the editor in it"),
                     Choice("close", "close", "safety checks, then remove the worktree"),
                 ],
             )
@@ -471,7 +471,15 @@ def run(context: Context) -> None:
             continue
 
         if verb == "enter":
-            enter_lane.enter(context, lane)
+            try:
+                enter_lane.enter(context, lane)
+            except Abandoned:
+                # Backing out of preparation lands back at the table, for the same
+                # reason the row menu and the close do: preparation is a *screen*, and
+                # throwing away the one the keystroke happened on punishes the user for
+                # changing their mind. Nothing irreversible happened — the lane is
+                # simply still unprepared, which the next enter repairs.
+                continue
             # Your attention has moved to the editor. Holding the listing up would
             # imply there is more to do here, and its data is about to go stale.
             return

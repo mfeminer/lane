@@ -16,6 +16,7 @@ from lane.environment import Environment
 from lane.git.backend import GitBackend
 from lane.github.client import GitHubClient
 from lane.lanes import LaneStore
+from lane.prepare.store import PrepareStore
 from lane.state import StateStore
 from lane.ui.seam import Ui
 
@@ -31,6 +32,15 @@ class Context:
     state_store: StateStore
     overridden: dict[str, str] = field(default_factory=dict)
     """setting name -> environment variable currently winning over the file."""
+
+    def prepare_store(self) -> PrepareStore:
+        """The preparation answers, which live beside the config file by definition.
+
+        Derived from `config_store` rather than injected: `prepare.toml` is a sibling of
+        `config.toml`, so a second field could only ever disagree with it — and a test
+        that redirected one and forgot the other would write into the real home.
+        """
+        return PrepareStore(self.config_store.path.parent)
 
     def lane_store(self) -> LaneStore:
         root = self.config.lanes_root

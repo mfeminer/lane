@@ -62,11 +62,28 @@ otherwise have no visible exit and rely solely on an unannounced Ctrl-C.
 
 **Fully decided in AGENTS.md and `picker.py`; cited, not restated.** The whole
 vocabulary: `↑` `↓` `Home` `End` move, `Enter` chooses or accepts, `y`/`n` answer a
-yes/no question, `Ctrl-C` backs out, everywhere. No `q`, no vim keys, no digit
+yes/no question, `Space` changes the answer on a multi-select row, `Ctrl-C` backs out,
+everywhere. No `q`, no vim keys, no digit
 shortcuts, no Esc — each removed on purpose, with the reasoning kept in
 AGENTS.md's "Going back is visible" section. **A new screen introduces no key this table doesn't already
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
+
+**`Space` is the one key added since this table closed, and the test it passed is the
+one the rule states.** What is banned is a key the user would have to be *taught*, one
+that is this tool's invention. `Space` to change the row under the cursor in a
+multi-select list is what `fzf --multi`, `tig`, aptitude and every checkbox prompt in
+every package manager already do, so it needs no legend and no teaching — where `c` for
+close would have needed both. Two limits come with it:
+
+- **It is scoped to rows that carry an answer**, not to lists in general. Without a
+  `toggle`, `Ui.browse` does not bind it at all, so no existing screen gained a key.
+- **`Enter` on such a row does exactly what `Space` does**, through the same call, so
+  `Enter` still means "act on the row under the cursor" everywhere and the two cannot
+  drift. Only a row with no answer to change (`continue`) accepts and leaves.
+
+The footer says so: `↑↓ move · space change · enter continue`, one constant beside `HINT`
+in `picker.py` — one hint string per widget mode, not per call site.
 
 The one place this table is currently *misrepresented* rather than violated: fix per
 §9 below.
@@ -99,7 +116,14 @@ The set, and only meaning each one carries:
 | `●` | count of uncommitted/untracked files | table `state` cell |
 | `↑` | count of unpushed commits | table `state` cell |
 | `❯` | the cursor, in any picker or the table | `picker.py`, `table.py` |
-| `←` | this entry leaves the current screen | `← Back`, `← Back to the menu` |
+| `←` | this entry leaves the current screen **backwards** | `← Back`, `← Back to the menu`, `← Back without entering` |
+
+**`←` marks going back, not going on.** A row that leaves the screen *forwards* — the
+preparation screen's `continue`, which applies the answers and opens the editor — carries
+no arrow, or the one symbol that means "out of here" would mean both directions at once.
+That screen has two trailing rows for exactly that reason: `continue` and
+`← Back without entering` have genuinely different consequences, and the visible-exit rule
+is what makes the second one a row rather than an unannounced Ctrl-C.
 
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
@@ -140,10 +164,20 @@ lane settings
 ❯ projects root        /Users/you/Projects
   lanes root           /Users/you/Lanes
   editor               cursor
+  preparation          4 steps in 2 projects
   ← Back to the menu
 
   ctrl-c back out
 ```
+
+`preparation` is a fourth row and **not a fourth setting**: it is a destination, so it is a
+noun (§4), and its value cell says how much is there the way the others say what they are
+set to. It leads to **one** screen listing every project's steps, not to a project list and
+then a page each — the lanes table already draws rows from several projects in one table
+with a dimmed `Cell.lead`, so a third level of nesting is unnecessary. Back labels stay
+scoped as ADR 0002 requires: `← Back to the menu` here, `← Back to settings` there. Choosing
+a step row opens a two-entry menu (`change`, `forget`) exactly as the lanes table opens
+`enter`/`close`.
 
 Choosing a row asks that **one** question (with today's validation — a projects root
 with no repositories is still refused, a lanes root inside the projects root still
@@ -211,7 +245,14 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   looked hung was the one place it was working hardest.*
 - **One spinner per user-visible action, not per subprocess.** Pruning is
   bookkeeping belonging to the removal, so it shares its spinner; deleting the
-  branch is its own step and gets its own.
+  branch is its own step and gets its own. Preparation gives one to each step it
+  applies (`"Cloning apps/web/node_modules…"`), and the staging and swapping inside one
+  clone share it.
+- **A step that is not slow gets none.** Preparation's discovery runs on the way to the
+  editor *every* time a lane is entered and is 15 ms on a twelve-thousand-file
+  repository — a spinner there would flash on the hottest path in the application, and it
+  would be the only thing standing between an already-prepared lane and costing nothing
+  visible. `progress` is for a wait, not for a receipt.
 - **Ctrl-C during a spinner backs out**, exactly as at a prompt — with the single
   exception of a close's removal phase, which defers it. See *Ctrl-C is answered
   everywhere* in AGENTS.md before adding a second exception.
@@ -238,6 +279,11 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
 - **No table, no header, no cursor for an empty list.** Already the rule for the
   lanes table (ADR 0002) and worth stating generally: a screen built around a list
   does not render the list's frame when the list is empty.
+- **This governs the *data* rows.** An action row — the visible way back, or settings ·
+  preparation's `add a step` — survives an empty list, because a screen whose only purpose
+  is to let you add the first item cannot answer with a line of prose. *Why: previously
+  unstated, and the two readings differ exactly where it matters — on the screen you reach
+  when there is nothing there yet.*
 
 ## 13. Width and truncation
 
@@ -291,6 +337,14 @@ One term per concept. The list, and the survivor where two forms were found:
 | Leaving a prompt without answering | **back** / **back out** | cancel, abort, quit (that word is reserved for the menu's own exit) |
 | A setting currently coming from the environment, not the file | **overrides** | present tense, matching between doctor and settings — it reads as the current fact, not a description of an ongoing process |
 | The three-question setup screen | **settings** | config, preferences, setup (used once, for the very first run, and even then it's the same screen) |
+| Bringing what `.gitignore` hides into a lane, before the editor opens | **preparation** (verb: **prepare**) | setup, bootstrap, provisioning, sync, hydrate, seed |
+| One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
+| What lane does to a path | the **verb** — `clone`, `link`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`) |
+
+`verb` is the column header on both preparation screens for that last reason. AGENTS.md
+already calls `enter` and `close` "the two verbs" the lanes screen offers, so the word is
+established here for exactly this; `action` would collide with the only other thing in the
+application that word names.
 
 If a new screen needs a term not in this table, add it here in the same change —
 this table is the thing to grep before reaching for a synonym.

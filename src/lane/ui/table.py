@@ -45,8 +45,8 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.picker import ESCAPE_TIMEOUT, HINT
-from lane.ui.seam import Abandoned, Cell, Column, Fill, Row
+from lane.ui.picker import ESCAPE_TIMEOUT, HINT, TOGGLE_HINT
+from lane.ui.seam import Abandoned, Cell, Column, Fill, Row, Toggle
 
 CURSOR_WIDTH = 2
 """The `❯ ` in front of the row under the cursor, and the space in front of the rest."""
@@ -219,6 +219,7 @@ def paint(
     top: int,
     width: int,
     height: int,
+    toggles: bool = False,
 ) -> Painted:
     """Draw one frame. Pure, which is what makes the layout rules testable."""
     total = len(rows) + 1  # the visible way back is a row like any other
@@ -264,7 +265,8 @@ def paint(
         first = top + 1
         last = min(top + room, total)
         shown = f" · {first}–{last} of {len(rows)}"
-    fragments.append(("class:table.footer", f"  {HINT}{shown}"))
+    hint = TOGGLE_HINT if toggles else HINT
+    fragments.append(("class:table.footer", f"  {hint}{shown}"))
 
     return Painted(fragments=fragments, top=top, room=room)
 
@@ -284,6 +286,86 @@ def _vertical(height: int, detail: tuple[str, ...]) -> tuple[int, tuple[str, ...
     return max(1, height - 5), ()
 
 
+def bindings_for[T](
+    state: dict[str, int],
+    rows: Callable[[], Sequence[Row[T]]],
+    toggle: Toggle[T] | None,
+    exit_with: Callable[[tuple[T, int] | None], None],
+) -> KeyBindings:
+    """The keys this table answers to — the picker's set, plus `Space` only when asked.
+
+    A unit of its own so that "a screen without a `toggle` gains no key" is something a
+    test can *check* rather than something the docs assert. A bound handler that no-ops
+    would look identical from the outside while still swallowing the keystroke, which is
+    not the same thing as leaving the key unbound, and the difference is exactly what
+    AGENTS.md promises.
+    """
+    bindings = KeyBindings()
+
+    def last() -> int:
+        return state["rows"]  # the back row sits one past the last lane
+
+    def under_cursor() -> Row[T] | None:
+        current = list(rows())
+        index = state["index"]
+        return current[index] if index < len(current) else None
+
+    @bindings.add("c-c")
+    def _abandon(event: KeyPressEvent) -> None:
+        del event
+        exit_with(None)
+
+    @bindings.add("up")
+    def _up(event: KeyPressEvent) -> None:
+        del event
+        state["index"] = (state["index"] - 1) % (last() + 1)
+
+    @bindings.add("down")
+    def _down(event: KeyPressEvent) -> None:
+        del event
+        state["index"] = (state["index"] + 1) % (last() + 1)
+
+    @bindings.add("home")
+    def _first(event: KeyPressEvent) -> None:
+        del event
+        state["index"] = 0
+
+    @bindings.add("end")
+    def _end(event: KeyPressEvent) -> None:
+        del event
+        state["index"] = last()
+
+    @bindings.add("enter")
+    def _accept(event: KeyPressEvent) -> None:
+        del event
+        row = under_cursor()
+        if row is None:
+            # The back row, one past the last: the same result as Ctrl-C.
+            exit_with(None)
+            return
+        if toggle is not None and toggle(row.value):
+            # A row that carries an answer: Enter changed it, and there is more to do
+            # on this screen. Exactly what Space does, by the same call.
+            return
+        exit_with((row.value, state["index"]))
+
+    if toggle is None:
+        # Nothing else on this screen wants the key, so it is left to fall through as any
+        # unrecognised key does. **No existing screen gains a key**, which is the promise.
+        return bindings
+
+    @bindings.add(" ")
+    def _change(event: KeyPressEvent) -> None:
+        del event
+        row = under_cursor()
+        if row is not None:
+            # The answer belongs to the caller, as the rows already do. Whatever it
+            # changed is on screen at the next repaint, which `rows()` supplies.
+            toggle(row.value)
+
+    return bindings
+
+
 def browse[T](
     title: str,
     columns: Sequence[Column],
@@ -292,6 +374,7 @@ def browse[T](
     *,
     fill: Fill | None = None,
     cursor: int = 0,
+    toggle: Toggle[T] | None = None,
     on_render: Callable[[str], None] | None = None,
     input: Input | None = None,
     output: Output | None = None,
@@ -300,6 +383,11 @@ def browse[T](
 
     Raises `Abandoned` for the visible back row and for Ctrl-C — the two ways out
     mean the same thing to the caller, so they are the same result.
+
+    With a `toggle`, rows carry an answer that is changed in place: `Space` changes the
+    row under the cursor and the table stays up. `Enter` calls the same `toggle` and
+    only returns the row when it says it does not toggle — one code path, so `Enter`
+    cannot drift from `Space`.
     """
     state = {"index": max(0, cursor), "top": 0, "rows": 0, "opening": 1}
 
@@ -323,6 +411,7 @@ def browse[T](
             top=state["top"],
             width=size.columns,
             height=size.rows - 1,
+            toggles=toggle is not None,
         )
         state["top"] = painted.top
         if on_render is not None:
@@ -330,42 +419,14 @@ def browse[T](
                 on_render(line)
         return FormattedText(painted.fragments)
 
-    bindings = KeyBindings()
-
-    def _last() -> int:
-        return state["rows"]  # the back row sits one past the last lane
-
-    @bindings.add("c-c")
-    def _abandon(event: KeyPressEvent) -> None:
-        del event
-        application.exit(result=None)
-
-    @bindings.add("up")
-    def _up(event: KeyPressEvent) -> None:
-        del event
-        state["index"] = (state["index"] - 1) % (_last() + 1)
-
-    @bindings.add("down")
-    def _down(event: KeyPressEvent) -> None:
-        del event
-        state["index"] = (state["index"] + 1) % (_last() + 1)
-
-    @bindings.add("home")
-    def _first(event: KeyPressEvent) -> None:
-        del event
-        state["index"] = 0
-
-    @bindings.add("end")
-    def _end(event: KeyPressEvent) -> None:
-        del event
-        state["index"] = _last()
-
-    @bindings.add("enter")
-    def _accept(event: KeyPressEvent) -> None:
-        del event
-        current = list(rows())
-        index = state["index"]
-        application.exit(result=None if index >= len(current) else (current[index].value, index))
+    bindings = bindings_for(
+        state,
+        rows,
+        toggle,
+        # Deferred rather than passed: `application.exit` does not exist until the
+        # Application below has been built, and by then these handlers are only defined.
+        lambda result: application.exit(result=result),
+    )
 
     application: Application[object] = Application(
         layout=Layout(

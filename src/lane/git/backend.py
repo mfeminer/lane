@@ -12,6 +12,7 @@ swapped in here without the rest of the application noticing.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -163,6 +164,29 @@ class GitBackend(Protocol):
         the work happens while lane is not watching, so a branch created mid-task is
         recorded nowhere except the worktree's own reflog. Only names that are still
         branches are returned.
+        """
+        ...
+
+    # -- what a fresh checkout is missing ------------------------------------
+    def ignored_paths(self, repo: Path) -> list[str]:
+        """Everything git ignores in this repository and that exists on disk.
+
+        One row per fully ignored directory rather than one per file inside it: a
+        dependency tree is one decision, not two hundred thousand of them. Rows are
+        relative to the repository root and never nested inside one another.
+        """
+        ...
+
+    def ignored_as_given(self, worktree: Path, paths: Sequence[str]) -> set[str]:
+        """Which of `paths` git ignores, taken exactly as spelled.
+
+        The spelling is the question. A trailing slash asks about a *directory*; its
+        absence asks about anything else — and `node_modules/` matches directories
+        only, so a symlink of that name is an untracked file rather than an ignored
+        one. That is the difference between `link` being usable for a path and not.
+
+        A tracked path is never returned, which is what keeps lane from writing over
+        one. Asked in a single call for the whole list.
         """
         ...
 
