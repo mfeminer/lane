@@ -720,6 +720,12 @@ git tag -a v0.0.3 -m "..." && git push --tags
 CD builds the binary, refuses to publish if its `--version` doesn't match the tag,
 and otherwise publishes a GitHub release with `lane-macos-arm64` attached.
 
+**If you publish a release from GitHub's web UI instead**, that creates the tag too, so
+CD still runs — it finds the release already there and attaches the binary to it,
+leaving your title and notes as you wrote them. Either door ends with the binary on the
+release, which is what the install instructions depend on. The tag command is still the
+one to prefer: it makes an annotated tag, where the UI makes a lightweight one.
+
 **The notes are generated from the pull requests** merged since the previous tag,
 grouped by the labels in [`.github/release.yml`](../.github/release.yml) —
 `enhancement` under *Added*, `bug` under *Fixed*, and `documentation` /
