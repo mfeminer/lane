@@ -292,9 +292,7 @@ def bindings_for[T](
 ) -> KeyBindings:
     """The keys this table answers to: **the picker's set, and nothing else, ever.**
 
-    A `toggle` changes what `Enter` *does* on a row, never which keys exist. There was a
-    `Space` here briefly and it earned nothing — `Enter` already changed the same rows, so
-    the only place the two differed was the row where `Space` did nothing at all.
+    A `toggle` changes what `Enter` *does* on a row, never which keys exist.
 
     A unit of its own so that "this table binds no key of its own" is something a test can
     *check* rather than something the docs assert: a bound handler that happens to do

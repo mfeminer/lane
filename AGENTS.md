@@ -100,15 +100,6 @@ tool's invention. Choosing a row opens a two-entry menu instead — one keystrok
 more, no new vocabulary. If a future change wants letter keys, that is a decision
 to take deliberately, not a convenience to slip in.
 
-**A `Space` was added for the preparation screen and then removed, which is worth
-recording so nobody adds it again.** It passed the *teachability* test the rule states —
-`fzf --multi`, `tig` and every package manager's checkbox prompt use it — but it failed a
-simpler one: **it added no capability.** `Enter` already changed the same rows through the
-same call, so the only place the two differed was the `continue` row, where `Space` did
-nothing at all. A key that does nothing the universal key does not already do is a key
-that should not exist, however defensible its pedigree. The table above is the whole
-vocabulary, unchanged since it was written.
-
 **Escape is deliberately not bound.** Two attempts failed, and both are recorded so
 nobody tries them again:
 

@@ -556,15 +556,16 @@ def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
     assert any("node_modules" in line and "clone" in line for line in painted), "and after"
 
 
-def test_space_is_not_bound_and_does_nothing(keys: PipeInput) -> None:
-    """It was, briefly, and it earned nothing: `Enter` already did the same thing on the
-    same rows, so the only place they differed was the row where `Space` did nothing at
-    all. A key that adds no capability is a key that should not exist."""
+def test_space_is_treated_as_any_other_unknown_key(keys: PipeInput) -> None:
+    """Pinned for space specifically because it is the keystroke most likely to arrive
+    here by habit — a list of rows carrying answers is where `fzf --multi` and `tig` would
+    take it. It has to be harmless rather than half-bound: nothing changes, and the table
+    stays up, exactly as for any key the table does not know."""
     answers = _Answers()
     result = _toggling(keys, " \x1b[B\x1b[B\r", answers)
 
     assert answers.toggled == [], "the space went nowhere"
-    assert result == ("continue", 2), "and the table stayed up, as for any unknown key"
+    assert result == ("continue", 2), "and the table stayed up"
 
 
 def _ignore(result: object) -> None:

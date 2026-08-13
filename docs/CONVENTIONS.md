@@ -68,20 +68,11 @@ AGENTS.md's "Going back is visible" section. **A new screen introduces no key th
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
-**A `Space` was added for the preparation screen and then removed.** It passed the test
-this rule states — what is banned is a key the user would have to be *taught*, and `Space`
-to change the row under the cursor is what `fzf --multi`, `tig` and every package manager's
-checkbox prompt already use. It failed a simpler one: **it added no capability.** `Enter`
-already changed the same rows through the same call, so the only place the two differed was
-the `continue` row, where `Space` did nothing at all.
-
-The lesson worth keeping: *"a user would already expect it"* is the bar for a key that
-earns its place, not a reason to add one. Ask what it does that `Enter` does not first.
-
-So a screen whose rows carry an answer binds nothing new — `Enter` changes the row under
-the cursor and returns only a row that has no answer to change, which is the same
-"act on the row under the cursor" it means everywhere. The footer stays the single `HINT`
-constant, since there is nothing extra to announce.
+**A screen whose rows each carry an answer needs no key of its own.** `Enter` changes the
+row under the cursor and returns only a row that has no answer to change (`continue`) —
+which is the same "act on the row under the cursor" it means everywhere — and the footer
+stays the single `HINT` constant, because there is nothing extra to announce. See
+`Ui.browse`'s `toggle`.
 
 The one place this table is currently *misrepresented* rather than violated: fix per
 §9 below.
