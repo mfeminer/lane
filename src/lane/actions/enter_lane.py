@@ -241,7 +241,7 @@ class _Sheet:
         )
 
     def toggle(self, value: str) -> bool:
-        """`Space`, and `Enter` on anything but the last row."""
+        """`Enter` on any row but the last, where there is no answer to change."""
         if value == CONTINUE:
             return False
         candidate = next(one for one in self.candidates if one.path == value)

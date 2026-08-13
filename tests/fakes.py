@@ -177,10 +177,11 @@ class FakeUi:
         difference is the only reason "render what is known, fill the rest in" can
         be asserted without sleeps.
 
-        An answer of the form `("space", <row>)` presses Space on that row, so a test
-        drives *"change the first row, change the third, continue"* as a script:
+        With a `toggle`, an answer that names a row carrying an answer *changes* it and
+        the script carries on — exactly as `Enter` does on the real screen. So *"change
+        the first row, change the third, then go on"* is:
 
-            FakeUi([("space", "apps/web/node_modules"), ("space", 2), "continue"])
+            FakeUi(["apps/web/node_modules", 2, "continue"])
         """
         if fill is not None:
             fill(lambda: None)
@@ -206,17 +207,13 @@ class FakeUi:
             answer = self._next(title)
             if isinstance(answer, str) and answer.lower() in {"back", back.lower()}:
                 raise Abandoned
-            if _is_space(answer):
-                if toggle is None:
-                    raise AssertionError(f"FakeUi pressed space on {title!r}, which has no toggle")
-                assert isinstance(answer, tuple)
-                index = _index_of(title, table, answer[1])
-                toggle(table[index].value)
-                # The answer belongs to the action, so the table is read again exactly as
-                # a repaint would: what changed is on screen, and recorded.
+            index = _index_of(title, table, answer)
+            if toggle is not None and toggle(table[index].value):
+                # A row that carries an answer: choosing it changed it, and there is more
+                # to do on this screen. The table is read again exactly as a repaint
+                # would, so what changed is on screen and recorded.
                 table = paint()
                 continue
-            index = _index_of(title, table, answer)
             return table[index].value, index
 
     def text(
@@ -292,10 +289,6 @@ class FakeUi:
 
     def unanswered(self) -> int:
         return len(self._answers)
-
-
-def _is_space(answer: object) -> bool:
-    return isinstance(answer, tuple) and len(answer) == 2 and answer[0] == "space"
 
 
 def _index_of(title: str, table: Sequence[Row[object]], answer: object) -> int:

@@ -449,7 +449,7 @@ def test_a_table_with_no_rows_is_only_a_way_back(keys: PipeInput) -> None:
         browse("nothing", COLUMNS, list, BACK, input=keys, output=SizedOutput())
 
 
-# -- multi-select rows: Space changes the row under the cursor --------------------
+# -- rows that carry an answer: Enter changes the one under the cursor ------------
 
 
 PREPARE_COLUMNS = (
@@ -504,12 +504,21 @@ def _toggling(keys: PipeInput, sent: str, answers: _Answers) -> tuple[str, int]:
     )
 
 
-def test_space_changes_the_row_under_the_cursor(keys: PipeInput) -> None:
+def test_enter_changes_the_row_under_the_cursor_and_stays(keys: PipeInput) -> None:
+    """`Enter` means "act on the row under the cursor" here as everywhere else; on a row
+    that carries an answer, acting on it is changing it."""
     answers = _Answers()
-    _toggling(keys, " \x1b[B\x1b[B\r", answers)
+    result = _toggling(keys, "\r\x1b[B\x1b[B\r", answers)
 
     assert answers.toggled == ["node_modules"], "the row under the cursor, and only it"
     assert answers.verbs == {"node_modules": "clone", "dist": "skip"}
+    assert result == ("continue", 2), "the row with no answer to change is the one returned"
+
+
+def test_enter_cycles_and_wraps(keys: PipeInput) -> None:
+    answers = _Answers()
+    _toggling(keys, "\r\r\r\x1b[B\x1b[B\r", answers)
+    assert answers.verbs["node_modules"] == "skip", "skip → clone → link → skip"
 
 
 def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
@@ -527,7 +536,7 @@ def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
 
     def finish(notify: object) -> None:
         del notify
-        keys.send_text(" ")
+        keys.send_text("\r")
         changed.wait(30)
         keys.send_text("\x1b[B\x1b[B\r")
 
@@ -547,15 +556,16 @@ def test_a_changed_row_is_repainted(keys: PipeInput) -> None:
     assert any("node_modules" in line and "clone" in line for line in painted), "and after"
 
 
-def test_space_cycles_and_wraps(keys: PipeInput) -> None:
+def test_space_is_treated_as_any_other_unknown_key(keys: PipeInput) -> None:
+    """Pinned for space specifically because it is the keystroke most likely to arrive
+    here by habit — a list of rows carrying answers is where `fzf --multi` and `tig` would
+    take it. It has to be harmless rather than half-bound: nothing changes, and the table
+    stays up, exactly as for any key the table does not know."""
     answers = _Answers()
-    _toggling(keys, "   \x1b[B\x1b[B\r", answers)
-    assert answers.verbs["node_modules"] == "skip", "skip → clone → link → skip"
+    result = _toggling(keys, " \x1b[B\x1b[B\r", answers)
 
-
-def test_space_does_nothing_at_all_without_a_toggle(keys: PipeInput) -> None:
-    """The key belongs to multi-select rows, not to lists in general."""
-    assert _browse(keys, " \r") == ("improve", 0)
+    assert answers.toggled == [], "the space went nowhere"
+    assert result == ("continue", 2), "and the table stayed up"
 
 
 def _ignore(result: object) -> None:
@@ -563,58 +573,34 @@ def _ignore(result: object) -> None:
     del result
 
 
-def test_a_table_without_a_toggle_does_not_bind_space_at_all() -> None:
-    """AGENTS.md claims no existing screen gained a key, and a handler that is bound and
-    then no-ops does not honour that: the keystroke is still consumed here rather than
-    falling through as any unrecognised key does. Asserted on the binding table, because
-    that is the only place the two are distinguishable."""
+def test_the_table_binds_exactly_the_pickers_keys_and_nothing_else() -> None:
+    """The whole vocabulary, whether or not rows carry an answer. Asserted on the binding
+    table rather than by driving keys, because a bound handler that happens to do nothing
+    still swallows the keystroke — which is not the same as leaving the key unbound."""
     state = {"index": 0, "top": 0, "rows": 0, "opening": 1}
     answers = _Answers()
+    expected = {Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC}
 
-    plain = bindings_for(state, _rows, None, _ignore)
-    toggling = bindings_for(state, answers.rows, answers.toggle, _ignore)
-
-    assert plain.get_bindings_for_keys((" ",)) == []
-    assert toggling.get_bindings_for_keys((" ",)) != []
-    # Everything else is bound either way — the picker's set, unchanged. `Enter` and
-    # `Ctrl-C` arrive under their control-code names, which is prompt_toolkit's normalising
-    # rather than anything of ours.
-    for key in (Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC):
-        assert plain.get_bindings_for_keys((key,)) != [], f"{key} is bound either way"
+    for label, bindings in (
+        ("plain", bindings_for(state, _rows, None, _ignore)),
+        ("with a toggle", bindings_for(state, answers.rows, answers.toggle, _ignore)),
+    ):
+        bound = {key for binding in bindings.bindings for key in binding.keys}
+        assert bound == expected, f"{label} binds {bound - expected} beyond the picker's set"
 
 
-def test_enter_on_a_row_that_toggles_toggles_and_stays(keys: PipeInput) -> None:
-    """So `Enter` still means "act on the row under the cursor" everywhere, with no
-    carve-out — and it cannot drift from `Space`, because it is the same call."""
-    answers = _Answers()
-    result = _toggling(keys, "\r\x1b[B\x1b[B\r", answers)
-
-    assert answers.verbs["node_modules"] == "clone"
-    assert result == ("continue", 2), "the row that does not toggle is the one returned"
-
-
-def test_the_footer_says_what_space_does_when_there_is_something_to_toggle() -> None:
-    from lane.ui.picker import HINT, TOGGLE_HINT
+def test_the_footer_is_the_same_one_hint_whether_rows_carry_an_answer_or_not() -> None:
+    """One hint string per widget, not one per call site (docs/CONVENTIONS.md §2) — and
+    with no key of its own there is nothing extra for this screen to announce."""
+    from lane.ui.picker import HINT
 
     answers = _Answers()
-    plain = paint(
+    lines = paint(
         "t", PREPARE_COLUMNS, answers.rows(), BACK, cursor=0, top=0, width=120, height=40
     ).lines
-    toggling = paint(
-        "t",
-        PREPARE_COLUMNS,
-        answers.rows(),
-        BACK,
-        cursor=0,
-        top=0,
-        width=120,
-        height=40,
-        toggles=True,
-    ).lines
 
-    assert HINT in plain[-1]
-    assert TOGGLE_HINT in toggling[-1]
-    assert "space" in TOGGLE_HINT
+    assert HINT in lines[-1]
+    assert "space" not in lines[-1].lower()
 
 
 def test_the_verb_column_survives_a_forty_column_terminal() -> None:

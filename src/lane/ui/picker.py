@@ -61,19 +61,6 @@ one, because it binds the same keys and nothing more."""
 
 FOOTER = f"\n  {HINT}\n"
 
-TOGGLE_HINT = "↑↓ move · space change · enter continue"
-"""The same string for a table whose rows carry an answer you change in place.
-
-`Space` is the one key this application adds beyond the table above, and it is added
-deliberately rather than slipped in: what the closed-vocabulary rule bans is a key the
-user would have to be *taught*, one that is this tool's invention. `Space` to change
-the row under the cursor in a multi-select list is what `fzf --multi`, `tig`, aptitude
-and every checkbox prompt in every package manager already do — so it passes the test
-the rule actually states, where a letter key for "close" did not.
-
-It is scoped to multi-select rows. It is not licence for a second key.
-"""
-
 BACK_OUT_HINT = "ctrl-c back out"
 """How to leave a free-text or confirmation prompt."""
 

@@ -85,16 +85,16 @@ Preparing demo/broken-pagination
   continue
   ← Back without entering
 
-  ↑↓ move · space change · enter continue
+  ↑↓ move · enter choose
 ```
 
 `clone` is a copy-on-write copy, so on APFS it costs almost nothing and almost no disk;
 `link` is a symlink to your main clone; `skip` leaves it out. Answer once and every lane in
 that project after it comes up ready.
 
-`↑` `↓` move, `Enter` chooses, `Space` changes an answer on a list like the one above,
-`Ctrl-C` backs out — from anywhere, and always safely: every question comes before the
-first irreversible step. There are **no subcommands**; `--version` and `--help` are the
+`↑` `↓` move, `Enter` chooses — and on a list like the one above, choosing a row is what
+changes its answer. `Ctrl-C` backs out, from anywhere, and always safely: every question
+comes before the first irreversible step. There are **no subcommands**; `--version` and `--help` are the
 only arguments.
 
 ## Configure
