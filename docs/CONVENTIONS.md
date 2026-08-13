@@ -62,28 +62,26 @@ otherwise have no visible exit and rely solely on an unannounced Ctrl-C.
 
 **Fully decided in AGENTS.md and `picker.py`; cited, not restated.** The whole
 vocabulary: `↑` `↓` `Home` `End` move, `Enter` chooses or accepts, `y`/`n` answer a
-yes/no question, `Space` changes the answer on a multi-select row, `Ctrl-C` backs out,
-everywhere. No `q`, no vim keys, no digit
+yes/no question, `Ctrl-C` backs out, everywhere. No `q`, no vim keys, no digit
 shortcuts, no Esc — each removed on purpose, with the reasoning kept in
 AGENTS.md's "Going back is visible" section. **A new screen introduces no key this table doesn't already
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
-**`Space` is the one key added since this table closed, and the test it passed is the
-one the rule states.** What is banned is a key the user would have to be *taught*, one
-that is this tool's invention. `Space` to change the row under the cursor in a
-multi-select list is what `fzf --multi`, `tig`, aptitude and every checkbox prompt in
-every package manager already do, so it needs no legend and no teaching — where `c` for
-close would have needed both. Two limits come with it:
+**A `Space` was added for the preparation screen and then removed.** It passed the test
+this rule states — what is banned is a key the user would have to be *taught*, and `Space`
+to change the row under the cursor is what `fzf --multi`, `tig` and every package manager's
+checkbox prompt already use. It failed a simpler one: **it added no capability.** `Enter`
+already changed the same rows through the same call, so the only place the two differed was
+the `continue` row, where `Space` did nothing at all.
 
-- **It is scoped to rows that carry an answer**, not to lists in general. Without a
-  `toggle`, `Ui.browse` does not bind it at all, so no existing screen gained a key.
-- **`Enter` on such a row does exactly what `Space` does**, through the same call, so
-  `Enter` still means "act on the row under the cursor" everywhere and the two cannot
-  drift. Only a row with no answer to change (`continue`) accepts and leaves.
+The lesson worth keeping: *"a user would already expect it"* is the bar for a key that
+earns its place, not a reason to add one. Ask what it does that `Enter` does not first.
 
-The footer says so: `↑↓ move · space change · enter continue`, one constant beside `HINT`
-in `picker.py` — one hint string per widget mode, not per call site.
+So a screen whose rows carry an answer binds nothing new — `Enter` changes the row under
+the cursor and returns only a row that has no answer to change, which is the same
+"act on the row under the cursor" it means everywhere. The footer stays the single `HINT`
+constant, since there is nothing extra to announce.
 
 The one place this table is currently *misrepresented* rather than violated: fix per
 §9 below.

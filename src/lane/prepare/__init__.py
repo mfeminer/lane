@@ -136,7 +136,7 @@ class Candidate:
     linkable: bool = True
 
     def cycle(self) -> tuple[Verb, ...]:
-        """The verbs `Space` moves through for this row, in order."""
+        """The verbs `Enter` moves through for this row, in order."""
         if self.linkable:
             return (Verb.SKIP, Verb.CLONE, Verb.LINK)
         return (Verb.SKIP, Verb.CLONE)
@@ -304,5 +304,5 @@ def _present(path: Path) -> bool:
 
 
 def with_verb(step: Step, verb: Verb) -> Step:
-    """The same step, answered differently. Used by the screen's `Space`."""
+    """The same step, answered differently."""
     return replace(step, verb=verb)

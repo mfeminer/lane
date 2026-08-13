@@ -210,7 +210,7 @@ def test_the_screen_says_it_will_be_remembered_and_where_to_change_it(
 def test_changing_a_row_to_clone_brings_the_path_in_and_remembers_it(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi([("space", "node_modules"), "continue"])
+    ui = FakeUi(["node_modules", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "pkg")
@@ -229,7 +229,7 @@ def test_a_second_lane_in_the_same_project_asks_nothing(
 ) -> None:
     """The whole point of remembering: this is the screen's second appearance, and it
     does not appear."""
-    first_ui = FakeUi([("space", "node_modules"), "continue"])
+    first_ui = FakeUi(["node_modules", "continue"])
     context = _context(ui=first_ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "pkg")
@@ -245,7 +245,7 @@ def test_a_second_lane_in_the_same_project_asks_nothing(
 
 
 def test_space_cycles_through_the_verbs_and_wraps(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi([("space", ".env"), ("space", ".env"), ("space", ".env"), "continue"])
+    ui = FakeUi([".env", ".env", ".env", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
@@ -265,7 +265,7 @@ def test_link_is_not_offered_for_a_path_ignored_as_a_directory_only(
     """`node_modules/` matches directories, and a symlink is not one — so linking it
     would put `● 1 uncommitted` in the listing over a link the user asked for. git
     answers this, and the panel says so."""
-    ui = FakeUi([("space", "node_modules"), ("space", "node_modules"), "continue"])
+    ui = FakeUi(["node_modules", "node_modules", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules")
@@ -280,7 +280,7 @@ def test_link_is_not_offered_for_a_path_ignored_as_a_directory_only(
 
 
 def test_link_is_offered_for_a_path_ignored_by_name(projects_root: Path, lanes_root: Path) -> None:
-    ui = FakeUi([("space", ".env"), ("space", ".env"), "continue"])
+    ui = FakeUi([".env", ".env", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
@@ -297,7 +297,7 @@ def test_a_path_already_in_the_lane_says_the_answer_overwrites_it(
 ) -> None:
     """The fact that changes what the answer means, on the row, in words — so the
     destructive case names itself before it happens."""
-    ui = FakeUi([("space", "node_modules"), "continue"])
+    ui = FakeUi(["node_modules", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules", "fresh")
@@ -573,7 +573,7 @@ def test_cloning_a_path_that_looks_like_secrets_says_link_keeps_one_copy(
 ) -> None:
     """Copying a `.env` into every lane multiplies the number of places a secret lives.
     Closing the lane removes them — a refused close does not."""
-    ui = FakeUi([("space", ".env"), "continue"])
+    ui = FakeUi([".env", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")
@@ -587,7 +587,7 @@ def test_cloning_a_path_that_looks_like_secrets_says_link_keeps_one_copy(
 def test_a_path_that_does_not_look_like_secrets_says_nothing_about_them(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    ui = FakeUi([("space", "node_modules"), "continue"])
+    ui = FakeUi(["node_modules", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
     _tree(repo / "node_modules")
@@ -603,7 +603,7 @@ def test_a_path_that_does_not_look_like_secrets_says_nothing_about_them(
 def test_a_prepared_lane_is_still_clean_to_git(projects_root: Path, lanes_root: Path) -> None:
     """Only paths git ignores in the lane are ever written, which is what keeps
     preparation out of the listing's `state` cell and out of the close flow's checks."""
-    ui = FakeUi([("space", "node_modules"), ("space", ".env"), ("space", ".env"), "continue"])
+    ui = FakeUi(["node_modules", ".env", ".env", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/", ".env"))
     _tree(repo / "node_modules")
@@ -636,7 +636,7 @@ def test_closing_a_lane_with_a_linked_path_leaves_the_target_alone(
 ) -> None:
     """Being wrong here deletes the main clone's copy, which every other lane shares.
     So it is measured rather than assumed."""
-    ui = FakeUi([("space", ".env"), ("space", ".env"), "continue"])
+    ui = FakeUi([".env", ".env", "continue"])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
     (repo / ".env").write_text("SECRET=1\n")

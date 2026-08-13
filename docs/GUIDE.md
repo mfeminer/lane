@@ -60,7 +60,6 @@ menu` row, and the main menu ends with `quit`.
 | `↑` `↓` | move through a list or a table (`Home` / `End` jump to the ends) |
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question; `Enter` takes the default shown in `[y/N]` |
-| `Space` | change the answer on the row you're on — only where rows *have* answers |
 | `Ctrl-C` | back out, from anywhere |
 
 That's the whole list. No `q`, no vim keys, no number shortcuts — and `Esc` is not
@@ -72,11 +71,10 @@ The lanes table didn't add a key either — there's no `c` for close. That's why
 `Enter` on a row offers you its verbs instead of a legend telling you which letters
 do what.
 
-`Space` is the one exception, and only on the preparation screen below, where each row
-carries an answer you cycle rather than a thing you pick. It's what `fzf --multi`, `tig`
-and every package manager's checkbox prompt already use, so there was nothing to learn.
-`Enter` on one of those rows does the same as `Space`, so you never have to remember which
-one you're on.
+That holds on the preparation screen below too, where each row carries an answer you
+cycle rather than a thing you pick: `Enter` on such a row *changes* it and stays, and only
+`continue` — a row, with a name — takes you onward. Nothing new to learn, and nothing new
+to press.
 
 **Backing out is always safe.** Every question an action asks comes *before* its
 first irreversible step, so leaving half-way through leaves your disk exactly as it
@@ -173,11 +171,12 @@ Preparing demo/broken-pagination
   continue
   ← Back without entering
 
-  ↑↓ move · space change · enter continue
+  ↑↓ move · enter choose
 ```
 
-`Space` (or `Enter`) cycles the row you're on. Every row starts at `skip`, so pressing
-`Enter` straight away is safe: nothing is copied, and lane stops asking. Answers are
+`Enter` cycles the row you're on — `skip` → `clone` → `link` → `skip` — and the verb cell
+changes as you press it, so nothing is hidden. Every row starts at `skip`, so pressing
+`Enter` on `continue` straight away is safe: nothing is copied, and lane stops asking. Answers are
 remembered, so the **second** lane in that project asks nothing at all and just comes up
 ready.
 

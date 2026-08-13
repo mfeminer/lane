@@ -374,7 +374,7 @@ def test_opening_a_lane_ends_by_entering_it(
             "Fix pagination",
             "branch",
             "bugfix/fix-pagination",
-            ("space", "node_modules"),
+            "node_modules",
             "continue",
         ]
     )

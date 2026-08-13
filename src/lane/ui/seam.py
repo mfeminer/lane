@@ -95,9 +95,9 @@ type Toggle[T] = Callable[[T], bool]
 """Change the row's own answer in place. True if it did.
 
 False means this row is not one that carries an answer — the widget then accepts it,
-which is how one screen has both rows you cycle through and rows you choose. `Space`
-ignores a False; `Enter` returns the row. One call for both, so `Enter` cannot drift
-from `Space`.
+which is how one screen has both rows you cycle through and rows you choose. So `Enter`
+still means "act on the row under the cursor" everywhere, and the screen needs no key of
+its own: acting on a row that has an answer is changing it.
 
 The answer belongs to the action, exactly as the rows already do: the widget calls this
 and repaints from `rows()`. Nothing about what an answer *means* lives below the seam.
@@ -153,10 +153,10 @@ class Ui(Protocol):
 
         The visible `back` row and Ctrl-C both raise `Abandoned`, as in `choose`.
 
-        With a `toggle`, this is a screen whose rows carry an answer the user changes
-        in place with `Space` rather than a screen they pick one row from. `Enter`
-        changes a row that has an answer and returns one that does not, so a screen can
-        have both — a row per decision, and a row that means "go on".
+        With a `toggle`, this is a screen whose rows carry an answer the user changes in
+        place rather than a screen they pick one row from. `Enter` changes a row that has
+        an answer and returns one that does not, so a screen can have both — a row per
+        decision, and a row that means "go on" — while binding no new key.
         """
         ...
 

@@ -91,7 +91,6 @@ whole mechanism, and it is why almost nothing needs binding:
 | `↑` `↓` `Home` `End` | move |
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
-| `Space` | change the answer on the row under the cursor — **multi-select rows only** |
 | `Ctrl-C` | back out |
 
 **That table is the whole vocabulary.** It describes Ctrl-C *at a prompt*; what it
@@ -101,14 +100,14 @@ tool's invention. Choosing a row opens a two-entry menu instead — one keystrok
 more, no new vocabulary. If a future change wants letter keys, that is a decision
 to take deliberately, not a convenience to slip in.
 
-**`Space` is the one key added since, and it passes the test the rule states.** What
-is banned is a key the user would have to be *taught*, one that is this tool's
-invention; `Space` to change the row under the cursor in a multi-select list is what
-`fzf --multi`, `tig`, aptitude and every checkbox prompt in every package manager
-already do. It arrived with the preparation screen (*Preparing a lane* below), it is
-**scoped to rows that carry an answer**, and it is not licence for a second one. On
-such a screen `Enter` on a row does exactly what `Space` does — one call, so the two
-cannot drift — and only a row with no answer to change (`continue`) accepts.
+**A `Space` was added for the preparation screen and then removed, which is worth
+recording so nobody adds it again.** It passed the *teachability* test the rule states —
+`fzf --multi`, `tig` and every package manager's checkbox prompt use it — but it failed a
+simpler one: **it added no capability.** `Enter` already changed the same rows through the
+same call, so the only place the two differed was the `continue` row, where `Space` did
+nothing at all. A key that does nothing the universal key does not already do is a key
+that should not exist, however defensible its pedigree. The table above is the whole
+vocabulary, unchanged since it was written.
 
 **Escape is deliberately not bound.** Two attempts failed, and both are recorded so
 nobody tries them again:
@@ -563,9 +562,10 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **The lanes screen binds no key the picker does not** — arrows, `Enter`,
   `Ctrl-C`. A letter key for a verb would be this tool's invention, however visible
   the legend.
-- **`Space` belongs to rows that carry an answer, and to nothing else** — it is the one
-  key added after the vocabulary closed, and it earned that by being what every
-  multi-select list already uses. Without a `toggle` the widget does not bind it at all.
+- **The table binds exactly the picker's keys, whatever its rows carry** — a `toggle`
+  changes what `Enter` *does* on a row, never which keys exist. Asserted on the binding
+  table itself, because a bound handler that happens to do nothing still swallows the
+  keystroke, which is not the same as leaving a key unbound.
 - **The listing never blocks on `gh`** — git status is collected before the first
   paint, pull request state fills in behind it. It is the difference between a
   screen that appears and one that appears two seconds later.
@@ -712,7 +712,8 @@ than two.
   bare spelling comes back. A tracked path never does, which is what stops lane writing
   over one.
 - **The user is asked once per project per path, on one screen.** One row per path, one
-  keystroke per change, the whole set visible, sizes filling in behind it. A queue of
+  keystroke per change, the whole set visible, sizes filling in behind it — and no key
+  beyond `Enter`. A queue of
   prompts is the wrong shape: entering a lane is something you do several times a day on
   the way to your editor, and three questions in sequence is a toll. Every row starts at
   `skip`, so one `Enter` is safe; answers are remembered, and settings is where one is
@@ -960,8 +961,8 @@ All of it arrived at test-first:
   leaving the main clone's copy intact
 - entering an already-prepared lane making **exactly one** git call, asking nothing and
   drawing nothing — counted through the real backend
-- `Space` changing the row under the cursor and the repaint showing it; `Enter` doing the
-  same on a row that carries an answer and returning the one that does not
+- `Enter` changing the row under the cursor and the repaint showing it, returning only
+  the row with no answer to change; and the table binding no key beyond the picker's set
 - the `verb` column surviving at 40 columns with `clone · overwrites` in it
 - a failed step reporting its fix while the remaining steps still run and the editor still
   opens; entering again finishing what it left

@@ -45,7 +45,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.picker import ESCAPE_TIMEOUT, HINT, TOGGLE_HINT
+from lane.ui.picker import ESCAPE_TIMEOUT, HINT
 from lane.ui.seam import Abandoned, Cell, Column, Fill, Row, Toggle
 
 CURSOR_WIDTH = 2
@@ -219,7 +219,6 @@ def paint(
     top: int,
     width: int,
     height: int,
-    toggles: bool = False,
 ) -> Painted:
     """Draw one frame. Pure, which is what makes the layout rules testable."""
     total = len(rows) + 1  # the visible way back is a row like any other
@@ -265,8 +264,7 @@ def paint(
         first = top + 1
         last = min(top + room, total)
         shown = f" · {first}–{last} of {len(rows)}"
-    hint = TOGGLE_HINT if toggles else HINT
-    fragments.append(("class:table.footer", f"  {hint}{shown}"))
+    fragments.append(("class:table.footer", f"  {HINT}{shown}"))
 
     return Painted(fragments=fragments, top=top, room=room)
 
@@ -292,13 +290,15 @@ def bindings_for[T](
     toggle: Toggle[T] | None,
     exit_with: Callable[[tuple[T, int] | None], None],
 ) -> KeyBindings:
-    """The keys this table answers to — the picker's set, plus `Space` only when asked.
+    """The keys this table answers to: **the picker's set, and nothing else, ever.**
 
-    A unit of its own so that "a screen without a `toggle` gains no key" is something a
-    test can *check* rather than something the docs assert. A bound handler that no-ops
-    would look identical from the outside while still swallowing the keystroke, which is
-    not the same thing as leaving the key unbound, and the difference is exactly what
-    AGENTS.md promises.
+    A `toggle` changes what `Enter` *does* on a row, never which keys exist. There was a
+    `Space` here briefly and it earned nothing — `Enter` already changed the same rows, so
+    the only place the two differed was the row where `Space` did nothing at all.
+
+    A unit of its own so that "this table binds no key of its own" is something a test can
+    *check* rather than something the docs assert: a bound handler that happens to do
+    nothing looks identical from the outside while still swallowing the keystroke.
     """
     bindings = KeyBindings()
 
@@ -344,24 +344,11 @@ def bindings_for[T](
             exit_with(None)
             return
         if toggle is not None and toggle(row.value):
-            # A row that carries an answer: Enter changed it, and there is more to do
-            # on this screen. Exactly what Space does, by the same call.
+            # A row that carries an answer: acting on it changed it, and there is more to
+            # do on this screen. The answer belongs to the caller, as the rows already do,
+            # so what changed reaches the screen through the next repaint reading `rows()`.
             return
         exit_with((row.value, state["index"]))
-
-    if toggle is None:
-        # Nothing else on this screen wants the key, so it is left to fall through as any
-        # unrecognised key does. **No existing screen gains a key**, which is the promise.
-        return bindings
-
-    @bindings.add(" ")
-    def _change(event: KeyPressEvent) -> None:
-        del event
-        row = under_cursor()
-        if row is not None:
-            # The answer belongs to the caller, as the rows already do. Whatever it
-            # changed is on screen at the next repaint, which `rows()` supplies.
-            toggle(row.value)
 
     return bindings
 
@@ -384,10 +371,9 @@ def browse[T](
     Raises `Abandoned` for the visible back row and for Ctrl-C — the two ways out
     mean the same thing to the caller, so they are the same result.
 
-    With a `toggle`, rows carry an answer that is changed in place: `Space` changes the
-    row under the cursor and the table stays up. `Enter` calls the same `toggle` and
-    only returns the row when it says it does not toggle — one code path, so `Enter`
-    cannot drift from `Space`.
+    With a `toggle`, rows carry an answer that `Enter` changes in place: the table stays
+    up, and only a row whose `toggle` says it has no answer to change is returned. So
+    `Enter` still means "act on the row under the cursor" and the screen gains no key.
     """
     state = {"index": max(0, cursor), "top": 0, "rows": 0, "opening": 1}
 
@@ -411,7 +397,6 @@ def browse[T](
             top=state["top"],
             width=size.columns,
             height=size.rows - 1,
-            toggles=toggle is not None,
         )
         state["top"] = painted.top
         if on_render is not None:
