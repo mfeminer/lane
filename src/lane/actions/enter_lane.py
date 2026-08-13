@@ -48,8 +48,8 @@ from lane import prepare
 from lane.context import Context
 from lane.git.backend import GitError
 from lane.lanes import Lane
-from lane.prepare import Candidate, Effect, Step, Verb, apply
-from lane.ui.seam import Abandoned, Cell, Column, Row
+from lane.prepare import Candidate, Effect, Group, Step, Verb, apply
+from lane.ui.seam import Abandoned, Cell, Choice, Column, Row, Tone
 
 BACK = "← Back without entering"
 CONTINUE = "\x00continue\x00"
@@ -58,6 +58,12 @@ CONTINUE = "\x00continue\x00"
 only way out is an unannounced Ctrl-C is the one thing the visible-exit rule forbids."""
 
 REMEMBERED = "Answers are remembered per project — change them in settings · preparation."
+
+ONE_BY_ONE = "one by one…"
+"""The way into a folder's own files. A folder answered in one go is the common case; this
+is for the folder that mixes secrets with litter, where one answer cannot be right."""
+
+WITHIN_BACK = "← Back to the list"
 
 COLUMNS = (
     Column("path"),
@@ -193,6 +199,12 @@ def _what_the_lane_ignores(
 class _Sheet:
     """The rows, the answers they carry, and the sizes that arrive behind them.
 
+    A row is a path to answer or a **folder** of them. Grouping matters because git can
+    only collapse a directory it ignores *entirely*: one tracked file in it and every
+    ignored file inside is reported separately — measured at 55 rows from four ignore
+    patterns, 40 of them from a single `logs/`. That is a screen nobody reads on the way
+    to their editor.
+
     The answers are the action's, as the rows already are: the widget calls `toggle` and
     repaints from `rows`. Nothing about what an answer *means* lives below the seam.
     """
@@ -200,6 +212,7 @@ class _Sheet:
     def __init__(self, project: str, candidates: Sequence[Candidate], source: Path) -> None:
         self.project = project
         self.candidates = tuple(candidates)
+        self.items = prepare.group(self.candidates)
         self.source = source
         # Everything starts at the answer that changes nothing. One Enter records every
         # visible answer, including untouched rows, so the untouched answer has to be
@@ -210,13 +223,15 @@ class _Sheet:
 
     @property
     def title(self) -> str:
+        """Counts *paths*, not rows: the rows say how many each of them holds."""
         count = len(self.candidates)
         word = "path" if count == 1 else "paths"
         return f"{count} {word} lane has not been told about"
 
+    # -- the folder list -----------------------------------------------------
     def rows(self) -> list[Row[str]]:
         with self._lock:
-            table = [self._row(candidate) for candidate in self.candidates]
+            table = [self._row(item) for item in self.items]
         table.append(
             Row(
                 value=CONTINUE,
@@ -226,30 +241,71 @@ class _Sheet:
         )
         return table
 
-    def _row(self, candidate: Candidate) -> Row[str]:
-        measured = candidate.path in self.sizes
+    def _row(self, item: prepare.Item) -> Row[str]:
+        if isinstance(item, Group):
+            return Row(
+                value=item.label,
+                cells=(
+                    Cell(item.label),
+                    self._size_cell(item.paths),
+                    Cell(item.summary(self.verbs), tone=_group_tone(item, self.verbs)),
+                ),
+                detail=_group_detail(item, self.verbs),
+            )
         return Row(
-            value=candidate.path,
+            value=item.path,
             cells=(
-                Cell(candidate.path),
-                Cell(apply.size_phrase(self.sizes[candidate.path]), tone="dim")
-                if measured
-                else MEASURING,
-                _verb_cell(candidate, self.verbs[candidate.path]),
+                Cell(item.path),
+                self._size_cell((item.path,)),
+                _verb_cell(item, self.verbs[item.path]),
             ),
-            detail=_candidate_detail(candidate),
+            detail=_candidate_detail(item),
         )
 
+    def _size_cell(self, paths: Sequence[str]) -> Cell:
+        """One path's size, or a folder's total. `measuring…` until every part has landed."""
+        if any(path not in self.sizes for path in paths):
+            return MEASURING
+        known = [self.sizes[path] for path in paths]
+        total = sum(size for size in known if size is not None) if any(known) else None
+        return Cell(apply.size_phrase(total), tone="dim")
+
     def toggle(self, value: str) -> bool:
-        """`Enter` on any row but the last, where there is no answer to change."""
-        if value == CONTINUE:
+        """Change the row under the cursor, or say it is not that kind of row.
+
+        A folder and `continue` both answer False, which is what hands them back to the
+        action: a folder needs a question asked about it, and `continue` means go on.
+        """
+        candidate = next((one for one in self.candidates if one.path == value), None)
+        if candidate is None:
             return False
-        candidate = next(one for one in self.candidates if one.path == value)
         cycle = candidate.cycle()
         with self._lock:
             here = cycle.index(self.verbs[value])
             self.verbs[value] = cycle[(here + 1) % len(cycle)]
         return True
+
+    def group_named(self, label: str) -> Group | None:
+        return next(
+            (item for item in self.items if isinstance(item, Group) and item.label == label),
+            None,
+        )
+
+    def answer_group(self, group: Group, verb: Verb) -> None:
+        """One answer, applied to every path in the folder — never to the folder itself."""
+        with self._lock:
+            for path in group.paths:
+                self.verbs[path] = verb
+
+    # -- one folder, file by file --------------------------------------------
+    def within(self, group: Group) -> _Sheet:
+        """A sheet over just this folder's files, so the same screen serves both levels."""
+        inner = _Sheet(self.project, group.candidates, self.source)
+        inner.items = group.candidates
+        inner.verbs = self.verbs
+        inner.sizes = self.sizes
+        inner._lock = self._lock
+        return inner
 
     def fill(self, notify: object) -> None:
         """Measure each path, behind the screen the user is already reading.
@@ -259,7 +315,8 @@ class _Sheet:
         on the row before the answer is given but must not hold up the first paint.
         """
         assert callable(notify)
-        if not self.candidates:
+        outstanding = [one for one in self.candidates if one.path not in self.sizes]
+        if not outstanding:
             return
 
         def one(candidate: Candidate) -> None:
@@ -268,11 +325,15 @@ class _Sheet:
                 self.sizes[candidate.path] = size
             notify()
 
-        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(self.candidates))) as pool:
-            list(pool.map(one, self.candidates))
+        with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, len(outstanding))) as pool:
+            list(pool.map(one, outstanding))
 
     def answers(self) -> tuple[Step, ...]:
-        """Every row's answer, in the order they were offered."""
+        """Every path's answer, in the order they were offered.
+
+        One step per path even for a folder answered in one go, which is the property that
+        keeps a group safe: see `prepare.Group`.
+        """
         return tuple(
             Step(project=self.project, verb=self.verbs[candidate.path], path=candidate.path)
             for candidate in self.candidates
@@ -294,6 +355,25 @@ def _verb_cell(candidate: Candidate, verb: Verb) -> Cell:
     return Cell(f"{verb} · overwrites", tone="warn")
 
 
+def _group_tone(group: Group, verbs: dict[str, Verb]) -> Tone:
+    summary = group.summary(verbs)
+    if summary == str(Verb.SKIP):
+        return "dim"
+    if any(one.present for one in group.candidates) or summary == "mixed":
+        return "warn"
+    return ""
+
+
+def _group_detail(group: Group, verbs: dict[str, Verb]) -> tuple[str, ...]:
+    """What the one-word cell could not say."""
+    lines = [f"{len(group.candidates)} ignored files — {group.breakdown(verbs)}"]
+    if Verb.LINK not in group.verbs():
+        lines.append("One of them is ignored as a directory only, so 'link' is not offered.")
+    if any(one.present for one in group.candidates):
+        lines.append("Some are already in this lane — answering here replaces them.")
+    return tuple(lines)
+
+
 def _candidate_detail(candidate: Candidate) -> tuple[str, ...]:
     lines: list[str] = []
     if not candidate.linkable:
@@ -308,7 +388,7 @@ def _candidate_detail(candidate: Candidate) -> tuple[str, ...]:
 def _ask(
     context: Context, lane: Lane, repo: Path, candidates: tuple[Candidate, ...]
 ) -> tuple[Step, ...]:
-    """One screen, one row per path, one keystroke per change.
+    """One screen, one row per path or per folder, one keystroke per change.
 
     A queue of prompts is the wrong shape: entering a lane is something the user does
     several times a day on the way to their editor, and three questions in sequence to
@@ -320,15 +400,69 @@ def _ask(
     ui.detail(f"  {REMEMBERED}")
     ui.blank()
 
-    ui.browse(
-        sheet.title,
-        COLUMNS,
-        sheet.rows,
-        back=BACK,
-        fill=sheet.fill,
-        toggle=sheet.toggle,
-    )
-    return sheet.answers()
+    cursor = 0
+    while True:
+        chosen, cursor = ui.browse(
+            sheet.title,
+            COLUMNS,
+            sheet.rows,
+            back=BACK,
+            fill=sheet.fill,
+            toggle=sheet.toggle,
+            cursor=cursor,
+        )
+        if chosen == CONTINUE:
+            return sheet.answers()
+        group = sheet.group_named(chosen)
+        if group is not None:
+            _answer_folder(context, sheet, group)
+
+
+def _answer_folder(context: Context, sheet: _Sheet, group: Group) -> None:
+    """A folder of loose ignored files: all of it at once, or file by file.
+
+    Both halves are needed and the second is not a luxury: a folder that mixes `.env`
+    files with build litter is exactly the shape git fails to collapse, and one answer
+    cannot be right for both kinds.
+
+    A `choose` rather than a fourth position in the row's cycle — a folder is a
+    *destination*, the way a lane in the listing is, and `Enter` opening its verbs is the
+    pattern that screen already set.
+    """
+    # `Verb` is a `StrEnum`, so the sentinel shares the option type without a wrapper —
+    # and no verb spells itself "one by one…", so the two can never be confused.
+    options: list[Choice[Verb | str]] = [
+        Choice(f"{verb} all", verb, f"answer all {len(group.candidates)} of them {verb}")
+        for verb in group.verbs()
+    ]
+    options.append(Choice(ONE_BY_ONE, ONE_BY_ONE, "pick through them yourself"))
+
+    try:
+        chosen = context.ui.choose(group.label, options)
+    except Abandoned:
+        # Back to the folder list, not out of entering: this is a screen the user is
+        # standing in, the same reason the listing catches it around its own row menu.
+        return
+
+    if chosen != ONE_BY_ONE:
+        assert isinstance(chosen, Verb)
+        sheet.answer_group(group, chosen)
+        return
+
+    inner = sheet.within(group)
+    try:
+        context.ui.browse(
+            group.label,
+            COLUMNS,
+            inner.rows,
+            back=WITHIN_BACK,
+            fill=inner.fill,
+            toggle=inner.toggle,
+        )
+    except Abandoned:
+        # Whatever was changed before backing out is kept: the answers live on the outer
+        # sheet, and nothing is written until `continue` there.
+        return
 
 
 def _warn_about_secrets(context: Context, answered: tuple[Step, ...]) -> None:

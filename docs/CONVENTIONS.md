@@ -329,6 +329,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | Bringing what `.gitignore` hides into a lane, before the editor opens | **preparation** (verb: **prepare**) | setup, bootstrap, provisioning, sync, hydrate, seed |
 | One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
 | What lane does to a path | the **verb** — `clone`, `link`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`) |
+| Several loose ignored files under one directory, shown as one row | a **folder** (of files) | group (used in the source for the type, not on screen), bundle, batch |
+| A folder whose files are not all answered the same way | **mixed** | partial, some, varies |
 
 `verb` is the column header on both preparation screens for that last reason. AGENTS.md
 already calls `enter` and `close` "the two verbs" the lanes screen offers, so the word is

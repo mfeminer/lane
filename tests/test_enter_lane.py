@@ -665,3 +665,180 @@ def test_a_lane_whose_project_moved_is_still_entered(projects_root: Path, lanes_
     enter_lane.enter(context, moved)
 
     assert environment.launched
+
+
+# -- a folder of loose ignored files ----------------------------------------------
+
+
+def _litter(repo: Path, directory: str, *names: str) -> Path:
+    """Ignored files in a directory that also holds tracked work.
+
+    The tracked file is the whole point: without it git collapses the directory to one
+    ignored row and there is nothing to group. One tracked file and every ignored file
+    inside is reported separately — which is how a real repository reached 55 rows.
+
+    Returns the tracked file, committed and pushed so the lane has it too.
+    """
+    (repo / directory).mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (repo / directory / name).write_text(f"{name}\n")
+
+    tracked = repo / directory / "tracked.md"
+    tracked.write_text("tracked\n")
+    git(["add", f"{directory}/tracked.md"], cwd=repo)
+    git(["commit", "--quiet", "-m", f"tracked file in {directory}"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    return tracked
+
+
+def test_a_folder_of_loose_ignored_files_is_one_row_not_forty(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The whole point: a directory git could not collapse must not become forty rows on
+    the way to the editor."""
+    ui = FakeUi(["continue"])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("*.log",))
+    _litter(repo, "logs", *[f"day{n}.log" for n in range(1, 41)])
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert len(rows) == 2, f"one group row and continue, not forty: {rows}"
+    assert any("logs/ · 40 ignored files" in row for row in rows)
+
+
+def test_answering_a_whole_folder_at_once_answers_every_path_in_it(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    ui = FakeUi(["logs/ · 3 ignored files", "clone all", "continue"])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("*.log",))
+    _litter(repo, "logs", "a.log", "b.log", "c.log")
+    lane = _lane(context, repo)
+
+    enter_lane.enter(context, lane)
+
+    for name in ("a.log", "b.log", "c.log"):
+        assert (lane.path / "logs" / name).exists(), name
+    assert [(s.path, s.verb) for s in context.prepare_store().load().for_project("demo")] == [
+        ("logs/a.log", Verb.CLONE),
+        ("logs/b.log", Verb.CLONE),
+        ("logs/c.log", Verb.CLONE),
+    ], "one step per path — a group is never a step for its directory"
+
+
+def test_a_group_answer_never_writes_the_directory_itself(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The directory is only *partly* ignored — that is why its files were listed one by
+    one — so it holds tracked work too. Cloning the directory would overwrite it."""
+    ui = FakeUi(["logs/ · 3 ignored files", "clone all", "continue"])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("*.log",))
+    _litter(repo, "logs", "a.log", "b.log", "c.log")
+    lane = _lane(context, repo)
+    (lane.path / "logs" / "tracked.md").write_text("the lane's own version\n")
+
+    enter_lane.enter(context, lane)
+
+    assert (lane.path / "logs" / "tracked.md").read_text() == "the lane's own version\n"
+    assert context.git.status(lane.path, "main").dirty_count == 1, "only the file it edited"
+
+
+def test_a_folder_can_be_answered_one_file_at_a_time(projects_root: Path, lanes_root: Path) -> None:
+    """A folder that mixes secrets with junk is the case that needs this: clone the `.env`
+    files, leave the logs out."""
+    ui = FakeUi(
+        [
+            "web/ · 4 ignored files",
+            "one by one…",
+            "web/.env",  # skip -> clone
+            "web/.env.local",  # skip -> clone
+            "continue",  # back to the folder list
+            "continue",  # and on to the editor
+        ]
+    )
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=(".env*", "*.log"))
+    _litter(repo, "web", ".env", ".env.local", "a.log", "b.log")
+    lane = _lane(context, repo)
+
+    enter_lane.enter(context, lane)
+
+    assert (lane.path / "web" / ".env").exists()
+    assert (lane.path / "web" / ".env.local").exists()
+    assert not (lane.path / "web" / "a.log").exists()
+    assert not (lane.path / "web" / "b.log").exists()
+    assert {(s.path, s.verb) for s in context.prepare_store().load().for_project("demo")} == {
+        ("web/.env", Verb.CLONE),
+        ("web/.env.local", Verb.CLONE),
+        ("web/a.log", Verb.SKIP),
+        ("web/b.log", Verb.SKIP),
+    }
+
+
+def test_a_partly_answered_folder_reads_as_mixed_and_the_panel_counts_it(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    ui = FakeUi(
+        [
+            "web/ · 3 ignored files",
+            "one by one…",
+            "web/.env",
+            "continue",
+            "continue",
+        ]
+    )
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=(".env*", "*.log"))
+    _litter(repo, "web", ".env", "a.log", "b.log")
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    assert any("mixed" in told.text for told in ui.told if told.kind == "row")
+    assert any("1 clone, 2 skip" in told.text for told in ui.told if told.kind == "panel")
+
+
+def test_link_is_not_offered_for_a_folder_holding_something_that_cannot_be_linked(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """One answer for the whole folder can only offer what holds for all of it."""
+    offered: list[str] = []
+    ui = FakeUi(["a/ · 3 ignored files", "skip all", "continue"])
+    original = ui.choose
+
+    def watch(title: str, options: object, **kwargs: object) -> object:
+        assert isinstance(options, list)
+        offered.extend(option.label for option in options)
+        return original(title, options, **kwargs)  # type: ignore[arg-type]
+
+    ui.choose = watch  # type: ignore[method-assign, assignment]
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    # `node_modules/` is ignored as a directory only, so it cannot become a symlink.
+    repo = _project(projects_root, ignore=("*.log", "node_modules/"))
+    _litter(repo, "a", "x.log", "y.log")
+    (repo / "a" / "node_modules").mkdir()
+    (repo / "a" / "node_modules" / "pkg").write_text("pkg\n")
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    assert "clone all" in offered
+    assert "link all" not in offered, "one of them cannot be linked, so the group cannot"
+
+
+def test_backing_out_of_a_folder_returns_to_the_list_not_out_of_entering(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    ui = FakeUi(["web/ · 3 ignored files", FakeUi.ABANDON, "continue"])
+    context = _context(
+        ui=ui, projects_root=projects_root, lanes_root=lanes_root, environment=environment
+    )
+    repo = _project(projects_root, ignore=("*.log",))
+    _litter(repo, "web", "a.log", "b.log", "c.log")
+
+    enter_lane.enter(context, _lane(context, repo))
+
+    assert ui.unanswered() == 0, "the folder list came back, and 'continue' answered it"
+    assert environment.launched, "and entering carried on"

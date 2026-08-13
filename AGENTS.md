@@ -526,6 +526,9 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **Only paths git ignores *in the lane* are ever written** — asked of git in bulk, in
   both spellings. That is what keeps preparation out of the listing's `state` cell and out
   of the close flow's first check, and what stops a tracked file being overwritten.
+- **A folder row is never a step for the folder** — it stands for the paths inside it and
+  stores one step each. A partly ignored directory holds tracked work, so a step for the
+  directory itself would overwrite it.
 - **New branches are created with no upstream** — so a bare `git push` inside a
   lane can never land on the default branch.
 - **Commits on a detached HEAD are parked on `wip/<lane>` before removal, and that
@@ -702,9 +705,9 @@ than two.
   ignored in neither spelling is not offered at all, and `link` is offered only where the
   bare spelling comes back. A tracked path never does, which is what stops lane writing
   over one.
-- **The user is asked once per project per path, on one screen.** One row per path, one
-  keystroke per change, the whole set visible, sizes filling in behind it — and no key
-  beyond `Enter`. A queue of
+- **The user is asked once per project per path, on one screen.** One row per path or per
+  *folder* of them, one keystroke per change, the whole set visible, sizes filling in
+  behind it — and no key beyond `Enter`. A queue of
   prompts is the wrong shape: entering a lane is something you do several times a day on
   the way to your editor, and three questions in sequence is a toll. Every row starts at
   `skip`, so one `Enter` is safe; answers are remembered, and settings is where one is
@@ -712,6 +715,18 @@ than two.
 - **The cell says what will happen to *this* lane** — `clone` / `clone · overwrites` /
   `link` / `link · overwrites` / `skip` — because whether the path is already there
   changes what the answer does, and the destructive case has to name itself in words.
+- **Loose ignored files are grouped by folder**, because `--directory` only collapses a
+  directory git ignores *entirely*: one tracked file in it and every ignored file inside
+  is listed separately. Measured on a four-pattern repository: **55 rows, 40 of them from
+  one `logs/`**. A folder of three or more becomes one row; `Enter` on it offers the verbs
+  for all of them plus `one by one…`, which opens the same screen over just its files. A
+  folder that mixes `.env` files with build litter is exactly the shape git fails to
+  collapse, so one answer cannot be right for it and both halves are needed.
+- **A group is presentation, never a step for its directory.** The directory is only
+  partly ignored — that is why its files were listed one by one — so it holds tracked work
+  too, and cloning it would overwrite that. Answering a folder stores one step per path.
+  A file that appears there later is therefore a path nobody has answered, and is asked
+  about rather than silently swept in.
 - **`refresh` is settings-only.** On the screen where an answer is first given the path is
   absent, so `clone` and a refreshing `clone` do exactly the same thing; a screen has no
   business offering a distinction it cannot demonstrate. A `run` step's equivalent is a
@@ -961,6 +976,9 @@ All of it arrived at test-first:
   launching the editor
 - a prepared lane still reading `✓ clean` to git, so preparation cannot leak into the
   listing's `state` cell or the close flow's checks
+- forty loose ignored files in one directory drawing **one** row, answerable in one go or
+  file by file — and a folder answered in one go writing one step per path and never
+  touching the directory, which a tracked file in it proves
 
 ## Where things stand
 
