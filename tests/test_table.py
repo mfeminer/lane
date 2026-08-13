@@ -18,10 +18,11 @@ import pytest
 from prompt_toolkit.data_structures import Size
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.input.base import PipeInput
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import DummyOutput
 
 from lane.ui.seam import Abandoned, Cell, Column, Row
-from lane.ui.table import browse, paint
+from lane.ui.table import bindings_for, browse, paint
 
 BACK = "← Back to the menu"
 
@@ -555,6 +556,31 @@ def test_space_cycles_and_wraps(keys: PipeInput) -> None:
 def test_space_does_nothing_at_all_without_a_toggle(keys: PipeInput) -> None:
     """The key belongs to multi-select rows, not to lists in general."""
     assert _browse(keys, " \r") == ("improve", 0)
+
+
+def _ignore(result: object) -> None:
+    """Stand in for `Application.exit`: nothing here runs a handler."""
+    del result
+
+
+def test_a_table_without_a_toggle_does_not_bind_space_at_all() -> None:
+    """AGENTS.md claims no existing screen gained a key, and a handler that is bound and
+    then no-ops does not honour that: the keystroke is still consumed here rather than
+    falling through as any unrecognised key does. Asserted on the binding table, because
+    that is the only place the two are distinguishable."""
+    state = {"index": 0, "top": 0, "rows": 0, "opening": 1}
+    answers = _Answers()
+
+    plain = bindings_for(state, _rows, None, _ignore)
+    toggling = bindings_for(state, answers.rows, answers.toggle, _ignore)
+
+    assert plain.get_bindings_for_keys((" ",)) == []
+    assert toggling.get_bindings_for_keys((" ",)) != []
+    # Everything else is bound either way — the picker's set, unchanged. `Enter` and
+    # `Ctrl-C` arrive under their control-code names, which is prompt_toolkit's normalising
+    # rather than anything of ours.
+    for key in (Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC):
+        assert plain.get_bindings_for_keys((key,)) != [], f"{key} is bound either way"
 
 
 def test_enter_on_a_row_that_toggles_toggles_and_stays(keys: PipeInput) -> None:
