@@ -185,6 +185,202 @@ def test_a_failing_fetch_is_reported_not_raised(
     assert result.detail
 
 
+# -- the branches there are to pick up --------------------------------------------
+
+
+def test_list_branches_merges_local_and_remote_into_one_row_each(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """A branch that lives in both places is one branch, not two.
+
+    It is the same branch, and the local ref is the one that gets checked out — so
+    offering it twice would be offering the same answer twice.
+    """
+    origin, clone = repo
+    origin.create_branch("feature/pushed")
+    git(["branch", "chore/local-only", "origin/main"], cwd=clone)
+    git(["fetch", "--quiet", "--prune", "origin"], cwd=clone)
+    git(["branch", "feature/pushed", "origin/feature/pushed"], cwd=clone)
+
+    found = {branch.name: branch for branch in backend.list_branches(clone)}
+
+    assert found["main"].local and found["main"].remote
+    assert found["chore/local-only"].local and not found["chore/local-only"].remote
+    assert found["feature/pushed"].local and found["feature/pushed"].remote
+    assert [branch.name for branch in backend.list_branches(clone)].count("feature/pushed") == 1
+
+
+def test_list_branches_offers_a_branch_that_only_exists_on_the_remote(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """The whole point of the remote half: a colleague's branch you have never had."""
+    origin, clone = repo
+    origin.create_branch("feature/colleague")
+    git(["fetch", "--quiet", "--prune", "origin"], cwd=clone)
+
+    found = {branch.name: branch for branch in backend.list_branches(clone)}
+
+    assert found["feature/colleague"].remote_only
+
+
+def test_list_branches_excludes_origin_head(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """`refs/remotes/origin/HEAD` is a symbolic ref, not a branch.
+
+    `%(refname:short)` renders it as the bare string `origin`, so without this it
+    would be offered as a branch called `origin`.
+    """
+    _, clone = repo
+    git(["remote", "set-head", "origin", "--auto"], cwd=clone)
+
+    names = [branch.name for branch in backend.list_branches(clone)]
+
+    assert "origin" not in names
+    assert "HEAD" not in names
+    assert "main" in names
+
+
+def test_list_branches_puts_the_most_recently_committed_first(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """The branch you are picking up is one somebody committed to recently.
+
+    Ordering is the whole of what makes a several-hundred-branch list usable, so it
+    is asserted rather than left to git's default (which is alphabetical).
+    """
+    origin, clone = repo
+    origin.advance("older", branch=None)
+    origin.create_branch("zzz-oldest")
+    git(["fetch", "--quiet", "--prune", "origin"], cwd=clone)
+    git(["branch", "aaa-newest", "origin/main"], cwd=clone)
+    git(["checkout", "--quiet", "aaa-newest"], cwd=clone)
+    (clone / "newest.txt").write_text("newest\n")
+    git(["add", "-A"], cwd=clone)
+    git(["commit", "--quiet", "-m", "newest"], cwd=clone)
+    git(["checkout", "--quiet", "main"], cwd=clone)
+
+    names = [branch.name for branch in backend.list_branches(clone)]
+
+    assert names[0] == "aaa-newest", f"expected most-recent first, got {names}"
+    assert names.index("aaa-newest") < names.index("zzz-oldest")
+
+
+def test_list_branches_on_a_repository_with_no_remote(
+    backend: CliGitBackend, tmp_path: Path
+) -> None:
+    solo = tmp_path / "solo"
+    git(["init", "--quiet", "--initial-branch", "main", str(solo)])
+    git(["config", "user.email", "t@example.invalid"], cwd=solo)
+    git(["config", "user.name", "t"], cwd=solo)
+    (solo / "a.txt").write_text("a\n")
+    git(["add", "-A"], cwd=solo)
+    git(["commit", "--quiet", "-m", "one"], cwd=solo)
+
+    found = backend.list_branches(solo)
+
+    assert [branch.name for branch in found] == ["main"]
+    assert not found[0].remote
+
+
+# -- who is holding which branch ---------------------------------------------------
+
+
+def test_checkouts_reports_every_branch_that_is_already_checked_out(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """git refuses to check a branch out twice, so this is what makes the refusal
+    something lane can explain before git has to."""
+    _, clone = repo
+    lane = tmp_path / "lanes" / "taken"
+    backend.add_worktree_new_branch(clone, lane, "feature/taken", "origin/main")
+
+    held = backend.checkouts(clone)
+
+    assert held["feature/taken"].samefile(lane)
+    assert held["main"].samefile(clone), "the main clone holds the default branch"
+
+
+def test_checkouts_ignores_a_detached_worktree(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    _, clone = repo
+    backend.add_worktree_detached(clone, tmp_path / "lanes" / "loose", "origin/main")
+
+    held = backend.checkouts(clone)
+
+    assert set(held) == {"main"}
+
+
+# -- adopting a branch that is only on the remote -----------------------------------
+
+
+def test_worktree_tracking_a_remote_branch_sets_its_upstream(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """The other half of the upstream invariant.
+
+    A branch lane *creates* gets no upstream, because the only candidate would be
+    `origin/<base>` and a bare push would land on the default branch. A branch lane
+    *adopts* from origin tracks `origin/<itself>` — which is what the user expects,
+    what makes the unpushed count a real measurement, and cannot reach the default
+    branch because it is not the default branch.
+    """
+    origin, clone = repo
+    origin.create_branch("feature/colleague")
+    git(["fetch", "--quiet", "--prune", "origin"], cwd=clone)
+    lane = tmp_path / "lanes" / "colleague"
+
+    backend.add_worktree_tracking_branch(
+        clone, lane, "feature/colleague", "origin/feature/colleague"
+    )
+
+    status = backend.status(lane, "main")
+    assert status.branch == "feature/colleague"
+    assert status.upstream == "origin/feature/colleague"
+
+
+# -- where a branch parted company with the base ------------------------------------
+
+
+def test_merge_base_is_where_the_branch_left_the_base(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    """What a lane's starting commit is when the branch predates the lane.
+
+    Everything after this commit is the branch's own work; everything before it
+    belongs to the base. For a branch lane created there is nothing after it, which
+    is why one rule covers both.
+    """
+    _, clone = repo
+    base = git(["rev-parse", "origin/main"], cwd=clone).strip()
+    git(["checkout", "--quiet", "-b", "feature/diverged", "origin/main"], cwd=clone)
+    (clone / "one.txt").write_text("one\n")
+    git(["add", "-A"], cwd=clone)
+    git(["commit", "--quiet", "-m", "one"], cwd=clone)
+
+    assert backend.merge_base(clone, "HEAD", "origin/main") == base
+
+
+def test_merge_base_of_a_fresh_branch_is_its_own_head(
+    backend: CliGitBackend, repo: tuple[Origin, Path], tmp_path: Path
+) -> None:
+    """Which is what makes it one rule rather than two: a lane that created its own
+    branch records exactly the commit it records today."""
+    _, clone = repo
+    lane = tmp_path / "lanes" / "fresh"
+    backend.add_worktree_new_branch(clone, lane, "feature/fresh", "origin/main")
+
+    assert backend.merge_base(lane, "HEAD", "origin/main") == backend.head_commit(lane)
+
+
+def test_merge_base_of_an_unknown_ref_is_none(
+    backend: CliGitBackend, repo: tuple[Origin, Path]
+) -> None:
+    _, clone = repo
+    assert backend.merge_base(clone, "HEAD", "origin/nope") is None
+
+
 # -- worktree lifecycle (F7, F8, F9, F13) ----------------------------------------
 
 

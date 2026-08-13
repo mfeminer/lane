@@ -49,7 +49,7 @@ sit, where lanes should be parked, and which editor to open.
                   ┗━━━○━━━━━━━━━━━━━━━━━○━━━┛           v0.0.2
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  ❯ open        Open a new lane: pick a project, describe the task, start editing
+  ❯ open        New work, or a branch that already exists — your editor opens in it
     lanes       Every open lane, where it stands, and what to do with it
     settings    Configure lane
     doctor      Check git, gh, the editor and your paths
@@ -60,8 +60,11 @@ sit, where lanes should be parked, and which editor to open.
 
 A working day is four steps, and lane is only in two of them:
 
-1. **Run `lane`, choose `open`.** Pick a project, say what you're working on, choose
-   a branch. Your editor opens in the new worktree.
+1. **Run `lane`, choose `open`.** Pick a project, then say whether this is new work
+   or a branch that already exists — a colleague's, or one you left a fortnight ago.
+   New work asks what you're working on and what to call the branch; an existing
+   branch is picked from a list and names the lane itself. Either way your editor
+   opens in the new worktree.
 2. **Do all the work there.**
 3. **Quit the editor.**
 4. **Run `lane`, choose `lanes`, put the cursor on the row and press `Enter` →

@@ -631,6 +631,41 @@ def test_a_description_that_is_the_lane_name_again_is_not_repeated(
     assert "Improve the export" not in panels
 
 
+def test_an_adopted_lanes_branch_is_not_printed_twice_in_the_panel(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """A lane opened on an existing branch has that branch as its description.
+
+    When the forty-character cap kept the whole of it the name says it already and
+    nothing extra is drawn — but when the cap cut it short the description line
+    survives, and it is the same string the branch line is about to print. The
+    panel's rule is *say nothing the row already said*, and this is that rule
+    reaching a case it had never met.
+    """
+    _origin, clone = build_repo(projects_root / "_b")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    store = LaneStore(lanes_root)
+    branch = "bugfix/a-branch-name-somebody-else-chose-for-another-purpose"
+    CliGitBackend().add_worktree_new_branch(
+        repo,
+        store.lane_path("thing", "bugfix-a-branch-name-somebody-else-chos"),
+        branch,
+        "origin/main",
+    )
+    store.write_meta(
+        "thing",
+        "bugfix-a-branch-name-somebody-else-chos",
+        LaneMeta(description=branch, base="main", repo=str(repo)),
+    )
+
+    ui = FakeUi(["back"])
+    list_lanes.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    panels = [told.text for told in ui.told if told.kind == "panel"]
+    assert panels.count(branch) == 1, f"the branch is drawn once, not twice: {panels}"
+
+
 def test_a_description_the_lane_name_could_not_keep_is_shown(
     projects_root: Path, lanes_root: Path
 ) -> None:

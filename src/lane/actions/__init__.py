@@ -40,7 +40,10 @@ ACTIONS: tuple[Action, ...] = (
     Action(
         key="open",
         label="open",
-        description="Open a new lane: pick a project, describe the task, start editing",
+        # Not "a new lane": opening one can also mean picking up a branch that is
+        # already there, and this line is exactly the kind of text that outlives what
+        # it describes.
+        description="New work, or a branch that already exists — your editor opens in it",
         run=open_lane.run,
     ),
     Action(

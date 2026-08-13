@@ -420,12 +420,18 @@ def _detail(row: LaneRow) -> tuple[str, ...]:
     and stay where they change a decision.
     """
     lines: list[str] = []
+    label = row.status.label if row.status is not None else ""
 
-    if _adds_something(row.lane.meta.description, row.lane.name):
-        lines.append(row.lane.meta.description)
+    # …and nothing the *branch* line is about to say either. A lane opened on an
+    # existing branch has that branch as its description, so when the forty-character
+    # cap cut the name short the two lines are one string twice — which is the same
+    # fault this rule already stops for the name.
+    description = row.lane.meta.description
+    if description != label and _adds_something(description, row.lane.name):
+        lines.append(description)
 
     if row.status is not None:
-        lines.append(row.status.label)
+        lines.append(label)
     if row.pr.note:
         lines.append(row.pr.note)
     return tuple(lines)
