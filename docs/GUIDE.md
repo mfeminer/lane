@@ -162,12 +162,12 @@ row on the way to your editor is a toll:
 Preparing demo/broken-pagination
   Answers are remembered per project — change them in settings · preparation.
 
-  3 paths lane has not been told about
+  14 paths lane has not been told about
 
-  path                       size      verb
-❯ apps/web/node_modules      1.2 GB    clone
-  apps/console/.env          1.4 KB    link
-  apps/console/dist          340 MB    skip
+  path                          size      verb
+❯ apps/web/node_modules         1.2 GB    clone
+  apps/web/ · 12 ignored files  4.2 MB    mixed
+  apps/console/dist             340 MB    skip
   continue
   ← Back without entering
 
@@ -175,14 +175,70 @@ Preparing demo/broken-pagination
 ```
 
 `Enter` cycles the row you're on — `skip` → `clone` → `link` → `skip` — and the verb cell
-changes as you press it, so nothing is hidden. Every row starts at `skip`, so pressing
-`Enter` on `continue` straight away is safe: nothing is copied, and lane stops asking. Answers are
+changes as you press it, so nothing is hidden. (On a *folder* row it opens that folder's
+own question instead; see below.) The title counts paths, and a folder row stands for
+several of them. Every row starts at `skip`, so pressing `Enter` on `continue` straight
+away is safe: nothing is copied, and lane stops asking. Answers are
 remembered, so the **second** lane in that project asks nothing at all and just comes up
 ready.
 
 The sizes are why the screen is worth reading — they're what stops you cloning a 20 GB
 local database by accident. They're measured while you're already reading the rows, so they
 appear a moment after the rest.
+
+### Folders, not forty rows
+
+git can only collapse a directory it ignores *entirely*. Put one tracked file in it and
+every ignored file inside gets listed separately — a real repository with four ignore
+patterns produced **55 rows, 40 of them from a single `logs/`**. So lane folds loose
+ignored files into one row per folder, once there are three or more of them:
+
+```
+  path                          size      verb
+❯ logs/ · 40 ignored files       12 MB    skip
+```
+
+`Enter` on a folder asks what to do with all of it at once:
+
+```
+logs/ · 40 ignored files
+
+  ❯ skip all     answer all 40 of them skip
+    clone all    answer all 40 of them clone
+    link all     answer all 40 of them link
+    one by one…  pick through them yourself
+    ← Back
+
+  ↑↓ move · enter choose
+```
+
+**`one by one…`** opens the same kind of screen over just that folder's files, which is
+what you want when a folder mixes things you care about with things you don't — `.env`
+files next to build litter is exactly the shape git fails to collapse:
+
+```
+apps/web/ · 12 ignored files
+
+  path                     size     verb
+❯ apps/web/.env            1.4 KB   clone
+  apps/web/.env.local      1.4 KB   clone
+  apps/web/app1.log        220 KB   skip
+  …
+  continue
+  ← Back to the list
+```
+
+A partly-answered folder reads as **`mixed`** on the outer list, and the lines under the
+table count the split (`2 clone, 10 skip`).
+
+`link all` only appears when *every* file in the folder can be linked — one answer can't
+offer what it can't deliver for some of them.
+
+> **A folder row is never an answer about the folder itself.** That directory is only
+> *partly* ignored — that's why its files were listed one by one — so it holds your tracked
+> work too. Answering a folder records one answer per file inside it and never touches the
+> directory. Which also means a file that turns up there later is one lane hasn't been told
+> about, so it asks, rather than quietly sweeping it in.
 
 ### The three verbs
 

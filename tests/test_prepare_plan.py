@@ -213,3 +213,134 @@ def test_the_settings_view_of_a_step_says_what_was_stored(tmp_path: Path) -> Non
         "run · web"
     )
     assert Step(project="a", verb=Verb.RUN, command="c").describe() == "run"
+
+
+# -- grouping: a folder of loose ignored files is one row, not forty ---------------
+
+
+def _candidates(*paths: str, linkable: bool = True) -> tuple[prepare.Candidate, ...]:
+    return tuple(prepare.Candidate(path=p, present=False, linkable=linkable) for p in paths)
+
+
+def test_a_directory_of_loose_ignored_files_becomes_one_group(tmp_path: Path) -> None:
+    """`--directory` collapses a *fully* ignored directory, but one tracked file in it
+    stops that — and then git reports every ignored file inside separately. A real
+    repository produced 55 rows from four ignore patterns that way."""
+    del tmp_path
+    rows = prepare.group(_candidates(*[f"logs/day{n}.log" for n in range(1, 41)]))
+
+    assert len(rows) == 1
+    group = rows[0]
+    assert isinstance(group, prepare.Group)
+    assert group.directory == "logs"
+    assert len(group.candidates) == 40
+    assert group.label == "logs/ · 40 ignored files"
+
+
+def test_each_directory_groups_separately_and_the_order_is_kept(tmp_path: Path) -> None:
+    del tmp_path
+    rows = prepare.group(
+        _candidates(
+            "apps/api/.env",
+            "apps/web/.env",
+            "apps/web/.env.local",
+            "apps/web/app1.log",
+            "node_modules",
+        )
+    )
+
+    assert [row.label for row in rows] == [
+        "apps/api/.env",
+        "apps/web/ · 3 ignored files",
+        "node_modules",
+    ], "one row per directory that has several, and lone paths left as themselves"
+
+
+def test_a_directory_with_only_a_couple_of_files_is_not_grouped(tmp_path: Path) -> None:
+    """A group row costs a keystroke to reach the individual answers, so it has to save
+    more than one row to be worth it. Two becomes one: a wash. Three is where it pays."""
+    del tmp_path
+    assert len(prepare.group(_candidates("web/.env", "web/.env.local"))) == 2
+    assert len(prepare.group(_candidates("web/.env", "web/.env.local", "web/x.log"))) == 1
+
+
+def test_a_whole_ignored_directory_is_never_folded_into_a_group(tmp_path: Path) -> None:
+    """`node_modules` is one path with one answer. Folding it in with its siblings would
+    make a group whose answer means two different things."""
+    del tmp_path
+    rows = prepare.group(_candidates("a/node_modules", "a/b.log", "a/c.log", "a/d.log"))
+
+    assert [row.label for row in rows] == ["a/ · 4 ignored files"], (
+        "grouping is by parent directory and says nothing about what each path is"
+    )
+
+
+def test_loose_files_at_the_repository_root_group_under_a_visible_name(tmp_path: Path) -> None:
+    del tmp_path
+    rows = prepare.group(_candidates(".env", "debug.log", ".DS_Store"))
+
+    assert [row.label for row in rows] == ["./ · 3 ignored files"]
+    assert isinstance(rows[0], prepare.Group)
+    assert rows[0].directory == ""
+
+
+def test_a_group_offers_link_only_when_every_path_in_it_can_be_linked(tmp_path: Path) -> None:
+    """One answer for the whole group, so it can only offer what holds for all of it."""
+    del tmp_path
+    all_linkable = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
+    assert isinstance(all_linkable, prepare.Group)
+    assert Verb.LINK in all_linkable.verbs()
+
+    mixed = prepare.Group(
+        directory="w",
+        candidates=(
+            prepare.Candidate(path="w/a", present=False, linkable=True),
+            prepare.Candidate(path="w/b", present=False, linkable=False),
+            prepare.Candidate(path="w/c", present=False, linkable=True),
+        ),
+    )
+    assert Verb.LINK not in mixed.verbs()
+
+
+def test_a_group_says_what_its_paths_are_answered_as(tmp_path: Path) -> None:
+    """The row has to say what will happen, and for a group that can be two things at
+    once — so `mixed`, with the panel naming the split."""
+    del tmp_path
+    group = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
+    assert isinstance(group, prepare.Group)
+
+    assert group.summary({"w/a": Verb.SKIP, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == "skip"
+    assert group.summary({"w/a": Verb.CLONE, "w/b": Verb.CLONE, "w/c": Verb.CLONE}) == "clone"
+    assert group.summary({"w/a": Verb.CLONE, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == "mixed"
+
+
+def test_a_group_counts_the_split_for_the_panel(tmp_path: Path) -> None:
+    del tmp_path
+    group = prepare.group(_candidates("w/a", "w/b", "w/c"))[0]
+    assert isinstance(group, prepare.Group)
+
+    assert group.breakdown({"w/a": Verb.CLONE, "w/b": Verb.SKIP, "w/c": Verb.SKIP}) == (
+        "1 clone, 2 skip"
+    )
+
+
+def test_a_group_sits_where_its_first_file_was(tmp_path: Path) -> None:
+    """Discovery's order is git's, which is sorted, and the screen keeps it — a group is
+    anchored at its first member rather than hoisted or pushed to the end. Otherwise
+    `logs/` shows up after `node_modules`, which reads as a shuffle."""
+    del tmp_path
+    rows = prepare.group(
+        _candidates(
+            "coverage",
+            *[f"logs/day{n}.log" for n in range(1, 5)],
+            "node_modules",
+            *[f"web/a{n}.log" for n in range(1, 5)],
+        )
+    )
+
+    assert [row.label for row in rows] == [
+        "coverage",
+        "logs/ · 4 ignored files",
+        "node_modules",
+        "web/ · 4 ignored files",
+    ]

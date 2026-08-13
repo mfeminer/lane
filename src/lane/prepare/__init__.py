@@ -29,7 +29,8 @@ lane again simply runs it again.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -135,11 +136,121 @@ class Candidate:
 
     linkable: bool = True
 
+    @property
+    def label(self) -> str:
+        """What the row is called. A path names itself; a `Group` says how many it holds."""
+        return self.path
+
     def cycle(self) -> tuple[Verb, ...]:
         """The verbs `Enter` moves through for this row, in order."""
         if self.linkable:
             return (Verb.SKIP, Verb.CLONE, Verb.LINK)
         return (Verb.SKIP, Verb.CLONE)
+
+
+GROUP_FROM = 3
+"""How many loose ignored files in one directory it takes to become a group row.
+
+A group row costs one keystroke to reach the answers inside it, so it has to save more
+than one row to be worth having: two files folded into one row is a wash, three saves
+two. This is the first count where grouping pays.
+"""
+
+ROOT_LABEL = "./"
+"""What a group of loose files at the repository root is called, since `""` shows as
+nothing at all."""
+
+
+@dataclass(frozen=True, slots=True)
+class Group:
+    """Several loose ignored files under one directory, shown as a single row.
+
+    **Presentation only, and that is a safety property rather than an implementation
+    note.** A group is *not* a step for its directory: the directory is only partially
+    ignored — that is the entire reason git listed its files separately — so it holds
+    tracked work as well, and cloning it would overwrite that. Answering a group applies
+    the verb to each path in it and stores one step per path.
+
+    Two consequences worth keeping: a file that appears in that directory later is a path
+    nobody has answered, so it is asked about rather than silently swept in; and an answer
+    given here means exactly what the same answer means on a row of its own.
+    """
+
+    directory: str
+    candidates: tuple[Candidate, ...]
+
+    @property
+    def label(self) -> str:
+        count = len(self.candidates)
+        word = "file" if count == 1 else "files"
+        shown = f"{self.directory}/" if self.directory else ROOT_LABEL
+        return f"{shown} · {count} ignored {word}"
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        return tuple(candidate.path for candidate in self.candidates)
+
+    def verbs(self) -> tuple[Verb, ...]:
+        """What can be answered for the whole group: only what holds for all of it.
+
+        `link` needs every path in the group to be linkable, because one answer covering
+        paths it cannot deliver for would be an answer that quietly did something else to
+        some of them.
+        """
+        if all(candidate.linkable for candidate in self.candidates):
+            return (Verb.SKIP, Verb.CLONE, Verb.LINK)
+        return (Verb.SKIP, Verb.CLONE)
+
+    def summary(self, verbs: Mapping[str, Verb]) -> str:
+        """What the row says will happen — one word, even when that word is `mixed`.
+
+        A group can be answered two ways at once, and `mixed` is the honest cell for that:
+        short enough never to crowd out the column that answers the screen's question, and
+        a plain word rather than a symbol. `breakdown` is what the panel adds to it.
+        """
+        answers = {verbs[path] for path in self.paths}
+        return str(answers.pop()) if len(answers) == 1 else "mixed"
+
+    def breakdown(self, verbs: Mapping[str, Verb]) -> str:
+        """`1 clone, 2 skip` — the detail behind `mixed`, for the panel."""
+        counted = Counter(verbs[path] for path in self.paths)
+        order = (Verb.CLONE, Verb.LINK, Verb.SKIP)
+        return ", ".join(f"{counted[verb]} {verb}" for verb in order if counted[verb])
+
+
+type Item = Candidate | Group
+"""One row of the preparation screen: a path to answer, or a folder of them."""
+
+
+def group(candidates: Sequence[Candidate], threshold: int = GROUP_FROM) -> tuple[Item, ...]:
+    """Fold loose ignored files into one row per directory, keeping discovery's order.
+
+    Grouping is by **parent directory and nothing else**: it says nothing about what each
+    path is, so a fully ignored directory sitting beside loose files is folded in with
+    them like any other path. That is safe precisely because a group is never a step for
+    its directory — see `Group`.
+    """
+    by_directory: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        directory, _, _ = candidate.path.rpartition("/")
+        by_directory.setdefault(directory, []).append(candidate)
+
+    # Emitted in the order the candidates arrived, with a group anchored where its **first
+    # member** was. Discovery's order is git's, which is sorted; grouping by bucket and
+    # then flattening would put `logs/` after `node_modules`, and a list that reads as
+    # shuffled is one the eye cannot trust.
+    rows: list[Item] = []
+    placed: set[str] = set()
+    for candidate in candidates:
+        directory, _, _ = candidate.path.rpartition("/")
+        found = by_directory[directory]
+        if len(found) < threshold:
+            rows.append(candidate)
+            continue
+        if directory not in placed:
+            placed.add(directory)
+            rows.append(Group(directory=directory, candidates=tuple(found)))
+    return tuple(rows)
 
 
 @dataclass(frozen=True, slots=True)

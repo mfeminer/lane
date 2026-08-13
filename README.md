@@ -76,12 +76,12 @@ asks, once per project, what to do with it:
 Preparing demo/broken-pagination
   Answers are remembered per project — change them in settings · preparation.
 
-  3 paths lane has not been told about
+  14 paths lane has not been told about
 
-  path                       size      verb
-❯ apps/web/node_modules      1.2 GB    clone
-  apps/console/.env          1.4 KB    link
-  apps/console/dist          340 MB    skip
+  path                          size      verb
+❯ apps/web/node_modules         1.2 GB    clone
+  apps/web/ · 12 ignored files  4.2 MB    mixed
+  apps/console/dist             340 MB    skip
   continue
   ← Back without entering
 
@@ -91,6 +91,11 @@ Preparing demo/broken-pagination
 `clone` is a copy-on-write copy, so on APFS it costs almost nothing and almost no disk;
 `link` is a symlink to your main clone; `skip` leaves it out. Answer once and every lane in
 that project after it comes up ready.
+
+Loose ignored files are folded into one row per folder — git only collapses a directory it
+ignores *entirely*, so one tracked file in it and you'd otherwise get a row per file.
+`Enter` on a folder answers all of it at once, or takes you `one by one…` through its files
+when it mixes `.env` files with build litter.
 
 `↑` `↓` move, `Enter` chooses — and on a list like the one above, choosing a row is what
 changes its answer. `Ctrl-C` backs out, from anywhere, and always safely: every question
