@@ -67,11 +67,41 @@ jobs:
         run: cp dist/lane "lane-macos-arm64"
 
       - name: Publish the release
-        # --generate-notes asks GitHub for the pull requests merged since the
-        # previous tag, grouped by the labels in .github/release.yml.
+        # The binary is the whole point of the release, so this step's job is to make
+        # sure it is attached — not to insist on being the thing that created the
+        # release.
+        #
+        # A release can already exist for this tag by the time this runs, in two ways
+        # that both used to fail here. **Publishing a release from GitHub's web UI
+        # creates the tag as a side effect**, so the tag push that triggered this run
+        # can come *from* a release that already exists — that is what happened to
+        # v0.0.5, and `gh release create` refused, leaving a published release with no
+        # binary on it and the README's install URL pointing at nothing. And a re-run
+        # of this workflow finds the release its own first attempt created, so a
+        # transient failure after the release was made could never be retried.
+        #
+        # Adopting an existing release is therefore the correct behaviour rather than a
+        # workaround: it makes this step idempotent, and the tag check above is still
+        # what guarantees the binary being attached is the right one. Notes and title
+        # are left alone — whoever created the release chose them, and clobbering
+        # hand-written notes to impose the generated ones would destroy the more
+        # considered of the two.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "A release for $GITHUB_REF_NAME exists already — attaching the binary to it."
+            gh release upload "$GITHUB_REF_NAME" "lane-macos-arm64" --clobber
+            if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
+              # A draft is somebody's deliberate "not yet", so it is not published from
+              # here — but a draft nobody notices is a release nobody can download.
+              echo "::warning::$GITHUB_REF_NAME is still a draft. Publish it to make the binary downloadable."
+            fi
+            exit 0
+          fi
+
+          # --generate-notes asks GitHub for the pull requests merged since the
+          # previous tag, grouped by the labels in .github/release.yml.
           gh release create "$GITHUB_REF_NAME" \
             "lane-macos-arm64" \
             --title "lane $VERSION" \

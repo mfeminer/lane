@@ -882,6 +882,21 @@ release if the binary's `--version` does not match the tag**, and publishes a
 GitHub release with the binary attached. The refusal exists because a wrong
 version number is invisible until someone reports a bug against it.
 
+**There is a second door, and it is GitHub's rather than ours: publishing a release
+from the web UI creates the tag as a side effect**, which triggers this workflow. So
+the release can already exist by the time CD runs, and CD **adopts it** — uploading
+the binary with `--clobber` and leaving its title and notes alone — rather than trying
+to create one and failing. That is not a workaround for a mistake; it is what makes the
+step idempotent, which also means a run that failed *after* creating the release can be
+retried. v0.0.5 is why this is written down: it was published from the UI, `gh release
+create` refused, and the result was a published release with **no binary on it** while
+the README's `releases/latest/download/lane-macos-arm64` install pointed at nothing.
+**The binary being attached is the invariant; being the thing that created the release
+is not.**
+
+The tag command above is still the route to prefer, for one concrete reason beyond
+habit: it makes an **annotated** tag, and the UI makes a lightweight one.
+
 **It rebuilds, and must keep rebuilding.** `build.yml` has already produced a binary
 for that exact commit, and publishing it instead looks like free speed — but the
 version comes from `git describe`, so a binary built on main before the tag existed
