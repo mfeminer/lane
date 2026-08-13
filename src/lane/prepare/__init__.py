@@ -4,13 +4,18 @@ A lane is a fresh checkout, so **everything `.gitignore` covers is missing from 
 That is git working correctly, and it is also what makes the checkout unusable: a
 dependency tree has to be rebuilt, and an ignored `.env` cannot be rebuilt at all.
 
-Three verbs cover every case found so far, and they are deliberately generic:
+Two verbs cover every case found so far, and they are deliberately generic:
 
 * `clone` — a copy-on-write copy from the main clone. Dependency trees, build caches,
-  anything the lane may then modify without disturbing the original.
-* `link`  — a symlink into the main clone. Large immutable assets; and secrets, where
-  always-current beats isolated and one copy beats one per lane.
+  secrets, anything a fresh checkout is missing.
 * `run`   — a configured command, in a configured directory.
+
+**A path is in or out, and nothing else.** `link` was a third answer once — a symlink
+into the main clone — and it is gone: the question a row asks is *does this come into the
+lane*, which has two answers, and a screen that answers it with a checkbox cannot carry a
+third. What it cost is worth naming rather than forgetting: a linked path was always
+current and existed once rather than once per lane, which suited a large read-only asset.
+What it bought is a screen where a dozen paths take a dozen keystrokes.
 
 **lane learns no package manager.** No `yarn`, no `go`, no `cargo` appears anywhere in
 this package or anywhere else in the source. Go keeps its caches globally and needs
@@ -29,9 +34,8 @@ lane again simply runs it again.
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Container, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -41,11 +45,14 @@ class Verb(StrEnum):
 
     A `StrEnum` because these are also what the configuration file stores and what the
     screen prints, and three spellings of one word is two too many.
+
+    A `prepare.toml` written by an older lane may say `verb = "link"`; the store drops a
+    verb it does not know, so that path is simply asked about again. The symlink already
+    in the lane then reads as *already there*, and a tick leaves it exactly as it is.
     """
 
     SKIP = "skip"
     CLONE = "clone"
-    LINK = "link"
     RUN = "run"
 
 
@@ -63,16 +70,6 @@ class Step:
 
     path: str = ""
     """Relative to the repository root, as git reports it."""
-
-    refresh: bool = False
-    """`clone` only: reapply on every enter rather than only when it is missing.
-
-    Deliberately not settable from the preparation screen. On the screen where an
-    answer is first given the path is absent, so `clone` and a refreshing `clone` do
-    exactly the same thing — a screen has no business offering a distinction it cannot
-    demonstrate, to someone with no information yet to choose with. Settings, visited
-    after living with the answer, is where it is turned on.
-    """
 
     command: str = ""
     directory: str = ""
@@ -114,38 +111,32 @@ class Step:
             case Verb.RUN:
                 where = f" · {self.directory}" if self.directory else ""
                 return f"run{where}"
-            case Verb.CLONE:
-                return "clone, refreshed" if self.refresh else "clone"
             case _:
                 return str(self.verb)
 
 
 @dataclass(frozen=True, slots=True)
 class Candidate:
-    """A path git reports as ignored, and everything the screen needs to ask about it.
-
-    `linkable` is git's own judgement, not a guess: `node_modules/` matches directories
-    only, so a symlink of that name is an *untracked* file — which would put `● 1
-    uncommitted` in the listing and a finding in the close flow, over a link the user
-    asked for. So `link` is offered only where git says it would still be ignored.
-    """
+    """A path git reports as ignored, and everything the screen needs to ask about it."""
 
     path: str
-    present: bool
-    """Whether the path is already in the lane, which changes what an answer does."""
+    present: bool = False
+    """Whether the path is already in the lane.
 
-    linkable: bool = True
+    It does not change what a tick *means* — a ticked path that is already there is left
+    alone, always — but it changes what a tick will *do*, which is nothing. The row says
+    so, because a tick that is a no-op and a tick that copies a gigabyte have to look
+    different.
+    """
+
+    project: str = ""
+    """Which project's path this is. Empty where there is only one in play; settings
+    shows several at once and needs it to find the file and to lead the row."""
 
     @property
     def label(self) -> str:
         """What the row is called. A path names itself; a `Group` says how many it holds."""
         return self.path
-
-    def cycle(self) -> tuple[Verb, ...]:
-        """The verbs `Enter` moves through for this row, in order."""
-        if self.linkable:
-            return (Verb.SKIP, Verb.CLONE, Verb.LINK)
-        return (Verb.SKIP, Verb.CLONE)
 
 
 GROUP_FROM = 3
@@ -168,12 +159,18 @@ class Group:
     **Presentation only, and that is a safety property rather than an implementation
     note.** A group is *not* a step for its directory: the directory is only partially
     ignored — that is the entire reason git listed its files separately — so it holds
-    tracked work as well, and cloning it would overwrite that. Answering a group applies
-    the verb to each path in it and stores one step per path.
+    tracked work as well, and cloning it would overwrite that. Ticking a group applies
+    the answer to each path in it and stores one step per path.
 
     Two consequences worth keeping: a file that appears in that directory later is a path
     nobody has answered, so it is asked about rather than silently swept in; and an answer
     given here means exactly what the same answer means on a row of its own.
+
+    **A folder is a folder only while its paths agree.** One checkbox has two states, and
+    a directory holding two `.env` files that are in and thirty logs that are out has no
+    honest tick — so `group` does not fold it, and its files are drawn as their own rows.
+    That is what replaced drilling into a folder to answer it file by file: the screen
+    opens it out itself, exactly when opening it out is the only truthful thing to do.
     """
 
     directory: str
@@ -190,50 +187,45 @@ class Group:
     def paths(self) -> tuple[str, ...]:
         return tuple(candidate.path for candidate in self.candidates)
 
-    def verbs(self) -> tuple[Verb, ...]:
-        """What can be answered for the whole group: only what holds for all of it.
+    @property
+    def project(self) -> str:
+        return self.candidates[0].project if self.candidates else ""
 
-        `link` needs every path in the group to be linkable, because one answer covering
-        paths it cannot deliver for would be an answer that quietly did something else to
-        some of them.
-        """
-        if all(candidate.linkable for candidate in self.candidates):
-            return (Verb.SKIP, Verb.CLONE, Verb.LINK)
-        return (Verb.SKIP, Verb.CLONE)
-
-    def summary(self, verbs: Mapping[str, Verb]) -> str:
-        """What the row says will happen — one word, even when that word is `mixed`.
-
-        A group can be answered two ways at once, and `mixed` is the honest cell for that:
-        short enough never to crowd out the column that answers the screen's question, and
-        a plain word rather than a symbol. `breakdown` is what the panel adds to it.
-        """
-        answers = {verbs[path] for path in self.paths}
-        return str(answers.pop()) if len(answers) == 1 else "mixed"
-
-    def breakdown(self, verbs: Mapping[str, Verb]) -> str:
-        """`1 clone, 2 skip` — the detail behind `mixed`, for the panel."""
-        counted = Counter(verbs[path] for path in self.paths)
-        order = (Verb.CLONE, Verb.LINK, Verb.SKIP)
-        return ", ".join(f"{counted[verb]} {verb}" for verb in order if counted[verb])
+    @property
+    def present(self) -> bool:
+        """Whether any of them is already in the lane — the row says so for the folder."""
+        return any(candidate.present for candidate in self.candidates)
 
 
 type Item = Candidate | Group
 """One row of the preparation screen: a path to answer, or a folder of them."""
 
 
-def group(candidates: Sequence[Candidate], threshold: int = GROUP_FROM) -> tuple[Item, ...]:
+def group(
+    candidates: Sequence[Candidate],
+    threshold: int = GROUP_FROM,
+    checked: Container[str] = frozenset(),
+) -> tuple[Item, ...]:
     """Fold loose ignored files into one row per directory, keeping discovery's order.
 
     Grouping is by **parent directory and nothing else**: it says nothing about what each
     path is, so a fully ignored directory sitting beside loose files is folded in with
     them like any other path. That is safe precisely because a group is never a step for
     its directory — see `Group`.
+
+    `checked` is what is currently in, and a directory whose paths disagree about that is
+    left unfolded: one checkbox cannot say "some of these". On the screen where a path is
+    first answered nothing is checked, so everything folds — the disagreement only ever
+    arrives from answers already on disk.
     """
     by_directory: dict[str, list[Candidate]] = {}
     for candidate in candidates:
         directory, _, _ = candidate.path.rpartition("/")
         by_directory.setdefault(directory, []).append(candidate)
+
+    def agree(found: Sequence[Candidate]) -> bool:
+        answers = {one.path in checked for one in found}
+        return len(answers) == 1
 
     # Emitted in the order the candidates arrived, with a group anchored where its **first
     # member** was. Discovery's order is git's, which is sorted; grouping by bucket and
@@ -244,7 +236,7 @@ def group(candidates: Sequence[Candidate], threshold: int = GROUP_FROM) -> tuple
     for candidate in candidates:
         directory, _, _ = candidate.path.rpartition("/")
         found = by_directory[directory]
-        if len(found) < threshold:
+        if len(found) < threshold or not agree(found):
             rows.append(candidate)
             continue
         if directory not in placed:
@@ -257,16 +249,15 @@ def group(candidates: Sequence[Candidate], threshold: int = GROUP_FROM) -> tuple
 class Effect:
     """One thing preparation is about to do to this lane, and how to say it.
 
-    Built for a particular lane, unlike a `Step`: the same stored `clone` is a copy in
-    an empty lane and a replacement in one that already has the path.
+    Built for a particular lane, unlike a `Step`: a stored `clone` has something to do
+    in an empty lane and nothing to do in one that already has the path.
 
-    **Never holds `Verb.SKIP`.** Both ways of making one — `needed` and `effect_for` —
-    answer None for it, because an effect whose verb is "do nothing" is a step looking for
-    something to perform.
+    **Never holds `Verb.SKIP`**, because an effect whose verb is "do nothing" is a step
+    looking for something to perform — `needed` answers None for it, and `needed` is the
+    only way one is made.
     """
 
     step: Step
-    overwrites: bool = False
 
     @property
     def verb(self) -> Verb:
@@ -278,13 +269,9 @@ class Effect:
 
     def phrase(self) -> str:
         """`Cloning apps/web/node_modules…` — a gerund and an ellipsis, per §10."""
-        match self.verb:
-            case Verb.CLONE:
-                return f"{'Replacing' if self.overwrites else 'Cloning'} {self.subject}…"
-            case Verb.LINK:
-                return f"Linking {self.subject}…"
-            case _:
-                return f"Running {self.subject}…"
+        if self.verb is Verb.CLONE:
+            return f"Cloning {self.subject}…"
+        return f"Running {self.subject}…"
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,7 +314,6 @@ def plan(
     steps: tuple[Step, ...],
     ignored: list[str],
     lane_path: Path,
-    linkable: frozenset[str] = frozenset(),
     writable: frozenset[str] | None = None,
     problem: str | None = None,
 ) -> Plan:
@@ -335,26 +321,14 @@ def plan(
 
     `ignored` is what git found in the **main clone**, where the files actually are.
 
-    The other two are git's answers about the **lane**, where the files would go, and
-    they are different questions because a trailing slash is:
-
-    * `writable` — paths the lane's own git ignores in *some* form. A path missing from
-      it is one the lane's branch tracks, or does not ignore, so bringing it in would
-      dirty the worktree — and it is not offered at all.
-    * `linkable` — paths still ignored when named as something other than a directory.
-      A path missing from it loses `link` from its cycle, because `node_modules/` matches
-      directories only and a symlink is not one.
-
-    `None` means "not asked", which is what the model's own tests want.
+    `writable` is git's answer about the **lane**, where the files would go: paths the
+    lane's own git ignores in *some* form, asked in both spellings because a trailing
+    slash is a different question. A path missing from it is one the lane's branch tracks,
+    or does not ignore, so bringing it in would dirty the worktree — and it is not offered
+    at all. `None` means "not asked", which is what the model's own tests want.
     """
-    del project  # named for the reader: everything here is about this one project
-
     candidates = tuple(
-        Candidate(
-            path=path,
-            present=_present(lane_path / path),
-            linkable=path in linkable,
-        )
+        Candidate(path=path, present=_present(lane_path / path), project=project)
         for path in unanswered(steps, ignored)
         if writable is None or path in writable
     )
@@ -363,29 +337,18 @@ def plan(
     return Plan(candidates=candidates, effects=effects, problem=problem)
 
 
-def effect_for(step: Step, lane_path: Path) -> Effect | None:
-    """What a **freshly given** answer does to this lane, or None if it does nothing.
-
-    Different from `needed` in one place, deliberately: a stored `clone` means "put it here
-    if it is missing" and leaves an existing path alone, while a *first* answer for a path
-    that is already there means "replace it" — which is what the row said in words
-    (`clone · overwrites`) before it was given.
-
-    None for `skip`, so an answer of "leave it out" cannot become a step that runs. That is
-    a `None` rather than a filter at the call site because the alternative is a `SKIP`
-    effect looking for a verb to perform, which is a bug waiting for somewhere to happen.
-    """
-    if step.verb is Verb.SKIP or not step.usable:
-        return None
-    return Effect(step=step, overwrites=_present(lane_path / step.subject))
-
-
 def needed(step: Step, lane_path: Path) -> Effect | None:
     """What this step has to do to this lane, or None when it has nothing to do.
 
     The common case, and it must be cheap: one `lstat` per step, and no work at all for a
     `skip`. Asked twice — once to build the plan, and again just before a command runs,
     because a guard path a clone was about to satisfy has to be re-examined after it did.
+
+    **One function, and a freshly given answer goes through it too.** There used to be a
+    second: a first answer for a path already in the lane meant *replace it*, which the
+    row said in words. It does not any more — a tick never overwrites what the lane has,
+    whether the answer was given a minute ago or last month. That rule is what made one
+    function enough, and one function is what stops the rule being true in one place only.
     """
     if not step.usable or step.verb is Verb.SKIP:
         return None
@@ -395,13 +358,12 @@ def needed(step: Step, lane_path: Path) -> Effect | None:
             return None
         return Effect(step=step)
 
-    present = _present(lane_path / step.path)
-    if present and not (step.verb is Verb.CLONE and step.refresh):
-        # Already there, and the answer was "put it here", not "keep it current".
-        # **Entering a lane never overwrites what the lane changed** unless the user
-        # asked for that path to be refreshed.
+    if _present(lane_path / step.path):
+        # **Entering a lane never overwrites what the lane changed.** A dependency tree
+        # patched by hand is work, and losing it silently is the one thing this feature
+        # could do that is worse than not existing.
         return None
-    return Effect(step=step, overwrites=present)
+    return Effect(step=step)
 
 
 def _present(path: Path) -> bool:
@@ -412,8 +374,3 @@ def _present(path: Path) -> bool:
     and lane does not silently take it away.
     """
     return path.is_symlink() or path.exists()
-
-
-def with_verb(step: Step, verb: Verb) -> Step:
-    """The same step, answered differently."""
-    return replace(step, verb=verb)

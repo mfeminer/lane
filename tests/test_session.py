@@ -383,8 +383,7 @@ def test_a_whole_working_day_with_a_lane_that_needs_preparing(
             "Fix the CSV export",
             "branch",
             "bugfix/fix-the-csv-export",
-            "node_modules",  # skip -> clone
-            "continue",
+            ["node_modules"],  # one keystroke: it comes in
             # menu -> lanes -> enter it again. Nothing is asked this time.
             "lanes",
             "fix-the-csv-export",

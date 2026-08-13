@@ -71,10 +71,11 @@ The lanes table didn't add a key either — there's no `c` for close. That's why
 `Enter` on a row offers you its verbs instead of a legend telling you which letters
 do what.
 
-That holds on the preparation screen below too, where each row carries an answer you
-cycle rather than a thing you pick: `Enter` on such a row *changes* it and stays, and only
-`continue` — a row, with a name — takes you onward. Nothing new to learn, and nothing new
-to press.
+**One screen adds one key**, and it's the preparation screen below: `Space` ticks the row
+under the cursor. That's the universal multi-select keystroke rather than an invention of
+this tool, and it's what turns a dozen answers into a dozen keystrokes. On that screen — and
+only there — `Enter` accepts everything rather than acting on the row, because the row's
+answer is already `Space`'s job. Its footer names both, every time it's up.
 
 **Backing out is always safe.** Every question an action asks comes *before* its
 first irreversible step, so leaving half-way through leaves your disk exactly as it
@@ -230,25 +231,32 @@ Preparing demo/broken-pagination
 
   14 paths lane has not been told about
 
-  path                          size      verb
-❯ apps/web/node_modules         1.2 GB    clone
-  apps/web/ · 12 ignored files  4.2 MB    mixed
-  apps/console/dist             340 MB    skip
-  continue
-  ← Back without entering
+    path                          size      in lane
+❯ ✓ apps/web/node_modules         1.2 GB
+  ✓ apps/web/ · 12 ignored files  4.2 MB
+    apps/console/dist             340 MB    already there
 
-  ↑↓ move · enter choose
+  2 of 3 in · 1.2 GB coming in
+  ↑↓ move · space toggle · enter accept · ctrl-c back out
 ```
 
-`Enter` cycles the row you're on — `skip` → `clone` → `link` → `skip` — and the verb cell
-changes as you press it, so nothing is hidden. (On a *folder* row it opens that folder's
-own question instead; see below.) The title counts paths, and a folder row stands for
-several of them. Every row starts at `skip`, so pressing `Enter` on `continue` straight
-away is safe: nothing is copied, and lane stops asking. Answers are
-remembered, so the **second** lane in that project asks nothing at all and just comes up
-ready.
+**Every row is in or out, and `Space` is what changes it** — under the cursor, in place,
+one keystroke, no going into the row and back out again. `Enter` accepts the whole screen
+and carries on to your editor. A dozen paths costs a dozen keystrokes and one more.
 
-The sizes are why the screen is worth reading — they're what stops you cloning a 20 GB
+That's the one place in lane where `Enter` doesn't act on the row you're on, and it's
+deliberate: on this screen the row's answer is `Space`'s job, so `Enter` is free to mean
+"done". The footer says so, every time.
+
+Every row starts **out**, so pressing `Enter` straight away is safe: nothing is copied, and
+lane stops asking. Answers are remembered, so the **second** lane in that project asks
+nothing at all and just comes up ready.
+
+The line above the footer keeps count — how many are in, and how much is actually about to
+be copied. Forty rows don't fit on a screen, and that line is what tells you what you've
+decided without scrolling back through them.
+
+The sizes are why the screen is worth reading — they're what stops you bringing in a 20 GB
 local database by accident. They're measured while you're already reading the rows, so they
 appear a moment after the rest.
 
@@ -260,132 +268,112 @@ patterns produced **55 rows, 40 of them from a single `logs/`**. So lane folds l
 ignored files into one row per folder, once there are three or more of them:
 
 ```
-  path                          size      verb
-❯ logs/ · 40 ignored files       12 MB    skip
+    path                          size      in lane
+❯ ✓ logs/ · 40 ignored files       12 MB
 ```
 
-`Enter` on a folder asks what to do with all of it at once:
+One `Space` answers all forty.
+
+**A folder is a folder only while its files agree.** A checkbox has two states, so if
+you've already answered some of a folder's files in and others out, there's no honest tick
+for it — lane draws its files as their own rows instead:
 
 ```
-logs/ · 40 ignored files
-
-  ❯ skip all     answer all 40 of them skip
-    clone all    answer all 40 of them clone
-    link all     answer all 40 of them link
-    one by one…  pick through them yourself
-    ← Back
-
-  ↑↓ move · enter choose
+    path                     size     in lane
+❯ ✓ apps/web/.env            1.4 KB
+  ✓ apps/web/.env.local      1.4 KB
+    apps/web/app1.log        220 KB
+    …
 ```
 
-**`one by one…`** opens the same kind of screen over just that folder's files, which is
-what you want when a folder mixes things you care about with things you don't — `.env`
-files next to build litter is exactly the shape git fails to collapse:
-
-```
-apps/web/ · 12 ignored files
-
-  path                     size     verb
-❯ apps/web/.env            1.4 KB   clone
-  apps/web/.env.local      1.4 KB   clone
-  apps/web/app1.log        220 KB   skip
-  …
-  continue
-  ← Back to the list
-```
-
-A partly-answered folder reads as **`mixed`** on the outer list, and the lines under the
-table count the split (`2 clone, 10 skip`).
-
-`link all` only appears when *every* file in the folder can be linked — one answer can't
-offer what it can't deliver for some of them.
+That's what replaced drilling into a folder to answer it file by file: the screen opens it
+out itself, exactly when opening it out is the only truthful thing to do.
 
 > **A folder row is never an answer about the folder itself.** That directory is only
 > *partly* ignored — that's why its files were listed one by one — so it holds your tracked
-> work too. Answering a folder records one answer per file inside it and never touches the
+> work too. Ticking a folder records one answer per file inside it and never touches the
 > directory. Which also means a file that turns up there later is one lane hasn't been told
 > about, so it asks, rather than quietly sweeping it in.
 
-### The three verbs
+### What a tick actually does
 
-| Verb | What it does | Good for |
-|---|---|---|
-| `clone` | a copy-on-write copy from your main clone | dependency trees, build caches — anything the lane might then modify |
-| `link` | a symlink to your main clone | large read-only assets; secrets, where one copy beats one per lane |
-| `run` | a command, in a directory you choose | `install`-style steps. Added from **settings → preparation**, not here |
+A ticked path is copied in from your main clone. On APFS that's a copy-on-write clone: a
+64 MB tree takes about a third of a millisecond and no extra disk until something writes to
+it. That's what makes this cheap rather than merely automatic. If your projects and lanes
+folders are on **different** volumes it can't be a clone at all and becomes a real copy —
+slow, and real disk. `doctor` tells you which you've got, and settings warns you when you
+tick something and the answer is no.
 
-On APFS a `clone` is a copy-on-write clone: a 64 MB tree takes about a third of a
-millisecond and no extra disk until something writes to it. That's what makes this cheap
-rather than merely automatic. If your projects and lanes folders are on **different**
-volumes it can't be a clone at all and becomes a real copy — slow, and real disk. `doctor`
-tells you which you've got, and settings warns you when you add a `clone` step and the
-answer is no.
+There's one other kind of step, and it isn't a path: a **command** to run when a lane
+opens. A command isn't something lane can discover, so it's added from **settings →
+commands** rather than here. It asks for the command, where to run it, and a path that
+means "don't bother" (`unless`), so an `install` step runs on a lane that needs it and
+skips one that doesn't.
 
-A `link` is always current, because it *is* your main clone's copy. The flip side: anything
-the lane writes there goes into the main clone, so it's the wrong choice for a dependency
-tree you might reinstall inside the lane.
+A path your branch actually *tracks* is never offered at all — lane will not write over
+your files, and a prepared lane still reads `✓ clean`.
 
-`link` isn't offered for every path. `node_modules/` — with the trailing slash, which is how
-almost everyone writes it — matches *directories*, and a symlink isn't one. So a symlinked
-`node_modules` would show up as an untracked file, putting `● 1 uncommitted` on your lane
-over a link you asked for. lane asks git first and only offers `link` where git says it'll
-still be ignored. The panel says so when it isn't:
-
-```
-  Ignored as a directory only, so 'link' is not offered for this path.
-```
-
-For the same reason, a path your branch actually *tracks* is never offered at all — lane
-will not write over your files, and a prepared lane still reads `✓ clean`.
+> **There used to be a third answer, `link`** — a symlink into your main clone, always
+> current and stored once rather than once per lane. It's gone. A row asks one question with
+> two answers, and a checkbox can't carry a third; a screen you had to go *into* to change an
+> answer is what this replaced. If lane finds a `link` in an older `prepare.toml` it asks
+> about that path again, and the symlink already in your lane simply reads as `already
+> there`.
 
 ### When a path is already there
 
-The row says so, in words, before you answer:
+The row says so, in its own column, before you answer:
 
 ```
-  path                       size      verb
-❯ apps/web/node_modules      1.2 GB    clone · overwrites
+    path                       size      in lane
+❯ ✓ apps/web/node_modules      1.2 GB    already there
 ```
 
-That matters because you may have patched something inside it. **lane never overwrites what
-your lane changed** unless you asked for that path to be refreshed — an answered `clone` is
-"put it here if it's missing", and it leaves what's there alone. `clone, refreshed`, which
-you can only set in settings, is the one that replaces it on every enter.
+**A tick never overwrites what your lane changed.** You may have patched something inside
+that tree; ticking the row leaves it exactly as it is, and lane does nothing at all for it.
+The column is there so a tick that's a no-op and a tick that copies a gigabyte don't look
+the same.
 
 ### Changing an answer later
 
-**settings → preparation** lists every step across every project, with the project dimmed
-in front of the path:
+**settings → preparation** opens *the same screen*, over every project at once, with the
+project dimmed in front of the path:
 
 ```
 lane settings · preparation
   /Users/you/.config/lane/prepare.toml
 
-  path                              verb                size
-❯ acme-web/apps/web/node_modules    clone                1.2 GB
-  acme-web/apps/web/.env            link                 1.4 KB
-  acme-web/yarn install             run · apps/web       —
-  demo/vendor                       skip                 84 MB
-  add a step
-  ← Back to settings
+  4 answered paths in 2 projects
+
+    path                              size
+❯ ✓ acme-web/apps/web/node_modules    1.2 GB
+  ✓ acme-web/apps/web/.env            1.4 KB
+    demo/vendor                       84 MB
+
+  2 of 3 in · 1.2 GB in each lane
+  ↑↓ move · space toggle · enter accept · ctrl-c back out
 ```
 
-`Enter` on a row offers `change` and `forget`. **forget** is the one that matters: it makes
-lane ask about that path again next time, which is why nothing on the per-enter screen needs
-a "remember this?" column. `add a step` is where a `run` command comes from — a command
-isn't a path lane can discover, so it can only be added here. It asks for the command, where
-to run it, and a path that means "don't bother" (`unless`), so `yarn install unless
-node_modules` runs on a lane that needs it and skips one that doesn't.
+Same rows, same keystroke, same footer. The running total reads **in each lane** rather
+than *coming in*, because accepting here copies nothing — it answers for every lane in
+that project from now on. Changing a decision you made months ago is one
+`Space` — which is the whole point of it being one screen rather than two that look alike.
+There's no `in lane` column here, because there's no lane in hand; nothing is copied when
+you accept, and the next lane you enter in that project acts on the answers.
+
+**settings → commands** is the other half: the `run` steps, which are typed rather than
+discovered and have a directory and a guard to edit. `Enter` on one offers `change` and
+`forget`, and `add a command` is where a new one comes from.
 
 ### About secrets
 
 Copying a `.env` into every lane multiplies the number of places that secret lives. Closing
-the lane takes it with the worktree — but a close you refused or interrupted doesn't. So when
-you answer `clone` for something that looks like a secret, lane says so once:
+the lane takes it with the worktree — but a close you refused or interrupted doesn't. So the
+row says so while you're deciding, and again once you have:
 
 ```
-! apps/console/.env looks like it holds secrets, and 'clone' puts a copy in every lane.
-  'link' keeps one copy in the main clone — change it in settings.
+! apps/console/.env looks like it holds secrets, and every lane now gets a copy.
+  Leave it out in settings · preparation to stop that.
 ```
 
 It's a suggestion, not a refusal.
@@ -654,12 +642,12 @@ of what it inspects is installed — it's the action that explains a missing
 prerequisite, so it's never hidden behind one.
 
 It also answers the one question about [preparation](#preparing-a-lane) you can't see for
-yourself — whether a `clone` can actually be a copy-on-write clone:
+yourself — whether bringing a path in can actually be a copy-on-write clone:
 
 ```
 ! Copy-on-write is not available: /Users/you/Projects and /Volumes/Work/Lanes are on
-  different volumes, so a 'clone' step is a real copy — slow, and it uses real disk.
-  Put both roots on one volume, or use 'link' or 'run' for large paths.
+  different volumes, so bringing a path in is a real copy — slow, and it uses real disk.
+  Put both roots on one volume, or leave the large paths out.
 ```
 
 If no projects turn up, lane says how many subfolders it looked at, and if your
@@ -771,14 +759,15 @@ your editor command is on PATH. lane prints the path so you can open it yourself
 name, or the project directory was renamed. Answers are keyed by project name; check
 **settings → preparation**.
 
-**A path I said `clone` for isn't in my lane** — it has to exist in your main clone for
-there to be anything to copy, and it has to be ignored by the lane's own `.gitignore`. A
-lane branched from an older base that predates the `.gitignore` entry ignores nothing, so
-nothing is offered.
+**A path I ticked isn't in my lane** — it has to exist in your main clone for there to be
+anything to copy, and it has to be ignored by the lane's own `.gitignore`. A lane branched
+from an older base that predates the `.gitignore` entry ignores nothing, so nothing is
+offered. And if the path was **already there**, ticking it does nothing on purpose: lane
+never overwrites what your lane changed.
 
-**`clone` is slow and eating disk** — your projects and lanes folders are on different
-volumes, so it can't be a copy-on-write clone. `doctor` says so explicitly; use `link` or
-`run` for the big paths, or put both folders on one volume.
+**Bringing paths in is slow and eating disk** — your projects and lanes folders are on
+different volumes, so it can't be a copy-on-write clone. `doctor` says so explicitly; leave
+the big paths out and use a `run` command instead, or put both folders on one volume.
 
 ---
 

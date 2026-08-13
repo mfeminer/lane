@@ -81,29 +81,32 @@ Preparing demo/broken-pagination
 
   14 paths lane has not been told about
 
-  path                          size      verb
-❯ apps/web/node_modules         1.2 GB    clone
-  apps/web/ · 12 ignored files  4.2 MB    mixed
-  apps/console/dist             340 MB    skip
-  continue
-  ← Back without entering
+    path                          size      in lane
+❯ ✓ apps/web/node_modules         1.2 GB
+  ✓ apps/web/ · 12 ignored files  4.2 MB
+    apps/console/dist             340 MB    already there
 
-  ↑↓ move · enter choose
+  2 of 3 in · 1.2 GB coming in
+  ↑↓ move · space toggle · enter accept · ctrl-c back out
 ```
 
-`clone` is a copy-on-write copy, so on APFS it costs almost nothing and almost no disk;
-`link` is a symlink to your main clone; `skip` leaves it out. Answer once and every lane in
-that project after it comes up ready.
+`Space` ticks the row under the cursor; `Enter` accepts the whole screen. A dozen paths is
+a dozen keystrokes and one more — no going into a row and back out again. Ticked means the
+path is copied in from your main clone, which on APFS is copy-on-write and costs almost
+nothing and almost no disk. Answer once and every lane in that project after it comes up
+ready.
+
+A path that is **already there** is left exactly as it is: ticking it never overwrites
+something you changed inside the lane.
 
 Loose ignored files are folded into one row per folder — git only collapses a directory it
-ignores *entirely*, so one tracked file in it and you'd otherwise get a row per file.
-`Enter` on a folder answers all of it at once, or takes you `one by one…` through its files
-when it mixes `.env` files with build litter.
+ignores *entirely*, so one tracked file in it and you'd otherwise get a row per file. One
+`Space` answers the whole folder. If you've already answered its files differently, the
+folder is opened out into its own rows instead, so the tick never says something untrue.
 
-`↑` `↓` move, `Enter` chooses — and on a list like the one above, choosing a row is what
-changes its answer. `Ctrl-C` backs out, from anywhere, and always safely: every question
-comes before the first irreversible step. There are **no subcommands**; `--version` and `--help` are the
-only arguments.
+`↑` `↓` move and `Ctrl-C` backs out, from anywhere, and always safely: every question comes
+before the first irreversible step. There are **no subcommands**; `--version` and `--help`
+are the only arguments.
 
 ## Configure
 
@@ -116,10 +119,12 @@ editor = "cursor"                       # code, zed, idea, subl...
 ```
 
 `LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file. What to do
-with each project's ignored paths lives beside it in `prepare.toml`, and
-**settings → preparation** is where you change an answer or add a command to run.
-Something not working? **doctor** checks every bit of it — including whether your projects
-and lanes folders can actually share blocks, which is what makes `clone` free.
+with each project's ignored paths lives beside it in `prepare.toml`. **settings →
+preparation** opens the very screen above, over every project at once, so changing an
+answer is the same one keystroke wherever you came from; **settings → commands** is where
+you add a command to run when a lane opens. Something not working? **doctor** checks every
+bit of it — including whether your projects and lanes folders can actually share blocks,
+which is what makes bringing a path in free.
 
 ## Develop
 

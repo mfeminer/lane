@@ -32,8 +32,7 @@ def test_every_verb_round_trips(tmp_path: Path) -> None:
     store = _store(tmp_path)
     steps = (
         Step(project="acme", verb=Verb.CLONE, path="apps/web/node_modules"),
-        Step(project="acme", verb=Verb.CLONE, path="node_modules", refresh=True),
-        Step(project="acme", verb=Verb.LINK, path="apps/web/.env"),
+        Step(project="acme", verb=Verb.CLONE, path="apps/web/.env"),
         Step(project="acme", verb=Verb.SKIP, path="apps/console/dist"),
         Step(
             project="acme",
@@ -47,6 +46,34 @@ def test_every_verb_round_trips(tmp_path: Path) -> None:
     store.save(steps)
 
     assert _store(tmp_path).load().steps == steps
+
+
+def test_a_verb_this_version_does_not_know_is_dropped_rather_than_breaking(
+    tmp_path: Path,
+) -> None:
+    """`link` was a verb until the answer became a checkbox, and somebody's file still
+    says so. An unknown verb is ignored exactly as it always was, which is the whole
+    upgrade path: that path is asked about again, and the symlink already in the lane
+    reads as `already there`, so ticking it changes nothing."""
+    store = _store(tmp_path)
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(
+        'version = "0.0.3"\n\n'
+        "[[step]]\n"
+        'project = "acme"\n'
+        'verb = "link"\n'
+        'path = "apps/web/.env"\n\n'
+        "[[step]]\n"
+        'project = "acme"\n'
+        'verb = "clone"\n'
+        'path = "node_modules"\n',
+        encoding="utf-8",
+    )
+
+    loaded = store.load()
+
+    assert loaded.problem is None, "not a crash and not a rewrite"
+    assert [(step.path, step.verb) for step in loaded.steps] == [("node_modules", Verb.CLONE)]
 
 
 def test_the_file_is_private_in_a_private_directory(tmp_path: Path) -> None:
@@ -146,14 +173,14 @@ def test_remembering_a_project_replaces_only_that_projects_answers(tmp_path: Pat
         "acme",
         (
             Step(project="acme", verb=Verb.SKIP, path="node_modules"),
-            Step(project="acme", verb=Verb.LINK, path=".env"),
+            Step(project="acme", verb=Verb.CLONE, path=".env"),
         ),
     )
 
     loaded = store.load()
     assert [(step.path, step.verb) for step in loaded.for_project("acme")] == [
         ("node_modules", Verb.SKIP),
-        (".env", Verb.LINK),
+        (".env", Verb.CLONE),
     ]
     assert [step.path for step in loaded.for_project("other")] == ["vendor"]
 

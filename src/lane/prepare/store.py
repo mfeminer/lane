@@ -153,7 +153,6 @@ def _read_step(record: dict[str, object]) -> Step | None:
         project=project,
         verb=verb,
         path=_text(record.get("path")),
-        refresh=record.get("refresh") is True,
         command=_text(record.get("command")),
         directory=_text(record.get("directory")),
         unless=_text(record.get("unless")),
@@ -171,8 +170,6 @@ def _write_step(step: Step) -> dict[str, object]:
             record["unless"] = step.unless
         return record
     record["path"] = step.path
-    if step.refresh:
-        record["refresh"] = True
     return record
 
 

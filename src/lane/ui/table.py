@@ -19,6 +19,10 @@ digit shortcuts AGENTS.md removed. Choosing a row opens a two-entry menu instead
 which costs a keystroke and no new vocabulary. Going back is a **visible row** at
 the end of the table, not a key — as everywhere else.
 
+A screen whose rows each carry a two-state answer is **not** this widget: it is
+`checklist.py`, which binds `Space` and where `Enter` accepts the screen rather than
+acting on the row. That is a separate component for exactly those two reasons.
+
 ## Layout gives the room to the columns that answer the question
 
 The listing exists to answer "which of these can I close, and what is stopping the
@@ -46,10 +50,17 @@ from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
 from lane.ui.picker import ESCAPE_TIMEOUT, HINT
-from lane.ui.seam import Abandoned, Cell, Column, Fill, Row, Toggle
+from lane.ui.seam import Abandoned, Cell, Column, Fill, Row
 
 CURSOR_WIDTH = 2
 """The `❯ ` in front of the row under the cursor, and the space in front of the rest."""
+
+MARK_WIDTH = 2
+"""A second gutter, for a widget whose rows carry a mark — `checklist.py`'s tick.
+
+Here rather than there because `fit` has to know how much room the prefix takes
+before it can decide which columns survive, and there is one such calculation.
+"""
 
 GAP = 2
 MIN_FIRST_COLUMN = 12
@@ -72,7 +83,7 @@ STYLE = Style.from_dict(
     }
 )
 
-_TONES = {
+TONES = {
     "": "",
     "good": "class:table.good",
     "warn": "class:table.warn",
@@ -97,7 +108,7 @@ class Painted:
         return "".join(text for _, text in self.fragments).split("\n")
 
 
-def _clip(text: str, width: int) -> str:
+def clip(text: str, width: int) -> str:
     """Truncate with an ellipsis, so a cut is never mistaken for the real name."""
     if len(text) <= width:
         return text
@@ -106,14 +117,19 @@ def _clip(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
-def _fit(
+def fit(
     columns: Sequence[Column],
     rows: Sequence[Row[object]],
     width: int,
+    prefix: int = CURSOR_WIDTH,
 ) -> tuple[list[int], list[int], bool, bool]:
     """Which columns survive this width, how wide each is, and two switches.
 
     Returns `(kept column indexes, their widths, keep leads, use short cells)`.
+
+    `prefix` is what the row's gutters cost before any column is drawn — the cursor,
+    plus a mark where the widget has one. Shared so that a second widget cannot
+    arrive at a different answer about the same terminal.
     """
     kept = list(range(len(columns)))
     leads = True
@@ -130,8 +146,8 @@ def _fit(
 
     def total(measured: list[int]) -> int:
         if not measured:
-            return CURSOR_WIDTH
-        return CURSOR_WIDTH + sum(measured) + GAP * (len(measured) - 1)
+            return prefix
+        return prefix + sum(measured) + GAP * (len(measured) - 1)
 
     measured = widths(kept, leads, short)
 
@@ -167,7 +183,7 @@ def _shown(cell: Cell, leads: bool, short: bool = False) -> str:
     return f"{cell.lead}{text}" if leads else text
 
 
-def _row_fragments(
+def row_fragments(
     row: Row[object],
     kept: Sequence[int],
     measured: Sequence[int],
@@ -175,16 +191,20 @@ def _row_fragments(
     short: bool,
     *,
     selected: bool,
+    mark: tuple[str, str] | None = None,
 ) -> list[tuple[str, str]]:
+    """One row, gutters included. `mark` is a second gutter — see `MARK_WIDTH`."""
     fragments: list[tuple[str, str]] = [("class:table.pointer", "❯ " if selected else "  ")]
+    if mark is not None:
+        fragments.append(mark)
     for position, (index, column_width) in enumerate(zip(kept, measured, strict=True)):
         cell = row.cells[index]
         last = position == len(kept) - 1
-        style = "class:table.selected" if selected and position == 0 else _TONES[cell.tone]
+        style = "class:table.selected" if selected and position == 0 else TONES[cell.tone]
 
         lead = cell.lead if leads else ""
         cell_text = cell.short if short and cell.short else cell.text
-        text = _clip(f"{lead}{cell_text}", column_width)
+        text = clip(f"{lead}{cell_text}", column_width)
         if lead and text.startswith(lead):
             fragments.append(("class:table.lead", lead))
             fragments.append((style, text[len(lead) :]))
@@ -198,7 +218,7 @@ def _row_fragments(
     return fragments
 
 
-def _window(total: int, cursor: int, top: int, room: int) -> int:
+def window(total: int, cursor: int, top: int, room: int) -> int:
     """Scroll only as far as it takes to keep the cursor on screen."""
     if total <= room:
         return 0
@@ -226,10 +246,10 @@ def paint(
     on_back = cursor == len(rows)
 
     wanted = () if on_back else rows[cursor].detail[:MAX_DETAIL_LINES]
-    room, detail = _vertical(height, wanted)
-    top = _window(total, cursor, top, room)
+    room, detail = vertical(height, wanted)
+    top = window(total, cursor, top, room)
 
-    kept, measured, leads, short = _fit(columns, rows, width)
+    kept, measured, leads, short = fit(columns, rows, width)
 
     fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n\n")]
 
@@ -248,13 +268,13 @@ def paint(
             fragments.append(("class:table.selected" if selected else "", back))
             fragments.append(("", "\n"))
             continue
-        fragments += _row_fragments(
+        fragments += row_fragments(
             rows[position], kept, measured, leads, short, selected=position == cursor
         )
 
     fragments.append(("", "\n"))
     for line in detail:
-        fragments.append(("class:table.panel", f"  {_clip(line, width - 2)}"))
+        fragments.append(("class:table.panel", f"  {clip(line, width - 2)}"))
         fragments.append(("", "\n"))
     if detail:
         fragments.append(("", "\n"))
@@ -269,34 +289,37 @@ def paint(
     return Painted(fragments=fragments, top=top, room=room)
 
 
-def _vertical(height: int, detail: tuple[str, ...]) -> tuple[int, tuple[str, ...]]:
+def vertical(height: int, detail: tuple[str, ...], extra: int = 0) -> tuple[int, tuple[str, ...]]:
     """How many rows fit, and whether the panel survives.
 
     The panel is dropped before any row is: the table answers the questions and the
     panel only elaborates on one of them.
+
+    `extra` is any further fixed line a widget draws below the panel — the
+    checklist's running count of what is in.
     """
     # title, blank, header, blank before the panel, blank after it, footer.
     for lines in (len(detail), 0):
-        overhead = 6 + lines if lines else 5
+        overhead = (6 + lines if lines else 5) + extra
         room = height - overhead
         if room >= MIN_VISIBLE_ROWS:
             return room, (detail if lines else ())
-    return max(1, height - 5), ()
+    return max(1, height - 5 - extra), ()
 
 
 def bindings_for[T](
     state: dict[str, int],
     rows: Callable[[], Sequence[Row[T]]],
-    toggle: Toggle[T] | None,
     exit_with: Callable[[tuple[T, int] | None], None],
 ) -> KeyBindings:
     """The keys this table answers to: **the picker's set, and nothing else, ever.**
 
-    A `toggle` changes what `Enter` *does* on a row, never which keys exist.
-
     A unit of its own so that "this table binds no key of its own" is something a test can
     *check* rather than something the docs assert: a bound handler that happens to do
     nothing looks identical from the outside while still swallowing the keystroke.
+
+    A screen whose rows each carry an answer is not this widget: it is `checklist.py`,
+    which binds `Space` and is a different component for exactly that reason.
     """
     bindings = KeyBindings()
 
@@ -341,11 +364,6 @@ def bindings_for[T](
             # The back row, one past the last: the same result as Ctrl-C.
             exit_with(None)
             return
-        if toggle is not None and toggle(row.value):
-            # A row that carries an answer: acting on it changed it, and there is more to
-            # do on this screen. The answer belongs to the caller, as the rows already do,
-            # so what changed reaches the screen through the next repaint reading `rows()`.
-            return
         exit_with((row.value, state["index"]))
 
     return bindings
@@ -359,7 +377,6 @@ def browse[T](
     *,
     fill: Fill | None = None,
     cursor: int = 0,
-    toggle: Toggle[T] | None = None,
     on_render: Callable[[str], None] | None = None,
     input: Input | None = None,
     output: Output | None = None,
@@ -368,10 +385,6 @@ def browse[T](
 
     Raises `Abandoned` for the visible back row and for Ctrl-C — the two ways out
     mean the same thing to the caller, so they are the same result.
-
-    With a `toggle`, rows carry an answer that `Enter` changes in place: the table stays
-    up, and only a row whose `toggle` says it has no answer to change is returned. So
-    `Enter` still means "act on the row under the cursor" and the screen gains no key.
     """
     state = {"index": max(0, cursor), "top": 0, "rows": 0, "opening": 1}
 
@@ -405,7 +418,6 @@ def browse[T](
     bindings = bindings_for(
         state,
         rows,
-        toggle,
         # Deferred rather than passed: `application.exit` does not exist until the
         # Application below has been built, and by then these handlers are only defined.
         lambda result: application.exit(result=result),

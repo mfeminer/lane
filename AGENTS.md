@@ -92,8 +92,23 @@ whole mechanism, and it is why almost nothing needs binding:
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
 | `Ctrl-C` | back out |
+| `Space` | tick the row under the cursor — **the checklist only** |
 
-**That table is the whole vocabulary.** It describes Ctrl-C *at a prompt*; what it
+**That table is the whole vocabulary**, and the last row is the only key any screen has
+ever been allowed to add. It belongs to `ui/checklist.py`, the screen where every row
+carries a two-state answer, and it was taken deliberately rather than slipped in:
+
+- `Space` toggling a multi-select is not this tool's invention — it is what every other
+  multi-select in a terminal does — and it is what makes a dozen answers cost a dozen
+  keystrokes instead of a dozen round trips into a sub-screen.
+- **`Enter` there accepts the whole screen** rather than acting on the row, which is the
+  one place in lane it does not mean "act on the row under the cursor". That difference is
+  the reason `Space` had to exist: the previous screen cycled the row with `Enter` and then
+  had no key left to accept with, so it grew a `continue` row to stand in for one.
+- The checklist's footer names both, because a screen that adds a key announces it. The
+  lanes table's footer does not, because it adds none.
+
+One widget, one key. **A new screen still introduces none.** It describes Ctrl-C *at a prompt*; what it
 does while lane is **working** is below, under *Ctrl-C is answered everywhere*. A letter key for "close" was considered and
 rejected: a footer legend would make it discoverable, but it would still be this
 tool's invention. Choosing a row opens a two-entry menu instead — one keystroke
@@ -410,8 +425,17 @@ refusal is tested by faking `Environment`, never by manipulating the real termin
 The seam is called **`Ui`** and it both asks and tells. Output belongs with asking
 rather than in a fifth injected thing: both are presentation, an action needs both,
 and the progress indication for a long step ("Fetching origin…") is telling. So
-`Ui` carries `choose`/`text`/`confirm`/`browse` alongside `info`/`ok`/`warn`/
+`Ui` carries `choose`/`text`/`confirm`/`browse`/`check` alongside `info`/`ok`/`warn`/
 `error`/`detail`/`heading`/`blank`/`progress`.
+
+**There are three screen shapes and they answer different kinds of question.** `choose`
+asks one question. `browse` is a screen the user stands in and acts on one row of.
+**`check` is a screen where every row carries its own two-state answer** — which ignored
+paths come into a lane — so it is a decision over a *set* rather than a question with an
+answer, and it returns everything that was ticked when `Enter` was pressed. It takes the
+same columns and `rows` callable `browse` does, plus what arrives already ticked and an
+optional `summary` for the running count; it has no `back` row, because a checklist has
+nothing to choose between and §2's footer hint is the right amount of visibility.
 
 **`browse` is a screen the user stands in, not a question they are asked** — that
 is the whole difference between it and `choose`. It takes columns and a *callable*
@@ -462,9 +486,12 @@ driven through `prompt_toolkit`'s pipe input, which is how auto-selecting a lone
 candidate and re-prompting on bad input get covered without a terminal.
 Session-level tests replace the whole seam and never reach it.
 
-**The lanes table is the same kind of component and gets the same treatment** —
-`ui/table.py`, below the seam, with `tests/test_table.py` driving it through pipe
-input. Its layout is a pure `paint(…, width, height)` returning the lines it would
+**The lanes table and the checklist are the same kind of component and get the same
+treatment** — `ui/table.py` and `ui/checklist.py`, below the seam, with
+`tests/test_table.py` and `tests/test_checklist.py` driving them through pipe
+input. The checklist reuses the table's layout (`fit`, `clip`, `window`, `vertical`,
+`row_fragments`) rather than growing a second one, and adds a two-character mark gutter in
+front of every row for the tick. Its layout is a pure `paint(…, width, height)` returning the lines it would
 draw, which is how narrow terminals, scrolling and the panel are asserted without
 one. Session-level tests replace the seam whole and never reach it: a script drives
 "select the second lane, close it" as `FakeUi([1, "close", True])`, matching a row
@@ -495,6 +522,17 @@ without incident.
 Both were verified to build and run under PyInstaller one-file (~12 MB, ~113 ms of
 combined import cost).
 
+**Decision: the checklist is lane's own table, not `prompt_toolkit`'s `CheckboxList`.**
+`CheckboxList` is the obvious answer and does not survive the requirements: it draws every
+option into one window with **no scrolling of its own** — the exact defect already measured
+on `picker.pick`, where 300 branches became 304 lines with the cursor walking off the bottom
+of the terminal, and forty loose ignored files in one folder is a real screen. It also has
+no columns, no dim lead, no cursor panel, and no way to let a slow column land behind the
+first paint. All four are things this screen needs and the table already has, so the
+checklist is a widget beside `table.py` sharing its layout. **Do not bring in a second
+prompt framework** (`InquirerPy`, `textual`) for one screen, and do not resurrect
+`questionary` — rejected above, with reasons.
+
 **A single candidate is auto-selected without prompting, and bad input re-prompts
 instead of aborting.** In a windowed picker "re-prompts" means an unrecognised key
 is ignored and the picker stays up — it never aborts.
@@ -513,10 +551,13 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **lane learns no package manager** — no `yarn`, `npm`, `go` or `cargo` anywhere in the
   source. The mechanism is generic and the project-specific knowledge is configuration,
   or the list of ecosystems is endless and always one short.
-- **Entering a lane never overwrites what the lane changed** unless the user asked for
-  that path to be refreshed — and the screen names the overwrite, in words, before it
-  happens. A dependency tree the user patched by hand is work, and losing it silently is
-  the one thing this feature could do that is worse than not existing.
+- **Entering a lane never overwrites what the lane changed.** Full stop, with no
+  exception to remember: a ticked path already in the lane is left exactly as it is. A
+  dependency tree the user patched by hand is work, and losing it silently is the one thing
+  this feature could do that is worse than not existing. This used to carry "unless the
+  user asked for that path to be refreshed", and dropping `refresh` is what let the rule
+  become unconditional — which in turn let `prepare.needed` be the *only* function that
+  decides what a step does, where two used to disagree on exactly this case.
 - **A failed or interrupted preparation leaves a usable lane** — it lists, it closes, and
   entering it again finishes the job. Nothing about preparation is recorded per lane,
   which is what makes entering again the whole repair rather than a reset.
@@ -529,6 +570,14 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **A folder row is never a step for the folder** — it stands for the paths inside it and
   stores one step each. A partly ignored directory holds tracked work, so a step for the
   directory itself would overwrite it.
+- **A preparation row has exactly two answers, and a folder row is not folded unless its
+  paths agree** — a checkbox has two states, so a folder holding some paths that are in and
+  some that are out is drawn as its own rows rather than made to show a tick that is false
+  for half of it.
+- **One component answers "which paths come into a lane", opened from both doors** —
+  entering a lane and settings · preparation call the same `Ui.check` over the same
+  `prepare.Sheet`. Two screens that merely resemble each other drift, and these two had:
+  one toggled in place, the other made you enter the row, choose *change*, and pick a verb.
 - **A lane's branch never tracks anything but itself** — a branch lane *creates*
   gets no upstream, because the only candidate would be `origin/<base>` and a bare
   `git push` would then land on the default branch; a branch lane *adopts* from the
@@ -563,10 +612,14 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **The lanes screen binds no key the picker does not** — arrows, `Enter`,
   `Ctrl-C`. A letter key for a verb would be this tool's invention, however visible
   the legend.
-- **The table binds exactly the picker's keys, whatever its rows carry** — a `toggle`
-  changes what `Enter` *does* on a row, never which keys exist. Asserted on the binding
-  table itself, because a bound handler that happens to do nothing still swallows the
-  keystroke, which is not the same as leaving a key unbound.
+- **The table binds exactly the picker's keys** — a screen whose rows carry a two-state
+  answer is a different widget, `checklist.py`, and that is where `Space` lives. Asserted on
+  both binding tables themselves, because a bound handler that happens to do nothing still
+  swallows the keystroke, which is not the same as leaving a key unbound.
+- **The checklist binds the picker's keys plus `Space`, and nothing else ever** — and
+  `Enter` there accepts the screen rather than acting on the row, which is the single
+  deliberate exception to what `Enter` means everywhere else. Its footer names both, because
+  a screen that adds a key announces it.
 - **The listing never blocks on `gh`** — git status is collected before the first
   paint, pull request state fills in behind it. It is the difference between a
   screen that appears and one that appears two seconds later.
@@ -756,12 +809,26 @@ therefore no longer means "launch the editor" but **"make the lane ready, then l
 editor"**. `open` ends by entering the lane it created, so there is one code path rather
 than two.
 
-- **Three verbs, and lane learns no package manager.** `clone` (a copy-on-write copy
-  from the main clone), `link` (a symlink to it) and `run` (a configured command, with a
-  directory). Go keeps its caches globally and needs almost none of this; Node keeps them
-  per project and needs all of it — an asymmetry lane cannot learn its way out of, since
-  there is always one more ecosystem. The mechanism is generic; the project-specific
-  knowledge is configuration.
+- **Two verbs, and lane learns no package manager.** `clone` (a copy-on-write copy from
+  the main clone) and `run` (a configured command, with a directory). Go keeps its caches
+  globally and needs almost none of this; Node keeps them per project and needs all of it —
+  an asymmetry lane cannot learn its way out of, since there is always one more ecosystem.
+  The mechanism is generic; the project-specific knowledge is configuration.
+- **`link` was a third verb and is gone, on purpose.** It made a symlink into the main
+  clone: always current, one copy rather than one per lane, which suited a large read-only
+  asset and suited secrets. It was removed because **a row has exactly two answers** — in
+  or out — and a checkbox cannot carry a third; a screen that had to be entered to change
+  an answer is what the whole rebuild was for. Consequences to keep rather than rediscover:
+  a `verb = "link"` in an older `prepare.toml` is dropped on read like any unknown verb, so
+  that path is asked about again and the symlink already in the lane reads as *already
+  there*; and the trailing-slash `linkable` question went with it, while the **`writable`
+  half of the same bulk `check-ignore` stayed**, because that is what stops a tracked path
+  ever being offered. Do not reintroduce `link` as a hidden setting: it would be a third
+  state wearing a different hat.
+- **`refresh` went with it.** A `clone` step could be marked "reapply on every enter",
+  settable only in settings — and settings' per-step editor is exactly what the checklist
+  replaced, so it had nowhere left to be set. Removing it also made the overwrite rule
+  unconditional, which is worth more than the feature was: see the invariant below.
 - **Discovery is git's own answer**, not a guess:
   `git ls-files -o -i --exclude-standard --directory -z` against the **main clone**,
   where the files are. `--directory` is what makes it usable — one row for
@@ -769,42 +836,60 @@ than two.
   to the shallowest, because git reports both when an intermediate directory holds
   nothing tracked, and applying both would write the same bytes twice.
 - **Only paths the lane's own git ignores are ever written**, asked in one bulk
-  `check-ignore --stdin -z`. The trailing slash is the whole question: `node_modules/`
-  matches directories only, so a *symlink* of that name is an untracked file — which
-  would put `● 1 uncommitted` in the listing over a link the user asked for. So a path
-  ignored in neither spelling is not offered at all, and `link` is offered only where the
-  bare spelling comes back. A tracked path never does, which is what stops lane writing
-  over one.
-- **The user is asked once per project per path, on one screen.** One row per path or per
-  *folder* of them, one keystroke per change, the whole set visible, sizes filling in
-  behind it — and no key beyond `Enter`. A queue of
-  prompts is the wrong shape: entering a lane is something you do several times a day on
-  the way to your editor, and three questions in sequence is a toll. Every row starts at
-  `skip`, so one `Enter` is safe; answers are remembered, and settings is where one is
-  changed.
-- **The cell says what will happen to *this* lane** — `clone` / `clone · overwrites` /
-  `link` / `link · overwrites` / `skip` — because whether the path is already there
-  changes what the answer does, and the destructive case has to name itself in words.
+  `check-ignore --stdin -z`, in **both spellings**. The trailing slash is the whole
+  question: `node_modules/` matches directories only. A path ignored in neither spelling is
+  one the lane's branch tracks or simply does not ignore, so writing there would dirty the
+  worktree — and it is not offered at all. A tracked path never comes back, which is what
+  stops lane writing over one.
+- **One screen, one component, two callers.** Entering a lane opens it when some path has
+  no answer yet, and not at all otherwise; settings · preparation opens it to review or
+  change anything. **Not two screens that resemble each other** — one `Ui.check`, one
+  `prepare.Sheet` building the rows, opened from both places, because resemblance drifts
+  and sameness cannot. It had already drifted: entering cycled a row in place while
+  settings made you press `Enter`, choose *change*, and pick a verb — three screens to move
+  one path, a dozen times over for a dozen paths.
+- **A row is in or out, and there is no third state.** Ticked means the path comes into the
+  lane, unticked means it stays out; both are remembered. Every row starts wherever the
+  stored answer left it, and on the screen where a path is first answered that is *out* —
+  so one `Enter` is always safe.
+- **A ticked path that is already in the lane is left alone rather than overwritten.** The
+  checkbox cannot carry this, so it is stated once and holds always — and because it holds
+  always, one function (`prepare.needed`) decides what every step does, where there used to
+  be two that disagreed on exactly this point. The row says **`already there`** in its own
+  column, and the cursor panel repeats it, because a tick that is a no-op and a tick that
+  copies a gigabyte have to look different.
+- **The screen carries a running count of what is in**, and beside it how much is about to
+  be copied (`4 of 6 in · 1.2 GB coming in`). Forty rows do not fit on a terminal, so
+  without it the only way to know what you have just decided is to scroll back through it.
+  The count is the widget's, because it owns the ticks; the size is the action's, because it
+  owns the sizes. Paths already in the lane are left out of the total — a tick on one of
+  those does nothing, and counting it would describe work lane is not going to do.
 - **Loose ignored files are grouped by folder**, because `--directory` only collapses a
   directory git ignores *entirely*: one tracked file in it and every ignored file inside
   is listed separately. Measured on a four-pattern repository: **55 rows, 40 of them from
-  one `logs/`**. A folder of three or more becomes one row; `Enter` on it offers the verbs
-  for all of them plus `one by one…`, which opens the same screen over just its files. A
-  folder that mixes `.env` files with build litter is exactly the shape git fails to
-  collapse, so one answer cannot be right for it and both halves are needed.
-- **A group is presentation, never a step for its directory.** The directory is only
+  one `logs/`**. A folder of three or more becomes one row, and **that row is one
+  checkbox**: ticking it means all of them.
+- **A folder is a folder only while its paths agree.** One checkbox has two states, so a
+  directory holding two `.env` files that are in and thirty logs that are out has no honest
+  tick — `prepare.group` does not fold it, and its files are drawn as their own rows. That
+  is what replaced drilling into a folder to answer it file by file: the screen opens it out
+  itself, exactly when opening it out is the only truthful thing to do. On the screen where
+  a path is first answered nothing is ticked, so everything folds; a disagreement can only
+  arrive from answers already on disk.
+- **A folder is presentation, never a step for its directory.** The directory is only
   partly ignored — that is why its files were listed one by one — so it holds tracked work
-  too, and cloning it would overwrite that. Answering a folder stores one step per path.
+  too, and cloning it would overwrite that. Ticking a folder stores one step per path.
   A file that appears there later is therefore a path nobody has answered, and is asked
   about rather than silently swept in.
-- **`refresh` is settings-only.** On the screen where an answer is first given the path is
-  absent, so `clone` and a refreshing `clone` do exactly the same thing; a screen has no
-  business offering a distinction it cannot demonstrate. A `run` step's equivalent is a
-  guard path (`unless`), re-checked immediately before it runs so a clone can satisfy it.
 - **Nothing is recorded per lane.** The only state is the filesystem — is the path there —
   which is what makes a failed or interrupted preparation repair itself.
 - **The answers live in `prepare.toml`, beside the config and never inside it.** See
   *Configuration* below.
+- **Settings holds the commands separately, and that is not drift.** `preparation` is the
+  shared checklist over paths; `commands` is a fifth settings row holding the `run` steps,
+  with `change`/`forget` and `add a command`. A command is typed rather than discovered and
+  carries a directory and a guard to edit, none of which is a checkbox — folding it into a
+  screen of discovered paths would be the resemblance this change exists to remove.
 - **Copy-on-write is `clonefile(2)` via `ctypes`, not a subprocess to `cp -c`.** Measured:
   a 64 MB tree in 0.3 ms, and across volumes it fails with `EXDEV` having done nothing.
   `cp -Rc` takes 9 ms and, across volumes, **silently** falls back to a real copy —
@@ -1029,26 +1114,33 @@ All of it arrived at test-first:
 - discovery listing one row per ignored directory, and collapsing a row nested inside
   another; the ignore question distinguishing `x/` from `x` and never returning a tracked
   path
+- `Space` ticking the row under the cursor without moving it, several rows all landing,
+  `Enter` accepting the whole screen, and the widget binding the picker's keys plus `Space`
+  and nothing else — all through pipe input
+- the screen not appearing at all when no path is unanswered, and the same component being
+  the one settings opens — counted, not eyeballed
+- a ticked path already in the lane keeping the lane's own copy, with the row saying
+  `already there` and nothing being applied
 - a clone reproducing a tree, the copy being independent of it, and a failed swap leaving
   the original whole with nothing staged behind
 - a clone that fell back to a real copy **saying so**, since that is the entire reason
   `clonefile` is called instead of `cp -c`
-- a linked path replaced without following the old link, and a lane closed with one
-  leaving the main clone's copy intact
 - entering an already-prepared lane making **exactly one** git call, asking nothing and
   drawing nothing — counted through the real backend
-- `Enter` changing the row under the cursor and the repaint showing it, returning only
-  the row with no answer to change; and the table binding no key beyond the picker's set
-- the `verb` column surviving at 40 columns with `clone · overwrites` in it
+- the table binding no key beyond the picker's set, and the checklist binding exactly
+  that set plus `Space` — asserted on both binding tables, not by driving keys
+- the tick surviving a 40-column terminal while the other columns are dropped and the
+  path truncates, and the footer shortening rather than clipping `ctrl-c back out` away
 - a failed step reporting its fix while the remaining steps still run and the editor still
   opens; entering again finishing what it left
 - Ctrl-C during a step naming the step, saying entering again finishes the job, and not
   launching the editor
 - a prepared lane still reading `✓ clean` to git, so preparation cannot leak into the
   listing's `state` cell or the close flow's checks
-- forty loose ignored files in one directory drawing **one** row, answerable in one go or
-  file by file — and a folder answered in one go writing one step per path and never
-  touching the directory, which a tracked file in it proves
+- forty loose ignored files in one directory drawing **one** row, answered by one
+  keystroke — writing one step per path and never touching the directory, which a tracked
+  file in it proves — and a folder whose remembered answers disagree being drawn as its own
+  rows instead
 - the branch list merging a branch that is both local and remote into **one** row,
   excluding `origin/HEAD` (which `refname:short` renders as a bare `origin`), and
   putting the most recently committed first

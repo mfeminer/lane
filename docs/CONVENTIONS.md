@@ -73,14 +73,24 @@ AGENTS.md's "Going back is visible" section. **A new screen introduces no key th
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
-**A screen whose rows each carry an answer needs no key of its own.** `Enter` changes the
-row under the cursor and returns only a row that has no answer to change (`continue`) —
-which is the same "act on the row under the cursor" it means everywhere — and the footer
-stays the single `HINT` constant, because there is nothing extra to announce. See
-`Ui.browse`'s `toggle`.
+**One screen adds one key, and it is `Space` on the checklist** (`ui/checklist.py`,
+reached through `Ui.check`). It is the screen where every row carries a two-state answer —
+which ignored paths come into a lane — and it spends the vocabulary budget deliberately
+rather than by accident:
 
-The one place this table is currently *misrepresented* rather than violated: fix per
-§9 below.
+- `Space` toggles the row under the cursor. It is the universal multi-select convention,
+  it is what makes a dozen answers a dozen keystrokes, and the alternative — `Enter`
+  cycling the row in place — is what this screen replaced, because it left the screen with
+  no key to *accept* with and forced a `continue` row to stand in for one.
+- `Enter` accepts the whole screen. **This is the one place `Enter` does not act on the
+  row under the cursor**, and the difference is the point: there is nothing to act on, the
+  row's answer is `Space`'s job. A screen where `Enter` meant both would need a third key.
+- The footer names both, because a screen that adds a key announces it (`checklist.HINT`).
+  The lanes table's footer does not, because the table adds none.
+
+That is the whole exception, and it is one widget wide. **A new screen still introduces no
+key**; if it seems to need one, that is a decision for the maintainer, made in the open
+like this one, not a convenience to slip in.
 
 ## 4. Menu and list entry wording
 
@@ -104,7 +114,7 @@ The set, and only meaning each one carries:
 
 | Symbol | Means | Where |
 |---|---|---|
-| `✓` | this step or lane-fact succeeded / is fine | `ui.ok`, table `✓ merged` |
+| `✓` | this step or lane-fact succeeded / is fine; **and** this checklist row is *in* | `ui.ok`, table `✓ merged`, `checklist.py` |
 | `!` | worth your attention, not yet blocking or already handled | `ui.warn` |
 | `✗` | refused / failed | `ui.error` |
 | `●` | count of uncommitted/untracked files | table `state` cell |
@@ -112,12 +122,16 @@ The set, and only meaning each one carries:
 | `❯` | the cursor, in any picker or the table | `picker.py`, `table.py` |
 | `←` | this entry leaves the current screen **backwards** | `← Back`, `← Back to the menu`, `← Back without entering` |
 
-**`←` marks going back, not going on.** A row that leaves the screen *forwards* — the
-preparation screen's `continue`, which applies the answers and opens the editor — carries
-no arrow, or the one symbol that means "out of here" would mean both directions at once.
-That screen has two trailing rows for exactly that reason: `continue` and
-`← Back without entering` have genuinely different consequences, and the visible-exit rule
-is what makes the second one a row rather than an unannounced Ctrl-C.
+**`✓` carries a second meaning rather than a second glyph.** On the checklist it marks a
+row that comes into the lane; a blank marks one that does not. Extending a symbol was
+chosen over inventing one (`[x]`, `●`, `▸`) because the set is small on purpose, and
+because the two meanings never appear on the same screen. Colour is not what says it: the
+tick's presence is (§6).
+
+**`←` marks going back, not going on.** The checklist has no `←` row at all, and no
+forward row either — `Enter` is the accept and `Ctrl-C` the way out, both named in the
+footer, which is what §2 already prescribes for a prompt whose only exit is a keystroke.
+Where a screen does need a trailing row, `←` is for the one that leaves *backwards*.
 
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
@@ -158,20 +172,33 @@ lane settings
 ❯ projects root        /Users/you/Projects
   lanes root           /Users/you/Lanes
   editor               cursor
-  preparation          4 steps in 2 projects
+  preparation          4 paths in, 2 out
+  commands             1 step
   ← Back to the menu
 
   ctrl-c back out
 ```
 
-`preparation` is a fourth row and **not a fourth setting**: it is a destination, so it is a
-noun (§4), and its value cell says how much is there the way the others say what they are
-set to. It leads to **one** screen listing every project's steps, not to a project list and
-then a page each — the lanes table already draws rows from several projects in one table
-with a dimmed `Cell.lead`, so a third level of nesting is unnecessary. Back labels stay
-scoped as ADR 0002 requires: `← Back to the menu` here, `← Back to settings` there. Choosing
-a step row opens a two-entry menu (`change`, `forget`) exactly as the lanes table opens
-`enter`/`close`.
+`preparation` and `commands` are rows four and five and **not settings**: they are
+destinations, so they are nouns (§4), and their value cells say what is there the way the
+others say what they are set to. Both cover every project on one screen rather than a
+project list and then a page each — the lanes table already draws rows from several
+projects in one table with a dimmed `Cell.lead`, so a third level of nesting is
+unnecessary. Back labels stay scoped as ADR 0002 requires: `← Back to the menu` here,
+`← Back to settings` there.
+
+**`preparation` opens the very screen entering a lane opens** — `Ui.check` over the same
+rows, answered with the same keystroke. That is one component with two callers, not two
+screens that resemble each other, and the difference matters because resemblance drifts:
+this pair had already drifted into a checklist on one side and `Enter` → *change* → pick-a-
+verb on the other, three screens to move one path. What the two callers pass differs in
+exactly two ways, both data: settings leads each row with its project, and entering has a
+lane in hand so it can say which paths are already in it.
+
+**`commands` is separate because a command is not a path.** It is typed rather than
+discovered and carries a directory and a guard to edit, none of which is a checkbox — so it
+keeps the list you act on one row of, with `change`/`forget` exactly as the lanes table
+offers `enter`/`close`.
 
 Choosing a row asks that **one** question (with today's validation — a projects root
 with no repositories is still refused, a lanes root inside the projects root still
@@ -298,7 +325,13 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   narrower on purpose.)*
 - **A column that answers the screen's own reason for existing is never dropped and
   never truncated, at any width the screen actually promises to support.** This is
-  the stated invariant for the lanes table's `state`/`pr` (ADR 0002). **Built —
+  the stated invariant for the lanes table's `state`/`pr` (ADR 0002). On the checklist it
+  is the **tick**, which is a gutter rather than a column and so cannot be dropped at all.
+  What gives way there, in order: `in lane` (the cursor panel says the same thing in
+  words, so nothing is lost that cannot be got back), then `size` (which nothing repeats),
+  then the path truncates. **The footer degrades too rather than being clipped** — a way
+  out cut to `ctr…` is not a visible way out, so `checklist.HINTS` gives up the arrows,
+  then what each key does, and never `ctrl-c back out`. **Built —
   Phase L, box L7, decision: abbreviate `state` before `pr` is ever endangered.**
   `Cell` (`seam.py`) gained a `short` field; `table.py`'s `_fit()` switches every
   cell to its short form, if it has one, before ever shrinking the lane-name column
@@ -333,9 +366,10 @@ One term per concept. The list, and the survivor where two forms were found:
 | The three-question setup screen | **settings** | config, preferences, setup (used once, for the very first run, and even then it's the same screen) |
 | Bringing what `.gitignore` hides into a lane, before the editor opens | **preparation** (verb: **prepare**) | setup, bootstrap, provisioning, sync, hydrate, seed |
 | One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
-| What lane does to a path | the **verb** — `clone`, `link`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`) |
+| What lane does to a path | the **verb** — `clone`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`); `link`, which was a verb and is not any more |
+| A path's answer, as the user sees it | **in** / **out** (of the lane) | on/off, included/excluded, yes/no, selected |
 | Several loose ignored files under one directory, shown as one row | a **folder** (of files) | group (used in the source for the type, not on screen), bundle, batch |
-| A folder whose files are not all answered the same way | **mixed** | partial, some, varies |
+| A path already in the lane, which a tick therefore leaves alone | **already there** | present, exists, installed |
 | The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
 | A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
 | A branch that came into being with or during the lane | the lane **created** it | own, new, made |
@@ -345,10 +379,15 @@ either word: they are how AGENTS.md's *"branch deletion applies to the lane's ow
 branches"* is now read, and a session reaching for "borrowed" or "reused" in a
 comment would be describing the same distinction in a second vocabulary.
 
-`verb` is the column header on both preparation screens for that last reason. AGENTS.md
-already calls `enter` and `close` "the two verbs" the lanes screen offers, so the word is
-established here for exactly this; `action` would collide with the only other thing in the
-application that word names.
+`verb` is no longer a column header anywhere: the preparation screen asks in-or-out and the
+tick answers it. The word still names the concept in the source and in `prepare.Verb`, for
+the reason it always did — AGENTS.md calls `enter` and `close` "the two verbs" the lanes
+screen offers, and `action` would collide with the only other thing in the application that
+word names.
+
+**`mixed` is gone with it.** A folder whose files were answered differently used to read
+`mixed`; a checkbox has two states and cannot say that, so such a folder is not folded into
+one row at all — it is drawn as its own rows, which is truthful without a third word.
 
 If a new screen needs a term not in this table, add it here in the same change —
 this table is the thing to grep before reaching for a synonym.
