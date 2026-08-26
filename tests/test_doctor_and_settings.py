@@ -14,8 +14,10 @@ from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
 from lane.lanes import LaneStore
-from lane.prepare import Step, Verb, apply
+from lane.prepare import Candidate, Step, Verb, apply
+from lane.prepare.sheet import Sheet, answers_from
 from lane.state import StateStore
+from lane.ui.checklist import paint
 from tests.conftest import build_repo, git
 from tests.fakes import FakeEnvironment, FakeUi, StubGitHubClient
 
@@ -246,10 +248,10 @@ def test_the_lanes_default_is_offered_next_to_the_projects_folder(
     offered: list[str] = []
 
     class Recording(FakeUi):
-        def text(self, title, *, default="", on_render=None):  # type: ignore[no-untyped-def]
+        def text(self, title, *, default=""):  # type: ignore[no-untyped-def]
             if "lanes be parked" in title:
                 offered.append(default)
-            return super().text(title, default=default, on_render=on_render)
+            return super().text(title, default=default)
 
     # Answer the lanes question with "" so the default is taken.
     ui = Recording([str(projects_root), "", "cursor"])
@@ -281,10 +283,10 @@ def test_an_already_configured_lanes_folder_is_offered_instead(
     offered: list[str] = []
 
     class Recording(FakeUi):
-        def text(self, title, *, default="", on_render=None):  # type: ignore[no-untyped-def]
+        def text(self, title, *, default=""):  # type: ignore[no-untyped-def]
             if "lanes be parked" in title:
                 offered.append(default)
-            return super().text(title, default=default, on_render=on_render)
+            return super().text(title, default=default)
 
     ui = Recording(["lanes root", "", "back"])
     context = _context(ui, projects_root=projects_root, lanes_root=chosen, config_dir=config_dir)
@@ -493,6 +495,52 @@ def test_settings_has_a_preparation_row_saying_how_much_is_in(
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("preparation" in row and "1 path in, 1 out" in row for row in rows)
+
+
+def test_settings_tells_a_stored_skip_from_a_path_nobody_has_answered(
+    projects_root: Path,
+) -> None:
+    """The gap the two-state screen left, and the one settings felt worst.
+
+    Settings reviews *stored decisions*, so "kept out on purpose" is a normal thing for a
+    row there to be — and it drew as a blank gutter, exactly like a path that had never
+    been asked about. Three states, three marks, and the mark is what says it rather than
+    the colour (§6).
+
+    Driven through the real widget rather than the fake: marks are what is being claimed,
+    and `FakeUi` records cell text with no gutter at all.
+    """
+    steps = (
+        Step(project="acme", verb=Verb.CLONE, path="a/kept"),
+        Step(project="acme", verb=Verb.SKIP, path="b/refused"),
+    )
+    never_asked = Candidate(path="c/unasked", project="acme")
+    sheet = Sheet(
+        [*(Candidate(path=step.path, project=step.project) for step in steps), never_asked],
+        source=lambda one: projects_root / one.project / one.path,
+        stored=answers_from(steps),
+        lead=True,
+    )
+
+    lines = paint(
+        "3 answered paths in 1 project",
+        sheet.columns,
+        sheet.rows(),
+        answers=sheet.answers,
+        cursor=0,
+        top=0,
+        width=120,
+        height=40,
+    ).lines
+    marks = {
+        name: next(line for line in lines if name in line)[:4]
+        for name in ("kept", "refused", "unasked")
+    }
+
+    assert "✓" in marks["kept"]
+    assert "✗" in marks["refused"]
+    assert "○" in marks["unasked"]
+    assert len({mark.strip() for mark in marks.values()}) == 3, marks
 
 
 def test_settings_opens_the_same_screen_entering_a_lane_does(

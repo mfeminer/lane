@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from lane import prepare
 from lane.actions import enter_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
@@ -27,7 +28,7 @@ from lane.git.cli_backend import CliGitBackend
 from lane.lanes import Lane, LaneMeta, LaneStore
 from lane.prepare import Step, Verb
 from lane.state import StateStore
-from lane.ui.seam import Abandoned
+from lane.ui.seam import Abandoned, Quit
 from tests.conftest import build_repo, git
 from tests.fakes import FakeEnvironment, FakeUi, StubGitHubClient
 
@@ -169,11 +170,15 @@ def test_an_unanswered_path_is_asked_about_on_one_screen(
     assert len(ui.asked) == 1, "one screen, not a queue of questions"
 
 
-def test_every_row_starts_out_and_accepting_writes_nothing_in(
+def test_applying_an_untouched_screen_brings_nothing_in_and_records_no_answer(
     projects_root: Path, lanes_root: Path
 ) -> None:
-    """The untouched answer has to be the one that changes nothing: one Enter records
-    every visible answer, including the rows nobody ticked."""
+    """The untouched answer has to be the one that changes nothing — and *nothing* now
+    means nothing at all, not a `skip` filed on behalf of every row nobody looked at.
+
+    That distinction is the whole point of the third state: a row left unanswered is a
+    question still open, so applying commits what was decided and leaves the rest.
+    """
     ui = FakeUi([[]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=("node_modules/",))
@@ -183,9 +188,7 @@ def test_every_row_starts_out_and_accepting_writes_nothing_in(
     enter_lane.enter(context, lane)
 
     assert not (lane.path / "node_modules").exists()
-    assert [(s.path, s.verb) for s in context.prepare_store().load().for_project("demo")] == [
-        ("node_modules", Verb.SKIP)
-    ]
+    assert context.prepare_store().load().for_project("demo") == ()
     assert ui.said("remembered")
     assert ui.said("settings")
     assert not any(told.kind in {"error", "progress"} for told in ui.told), (
@@ -221,6 +224,36 @@ def test_ticking_a_row_brings_the_path_in_and_remembers_it(
     assert [(s.path, s.verb) for s in context.prepare_store().load().for_project("demo")] == [
         ("node_modules", Verb.CLONE)
     ]
+
+
+def test_applying_with_some_rows_unanswered_records_only_the_answered_ones(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """`apply` commits what has been decided and leaves the rest open.
+
+    This is what the third state is *for*. With two, accepting a screen filed an answer
+    for every row on it, so "I have decided about this one and not that one" could not be
+    said — and a path the user simply had not got to was recorded as one they had
+    refused, never to be offered again.
+    """
+    ui = FakeUi([["node_modules"]])
+    context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
+    repo = _project(projects_root, ignore=("node_modules/", ".env"))
+    _tree(repo / "node_modules", "pkg")
+    (repo / ".env").write_text("SECRET=1\n")
+    lane = _lane(context, repo)
+
+    enter_lane.enter(context, lane)
+
+    remembered = context.prepare_store().load().for_project("demo")
+    assert [(step.path, step.verb) for step in remembered] == [("node_modules", Verb.CLONE)], (
+        "the row nobody answered is not written down as a refusal"
+    )
+
+    # And so the next visit still has a question to ask about it, exactly as it would
+    # about a path nobody had ever seen.
+    ignored = context.git.ignored_paths(repo)
+    assert prepare.unanswered(remembered, ignored) == [".env"]
 
 
 def test_a_dozen_paths_are_a_dozen_keystrokes_and_one_screen(
@@ -266,8 +299,9 @@ def test_a_second_lane_in_the_same_project_asks_nothing(
     assert (second.path / "node_modules" / "pkg").exists(), "and it was prepared anyway"
 
 
-def test_ticking_twice_leaves_the_path_out(projects_root: Path, lanes_root: Path) -> None:
-    """Two answers and only two — there is no third press to get lost in."""
+def test_answering_twice_leaves_the_path_out(projects_root: Path, lanes_root: Path) -> None:
+    """The second press is what says *out* — and unlike an untouched row, it is an answer,
+    so it is written down and the path is not asked about again."""
     ui = FakeUi([[".env", ".env"]])
     context = _context(ui=ui, projects_root=projects_root, lanes_root=lanes_root)
     repo = _project(projects_root, ignore=(".env",))
@@ -535,12 +569,12 @@ def test_an_interrupt_names_the_step_and_does_not_launch_the_editor(
     def interrupted(text: str, work: object) -> object:
         del work
         if text.startswith("Cloning"):
-            raise Abandoned
+            raise Quit
         return None
 
     context.ui.progress = interrupted  # type: ignore[method-assign, assignment]
 
-    with pytest.raises(Abandoned):
+    with pytest.raises(Quit):
         enter_lane.enter(context, lane)
 
     assert ui.said("Interrupted while cloning node_modules")

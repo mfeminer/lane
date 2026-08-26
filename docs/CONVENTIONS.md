@@ -49,25 +49,34 @@ table ends with `← Back to the menu`, the main menu ends with `quit`. These ar
 deliberately different labels for deliberately different scopes (one step back vs.
 leaving the table entirely) — ADR 0002, "The screen" — do not unify them.
 
-**This visibility requirement applies to `Ui.text` and `Ui.confirm` too**, which
-otherwise have no visible exit and rely solely on an unannounced Ctrl-C.
+**`text` and `confirm` are the two prompts this rule cannot reach**, and that is now
+stated rather than papered over. There is nothing to choose between in either, so there
+is no row to add — and they used to render a dim `ctrl-c back out` footer instead,
+because Ctrl-C meant something lane-specific there and relying on that being universally
+known was judged insufficient.
 
-- Every `text` and `confirm` prompt renders a **dim footer hint**, the same way
-  `choose`/`browse` already do, naming the one way out: `ctrl-c back out` (or fold
-  into the existing per-widget `HINT` constants so there is exactly one hint string
-  per widget type, not per call site).
-- This is a **presentation change, not a behaviour change**: it does not bind a new
-  key or alter what Ctrl-C already does. It makes the existing behaviour visible,
-  which is the whole point of the rule it's closing the gap on.
-- Do not add a rendered `← Back` *entry* to `text`/`confirm` — there is nothing to
-  choose between; a footer hint is the right amount of visibility for a prompt with
-  one exit, not a picker with an extra row.
+- **That hint is gone.** Ctrl-C is not lane-specific any more: it quits lane, which is
+  what every terminal user already assumes, and a footer teaching that teaches nothing.
+  See *Ctrl-C quits lane* in AGENTS.md.
+- The consequence is named there too: these two prompts have **no way back at all**, only
+  a way out of lane. A mistyped answer is corrected from the screen that follows, not by
+  backing out of the prompt. If that turns out to bite, the fix is to give them a visible
+  way back — not to give Ctrl-C a second meaning.
+- Do not add a rendered `← Back` *entry* to `text`/`confirm` on that account without
+  deciding it deliberately: a picker with an extra row is a different widget from a
+  question with one answer.
+
+**The checklist has both kinds of row**, and it is the reference for a screen that needs
+a way forward as well as a way back: `← Back` where there is a level above, then `apply`
+and `discard`, on every level. Accepting and abandoning are rows there for exactly the
+reason going back always has been — a screen whose way forward is a keystroke you have to
+know is the same fault as one whose way back is.
 
 ## 3. Key bindings
 
 **Fully decided in AGENTS.md and `picker.py`; cited, not restated.** The whole
-vocabulary: `↑` `↓` `Home` `End` move, `Enter` chooses or accepts, `y`/`n` answer a
-yes/no question, `Ctrl-C` backs out, everywhere. No `q`, no vim keys, no digit
+vocabulary: `↑` `↓` `Home` `End` move, `Enter` chooses or acts on the row, `y`/`n` answer
+a yes/no question, `Ctrl-C` **quits lane**, everywhere. No `q`, no vim keys, no digit
 shortcuts, no Esc — each removed on purpose, with the reasoning kept in
 AGENTS.md's "Going back is visible" section. **A new screen introduces no key this table doesn't already
 have.** If a screen seems to need one, that is a decision for the maintainer
@@ -83,19 +92,24 @@ rather than by accident:
   cycling the row in place — is what this screen replaced, because it left the screen with
   no key to *accept* with and forced a `continue` row to stand in for one. On a **folder**
   row it answers every path beneath it at once, which is the whole point of the folder.
-- **`Enter` opens the row if it opens, and otherwise accepts the level you are standing
-  in.** A folder is a screen you go into, so `Enter` on one acts on the row exactly as it
-  does in the lanes table; on a leaf there is nothing to act on — the row's answer is
-  `Space`'s job — so it accepts, which at the root is the screen and inside a folder is
-  that folder. **This is still the one place `Enter` can mean "accept" rather than "act on
-  the row"**, and it is the same exception as before rather than a second one: it applies
-  where and only where the row has nothing to open. A screen where `Enter` both answered
-  the row *and* accepted would need a third key; this one needs none.
-- The footer names both, because a screen that adds a key announces it (`checklist.HINT`,
-  `checklist.hints()`) — and it names whichever of `open` / `go up` / `accept` `Enter`
-  will actually do to the row under the cursor, since that is the one thing about this
-  screen a footer could otherwise only half-say. The lanes table's footer names nothing,
-  because the table adds no key and `Enter` there always means the same thing.
+- **`Enter` does to a row exactly what that row *is*.** It opens a folder, leaves the
+  level from `← Back`, accepts from `apply`, abandons from `discard`, and on a **leaf**
+  does nothing at all — a leaf's answer is `Space`'s job and there is nothing to open. So
+  `Enter` here means what it means everywhere else in lane: act on the row under the
+  cursor. **There is no longer an exception**, and the one there used to be is worth
+  keeping written down: `Enter` opened the row if it opened and *otherwise accepted the
+  level you were standing in*, which sent a press on a **file** up out of the folder it
+  was pressed in, and left the accept reachable only from a root-level leaf — a screen
+  with no way to finish at all when every path sits under a folder.
+- Accepting and abandoning are **rows**, on every level (§2). That is what removed the
+  exception rather than moving it: a screen where `Enter` both answered the row and
+  accepted would need a third key, and one where accepting is a row needs none.
+- The footer names whichever of `open` / `go up` / `apply` / `discard` `Enter` will
+  actually do to the row under the cursor, and names **none** on a leaf, because naming a
+  key that does nothing teaches a lie (`checklist.HINT`, `checklist.hints()`). It does not
+  name `ctrl-c`: that is no longer this screen's way out, and what it does now is the one
+  thing about a terminal program nobody has to be taught. The lanes table's footer names
+  nothing, because the table adds no key.
 
 That is the whole exception, and it is one widget wide. **A new screen still introduces no
 key**; if it seems to need one, that is a decision for the maintainer, made in the open
@@ -124,36 +138,47 @@ The set, and only meaning each one carries:
 | Symbol | Means | Where |
 |---|---|---|
 | `✓` | this step or lane-fact succeeded / is fine; **and** this checklist row is *in* — a leaf, or every path under a folder | `ui.ok`, table `✓ merged`, `checklist.py` |
-| `◐` | **some** of what this checklist row stands for is in and some is out | `checklist.py`, folder rows only |
+| `✗` | refused / failed; **and** this checklist row is *out* — deliberately kept out of the lane | `ui.error`, `checklist.py` |
+| `○` | **nothing** this checklist row stands for has been answered yet | `checklist.py` |
+| `?` | **something** under this checklist folder is still unanswered | `checklist.py`, folder rows only |
+| `◐` | this checklist folder is fully answered and its paths disagree — some in, some out | `checklist.py`, folder rows only |
 | `!` | worth your attention, not yet blocking or already handled | `ui.warn` |
-| `✗` | refused / failed | `ui.error` |
 | `●` | count of uncommitted/untracked files | table `state` cell |
 | `↑` | count of unpushed commits | table `state` cell |
 | `❯` | the cursor, in any picker or the table | `picker.py`, `table.py` |
 | `←` | this entry leaves the current screen **backwards** | `← Back`, `← Back to the menu`, `← Back without entering` |
 
-**`✓` carries a second meaning rather than a second glyph.** On the checklist it marks a
-row that comes into the lane; a blank marks one that does not. Extending a symbol was
-chosen over inventing one (`[x]`, `●`, `▸`) because the set is small on purpose, and
-because the two meanings never appear on the same screen. Colour is not what says it: the
-tick's presence is (§6).
+**`✓` and `✗` each carry a second meaning rather than a second glyph.** On the checklist
+`✓` marks a row that comes into the lane and `✗` one deliberately kept out. Extending the
+two was chosen over inventing more (`[x]`, `●`, `▸`) because the set is small on purpose,
+and because in both cases the second meaning is the same family as the first — *this is
+fine* / *this one is in*, *refused* / *this one is refused*. Colour is not what says it:
+which mark is present is (§6).
 
-**`◐` is the one symbol this set has gained, and a folder row is the whole reason.** A
-leaf has two answers and the pair `✓`/blank says both. A folder stands for every path
-beneath it, which can be all in, all out **or a mix** — and both existing marks already
-mean *all of them*, so a mix forced into either is a row that lies about paths not on
-screen. `✗` was never a candidate: it means refused/failed everywhere else in lane, and
-one symbol carries one meaning. *Out* still gets no glyph of its own — it is the absence
-of a mark, which is what it always was. Colour decorates `◐`; the glyph is what says it
-(§6), and the row's panel says it again in words.
+**`✗` widening was a deliberate reversal, and the reason it is now right is that
+something changed.** *Out* used to be the **absence** of a mark, and that was defensible
+while a row had two answers — until a third arrived. With three, an absent mark had to
+carry both *out* and *not yet asked*, which are opposite things: one is a decision and the
+other is a question still open. `✗` for the decision and `○` for the question is what
+makes them tellable apart at all.
 
-**`←` marks going back, not going on.** The checklist's **root** has no `←` row and no
-forward row either — `Enter` is the accept and `Ctrl-C` the way out, both named in the
-footer, which is what §2 already prescribes for a prompt whose only exit is a keystroke.
-A level **inside a folder** does have one, `← Back`, because unlike the root it has
-somewhere to go back *to*: one step back, so the plain label, exactly as every `choose`
-prompt uses it. Where a screen does need a trailing row, `←` is for the one that leaves
-*backwards*.
+**`○`, `?` and `◐` are the checklist's own three, and a folder row is the whole reason
+for the last two.** A leaf has three answers and `✓`/`✗`/`○` says all of them. A folder
+stands for every path beneath it, which can additionally be *partly unanswered* or
+*fully answered and disagreeing* — and those are different facts, only one of which the
+user still has to come back to, so they cannot share a glyph. `?` is deliberately **not**
+another circle: `○`/`◐`/`✓`/`✗` all answer *how much of this is in*, and `?` answers *is
+there still a question in here*, so a fifth fill level would be read as the wrong kind of
+answer and mistaken for `◐`. Being the one non-circle is what makes it tellable apart by
+shape rather than by colour (§6), which matters because three of the five are drawn
+`warn`. The row's panel says it again in words.
+
+**`←` marks going back, not going on.** A checklist level **inside a folder** has a
+`← Back` row, because unlike the root it has somewhere to go back *to*: one step back, so
+the plain label, exactly as every `choose` prompt uses it. The **root** has none, having
+nothing above it. Both levels do have the two rows that go *on* — `apply` and `discard` —
+and those take no arrow: `←` is for the row that leaves **backwards**, and neither of
+those does.
 
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
@@ -198,7 +223,7 @@ lane settings
   commands             1 step
   ← Back to the menu
 
-  ctrl-c back out
+  ↑↓ move · enter choose
 ```
 
 `preparation` and `commands` are rows four and five and **not settings**: they are
@@ -348,14 +373,15 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
 - **A column that answers the screen's own reason for existing is never dropped and
   never truncated, at any width the screen actually promises to support.** This is
   the stated invariant for the lanes table's `state`/`pr` (ADR 0002). On the checklist it
-  is the **mark** (`✓`/`◐`/blank), which is a gutter rather than a column and so cannot be
-  dropped at all. What gives way there, in order: `in lane` (the cursor panel says the same
+  is the **mark** (`✓`/`✗`/`○`/`?`/`◐`), which is a gutter rather than a column and so
+  cannot be dropped at all. What gives way there, in order: `in lane` (the cursor panel says the same
   thing in words, so nothing is lost that cannot be got back), then `size` (which nothing
   repeats), then the dim `Cell.lead` — which on a level inside a folder is the directory
   every row on it shares and therefore identifies nothing — then the path truncates.
-  **The footer degrades too rather than being clipped** — a way
-  out cut to `ctr…` is not a visible way out, so `checklist.hints()` gives up the arrows,
-  then what each key does, and never `ctrl-c back out`. **Built —
+  **The footer degrades too rather than being clipped** — `checklist.hints()` gives up the
+  arrows first, because nobody needs telling that arrows move, then what each key does,
+  and keeps the keys themselves. It no longer names `ctrl-c` at any width: the way out is
+  the `discard` row, which is visible in the way §2 actually asks for. **Built —
   Phase L, box L7, decision: abbreviate `state` before `pr` is ever endangered.**
   `Cell` (`seam.py`) gained a `short` field; `table.py`'s `_fit()` switches every
   cell to its short form, if it has one, before ever shrinking the lane-name column
@@ -392,6 +418,10 @@ One term per concept. The list, and the survivor where two forms were found:
 | One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
 | What lane does to a path | the **verb** — `clone`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`); `link`, which was a verb and is not any more |
 | A path's answer, as the user sees it | **in** / **out** (of the lane) | on/off, included/excluded, yes/no, selected |
+| A path nobody has answered yet, on screen or in the store | **unanswered** (adjective: a row is *not yet answered*) | unset (used in the source for the third state, not on screen), unknown, pending, undecided, skipped (that is `out`, and the two are the whole point) |
+| Ending the checklist and recording what was decided | **apply** | accept, save, done, confirm, ok |
+| Ending the checklist and recording nothing | **discard** | cancel, abandon (used in the source for `Abandoned`, not on screen), abort, reset |
+| Leaving lane altogether with Ctrl-C | **quit** — the same word the menu's own entry uses, because it is the same door | exit, kill, interrupt (reserved for one that landed while lane was *working*) |
 | Ignored paths under one directory, shown as one row you can go into | a **folder** (of paths) | group (used in the source for the type, not on screen), bundle, batch, directory (git's word for the thing on disk, not for the row) |
 | A folder row whose paths are not all answered the same way | **mixed** (`◐`) | partial, some, indeterminate, half |
 | A path already in the lane, which a tick therefore leaves alone | **already there** | present, exists, installed |
@@ -417,6 +447,13 @@ row at all, and was drawn as its own rows instead. That was truthful and it was 
 flat screen this drill-down replaced. `◐` says it in the gutter where the answer already
 lives, so the folder keeps its row and the word stays out of the columns: on screen the
 mix is a mark, and `mixed` is what to call it in prose, a commit message or a comment.
+
+**`unanswered` in prose, `unset` in the source, and never *skipped*.** The third state is
+the one this vocabulary is easiest to get wrong in, because the wrong word is already
+taken: a `skip` step is a path the user answered **out**, and calling an unanswered path
+"skipped" collapses exactly the distinction the third state exists to draw. In prose and
+on screen a row is *not yet answered*; `unset` is the source's word for the absent key in
+`Answers`, and `UNSET` names the mark that draws it.
 
 If a new screen needs a term not in this table, add it here in the same change —
 this table is the thing to grep before reaching for a synonym.

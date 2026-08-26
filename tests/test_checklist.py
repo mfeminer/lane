@@ -11,6 +11,7 @@ cannot be toggled in place is the screen this component exists to replace.
 
 from __future__ import annotations
 
+import itertools
 import threading
 from collections.abc import Callable, Iterator
 
@@ -21,8 +22,20 @@ from prompt_toolkit.input.base import PipeInput
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import DummyOutput
 
-from lane.ui.checklist import Walk, bindings_for, check, paint
-from lane.ui.seam import BACK_LABEL, Abandoned, Cell, Column, Node, Row
+from lane.ui.checklist import (
+    CROSS,
+    MIXED,
+    PARTLY,
+    TICK,
+    UNSET,
+    Walk,
+    bindings_for,
+    check,
+    mark_for,
+    paint,
+    tail_rows,
+)
+from lane.ui.seam import BACK_LABEL, Abandoned, Answers, Cell, Column, Node, Quit, Row
 
 COLUMNS = (
     Column("path"),
@@ -99,82 +112,116 @@ def _check(
     keys: PipeInput,
     sent: str,
     *,
-    checked: tuple[str, ...] = (),
+    answers: dict[str, bool] | None = None,
     columns: int = 120,
     rows: int = 40,
     nodes: Callable[[], list[Node[str]]] = _rows,
-) -> frozenset[str]:
+) -> Answers[str]:
     keys.send_text(sent)
     return check(
         "3 paths lane has not been told about",
         COLUMNS,
         nodes,
-        checked=checked,
+        answers=answers,
         input=keys,
         output=SizedOutput(columns, rows),
     )
 
 
+_APPS = ("apps/api/.env", "apps/web/node_modules", "apps/web/.env")
+"""Every leaf under `apps/` in `_tree`, which is what one Space on that folder answers."""
+
 SPACE = " "
 ENTER = "\r"
 DOWN = "\x1b[B"
 UP = "\x1b[A"
+END = "\x1b[F"
+
+APPLY_ROW = END + UP + ENTER
+"""Finish the screen, from whatever level and wherever the cursor is standing.
+
+`End` is the last row of any level — `discard` — and one Up from it is `apply`, because
+those two end every level in that order. Written once and used everywhere so a test's
+keys say *finish* rather than counting rows to get there.
+"""
+
+DISCARD_ROW = END + ENTER
+"""Throw the screen away, from any level. `discard` is the last row there is."""
 
 
 # -- ticking ---------------------------------------------------------------------
 
 
-def test_space_ticks_the_row_under_the_cursor_and_enter_returns_it(keys: PipeInput) -> None:
+def test_space_answers_the_row_under_the_cursor_and_apply_returns_it(keys: PipeInput) -> None:
     """The whole point: the answer changes under the cursor, in place, one keystroke."""
-    assert _check(keys, SPACE + ENTER) == {"apps/web/node_modules"}
+    assert _check(keys, SPACE + APPLY_ROW) == {"apps/web/node_modules": True}
 
 
-def test_a_dozen_answers_cost_a_dozen_keystrokes_plus_one(keys: PipeInput) -> None:
-    """Three rows, three spaces, one Enter — no screen is entered and none is left."""
-    sent = SPACE + DOWN + SPACE + DOWN + SPACE + ENTER
-    assert _check(keys, sent) == {"apps/web/node_modules", "apps/web/.env", "apps/console/dist"}
+def test_a_dozen_answers_cost_a_dozen_keystrokes_and_a_walk_to_apply(keys: PipeInput) -> None:
+    """Three rows, three spaces, then down to `apply` — no screen is entered and none is
+    left. Walking to the last row is what the accept costs now that it is a row you can
+    see rather than a meaning `Enter` carried on some rows and not others."""
+    sent = SPACE + DOWN + SPACE + DOWN + SPACE + APPLY_ROW
+    assert _check(keys, sent) == {
+        "apps/web/node_modules": True,
+        "apps/web/.env": True,
+        "apps/console/dist": True,
+    }
 
 
-def test_space_twice_puts_the_row_back_out(keys: PipeInput) -> None:
-    """Two states and only two: there is no third press to get lost in."""
-    assert _check(keys, SPACE + SPACE + ENTER) == frozenset()
+def test_space_twice_puts_the_row_explicitly_out(keys: PipeInput) -> None:
+    """And *out* is now a recorded answer rather than the absence of one, which is what
+    the third state bought: the row was decided, and it was decided against."""
+    assert _check(keys, SPACE + SPACE + APPLY_ROW) == {"apps/web/node_modules": False}
 
 
 def test_the_cursor_does_not_move_when_a_row_is_ticked(keys: PipeInput) -> None:
     """A list that advances on toggle makes correcting the row you just ticked a
     two-key job, and this screen's promise is one key."""
-    assert _check(keys, SPACE + SPACE + SPACE + ENTER) == {"apps/web/node_modules"}
+    assert _check(keys, SPACE * 3 + APPLY_ROW) == {"apps/web/node_modules": True}
 
 
-def test_enter_accepts_an_untouched_screen_as_nothing_in(keys: PipeInput) -> None:
-    """Every row starts out, so one Enter is always the safe answer."""
-    assert _check(keys, ENTER) == frozenset()
+def test_applying_an_untouched_screen_answers_nothing_at_all(keys: PipeInput) -> None:
+    """Every row starts *unanswered*, so applying at once is always the safe answer — and
+    it files no decision, rather than filing "out" for every row nobody looked at."""
+    assert _check(keys, APPLY_ROW) == {}
 
 
-def test_rows_already_answered_arrive_ticked(keys: PipeInput) -> None:
+def test_rows_already_answered_arrive_as_they_stand(keys: PipeInput) -> None:
     """Settings opens the same screen over answers given months ago, and it has to
-    show them as they stand rather than as though nothing had been decided."""
-    assert _check(keys, ENTER, checked=("apps/web/.env",)) == {"apps/web/.env"}
+    show them as they stand rather than as though nothing had been decided — including
+    the ones answered *out*, which a set could not carry."""
+    stored = {"apps/web/.env": True, "apps/console/dist": False}
+    assert _check(keys, APPLY_ROW, answers=stored) == stored
 
 
 def test_an_answered_row_can_be_taken_back_out(keys: PipeInput) -> None:
-    sent = DOWN + SPACE + ENTER
-    assert _check(keys, sent, checked=("apps/web/.env",)) == frozenset()
+    sent = DOWN + SPACE + APPLY_ROW
+    assert _check(keys, sent, answers={"apps/web/.env": True}) == {"apps/web/.env": False}
 
 
-def test_ctrl_c_backs_out_and_answers_nothing(keys: PipeInput) -> None:
-    with pytest.raises(Abandoned):
+def test_ctrl_c_quits_lane_rather_than_backing_out(keys: PipeInput) -> None:
+    """Ctrl-C is not this screen's way back — `discard` is, and `← Back` is the way up a
+    level. What is left for Ctrl-C is the thing every terminal user already assumes it
+    does, so it raises `Quit` rather than the `Abandoned` a visible row raises."""
+    with pytest.raises(Quit):
         _check(keys, SPACE + "\x03")
 
 
 def test_the_arrows_wrap(keys: PipeInput) -> None:
-    """The picker wraps and so does the table; with no back row, this wraps over rows."""
-    assert _check(keys, "\x1b[A" + SPACE + ENTER) == {"apps/console/dist"}
+    """The picker wraps and so does the table — over every row of the level, the
+    trailing ones included. So one Up from the top is the last of those."""
+    up_from_the_top = _lines(cursor=len(_rows()))
+
+    assert up_from_the_top[-1].strip().startswith("↑↓ move")
+    assert any(line.startswith("❯") and line.strip().endswith("apply") for line in up_from_the_top)
 
 
 def test_end_reaches_the_last_row_and_home_comes_back(keys: PipeInput) -> None:
-    sent = "\x1b[F" + SPACE + "\x1b[H" + SPACE + ENTER
-    assert _check(keys, sent) == {"apps/console/dist", "apps/web/node_modules"}
+    """`End` is the last row of the level — `discard`, with `apply` above it and the last
+    path above that; `Home` is the first row, which is always a path."""
+    sent = END + UP + UP + SPACE + "\x1b[H" + SPACE + APPLY_ROW
+    assert _check(keys, sent) == {"apps/console/dist": True, "apps/web/node_modules": True}
 
 
 # -- the tree: one level per screen ----------------------------------------------
@@ -187,8 +234,8 @@ def test_a_folder_is_opened_with_enter_and_shows_what_is_under_it(keys: PipeInpu
     Driven by what the keys *did*: inside `apps/` a Space answers one path rather than
     the folder's three, which no cursor position on the level above could produce.
     """
-    sent = DOWN + ENTER + SPACE + ENTER + DOWN + ENTER
-    assert _check(keys, sent, nodes=_tree) == {"apps/api/.env"}
+    sent = DOWN + ENTER + SPACE + APPLY_ROW
+    assert _check(keys, sent, nodes=_tree) == {"apps/api/.env": True}
 
 
 def test_the_level_below_a_folder_holds_its_children_and_is_titled_by_it() -> None:
@@ -220,7 +267,7 @@ def test_the_root_has_no_way_back_row_and_a_level_inside_one_does() -> None:
     assert opened.nested
 
     assert not any("←" in line for line in _painted())
-    inside = _painted(back=BACK_LABEL)
+    inside = _painted(nested=True)
     assert any(line.strip() == BACK_LABEL for line in inside)
 
 
@@ -231,8 +278,8 @@ def test_the_way_back_row_goes_up_a_level_rather_than_out_of_the_screen(
     way out, which is `ctrl-c` and says so in the footer."""
     # Into `apps/`, down onto the `← Back` row (past both of its rows), Enter, then
     # answer the root's first leaf and accept.
-    sent = DOWN + ENTER + DOWN + DOWN + ENTER + UP + SPACE + ENTER
-    assert _check(keys, sent, nodes=_tree) == {"node_modules"}
+    sent = DOWN + ENTER + DOWN + DOWN + ENTER + UP + SPACE + APPLY_ROW
+    assert _check(keys, sent, nodes=_tree) == {"node_modules": True}
 
 
 def test_going_up_returns_to_the_parent_with_its_rows_exactly_as_left(
@@ -242,111 +289,96 @@ def test_going_up_returns_to_the_parent_with_its_rows_exactly_as_left(
     still answered — the cursor included, as `browse` already does for the lanes table."""
     # Down to `apps/`, open it, tick its first child, back out with the `← Back` row
     # (down twice from the first child), then Space — which must land on `apps/` again.
-    sent = DOWN + ENTER + SPACE + DOWN + DOWN + ENTER + SPACE + DOWN + ENTER
+    sent = DOWN + ENTER + SPACE + DOWN + DOWN + ENTER + SPACE + APPLY_ROW
     assert _check(keys, sent, nodes=_tree) == {
-        "apps/api/.env",
-        "apps/web/node_modules",
-        "apps/web/.env",
+        "apps/api/.env": True,
+        "apps/web/node_modules": True,
+        "apps/web/.env": True,
     }, (
         "the cursor came back onto `apps/`, whose one path answered inside it was still "
         "answered — so Space there found a mix and brought the whole folder in"
     )
 
 
-def test_enter_on_a_leaf_inside_a_folder_leaves_the_level_rather_than_the_screen(
-    keys: PipeInput,
-) -> None:
-    """`Enter` accepts the level you are standing in. Inside a folder that is the folder,
-    so a stray press cannot end preparation from three levels down."""
-    sent = DOWN + ENTER + ENTER + UP + SPACE + ENTER
-    assert _check(keys, sent, nodes=_tree) == {"node_modules"}, (
-        "the second Enter came back up rather than ending the screen — the keys after "
-        "it were still read, and the leaf they answered is what came back"
-    )
+def test_enter_on_a_leaf_does_nothing_at_all(keys: PipeInput) -> None:
+    """A leaf is the one row `Enter` has nothing to do to: its answer is `Space`'s job
+    and there is nothing to open.
+
+    What it did instead was decided by how deep the screen happened to be — accept at the
+    root, go up anywhere else — which is how a press on a **file** ended up leaving the
+    level it was pressed in. Both are gone: the keys after it are simply still read.
+    """
+    assert _check(keys, ENTER + SPACE + APPLY_ROW) == {"apps/web/node_modules": True}
+
+    with create_pipe_input() as deeper:
+        two_deep = DOWN + ENTER + DOWN + ENTER
+        assert _check(deeper, two_deep + ENTER + SPACE + APPLY_ROW, nodes=_tree) == {
+            "apps/web/node_modules": True
+        }, "the cursor never left `apps/web/`, so the Space answered the leaf standing there"
 
 
 def test_space_on_a_folder_answers_every_path_beneath_it(keys: PipeInput) -> None:
     """The point of a folder row: nobody wants to descend into fourteen packages one at
     a time. One keystroke, every leaf under it, however deep."""
-    sent = DOWN + SPACE + DOWN + ENTER
+    sent = DOWN + SPACE + APPLY_ROW
     assert _check(keys, sent, nodes=_tree) == {
-        "apps/api/.env",
-        "apps/web/node_modules",
-        "apps/web/.env",
+        "apps/api/.env": True,
+        "apps/web/node_modules": True,
+        "apps/web/.env": True,
     }
 
 
 def test_space_on_a_folder_that_is_all_in_takes_all_of_it_out(keys: PipeInput) -> None:
-    sent = DOWN + SPACE + DOWN + ENTER
-    everything = ("apps/api/.env", "apps/web/node_modules", "apps/web/.env")
-    assert _check(keys, sent, checked=everything, nodes=_tree) == frozenset()
+    sent = DOWN + SPACE + APPLY_ROW
+    everything = dict.fromkeys(_APPS, True)
+    assert _check(keys, sent, answers=everything, nodes=_tree) == dict.fromkeys(_APPS, False)
 
 
 def test_space_on_a_mixed_folder_brings_the_whole_subtree_in(keys: PipeInput) -> None:
     """Three states, one key: the answer someone reaching for a directory row wants is
     *in*, so a mix goes in first and only then out. The mix it replaced is gone — which
     is why the panel says how many it is about to move."""
-    sent = DOWN + SPACE + DOWN + ENTER
-    assert _check(keys, sent, checked=("apps/web/.env",), nodes=_tree) == {
-        "apps/api/.env",
-        "apps/web/node_modules",
-        "apps/web/.env",
-    }
+    sent = DOWN + SPACE + APPLY_ROW
+    mixed = {"apps/web/.env": True}
+    assert _check(keys, sent, answers=mixed, nodes=_tree) == dict.fromkeys(_APPS, True)
 
     with create_pipe_input() as second:
-        again = _check(
-            second, DOWN + SPACE + SPACE + DOWN + ENTER, checked=("apps/web/.env",), nodes=_tree
-        )
-    assert again == frozenset(), "and the press after that takes the whole subtree out"
+        again = _check(second, DOWN + SPACE + SPACE + APPLY_ROW, answers=mixed, nodes=_tree)
+    assert again == dict.fromkeys(_APPS, False), (
+        "and the press after that takes the whole subtree out"
+    )
 
 
-def test_a_folder_draws_the_mixed_mark_when_its_paths_disagree() -> None:
-    """`◐` is a new symbol because a folder has three answers where a path has two, and
-    a mix forced into `✓` or a blank would be a row that lies (docs/CONVENTIONS.md §5)."""
-    lines = _painted(checked=frozenset({"apps/web/.env"}))
-    folder = next(line for line in lines if "apps/ · 3 ignored paths" in line)
-
-    assert "◐" in folder
-    assert "✓" not in folder
-
-
-def test_a_folder_all_in_ticks_and_a_folder_all_out_is_blank() -> None:
-    everything = frozenset({"apps/api/.env", "apps/web/node_modules", "apps/web/.env"})
-    ticked = next(line for line in _painted(checked=everything) if "apps/ · 3" in line)
-    blank = next(line for line in _painted() if "apps/ · 3" in line)
-
-    assert "✓" in ticked and "◐" not in ticked
-    assert "✓" not in blank and "◐" not in blank
-
-
-def test_a_leaf_is_never_mixed() -> None:
-    """Two answers at a leaf, three at a folder: `◐` cannot appear on a path."""
-    lines = _painted(checked=frozenset({"node_modules"}))
+def test_a_leaf_is_never_mixed_or_partly_answered() -> None:
+    """A leaf stands for one value, so only the first three of the five can apply to it:
+    `◐` and `?` are folder marks and cannot appear on a path."""
+    lines = _painted(answers={"node_modules": True})
     leaf = next(
         line for line in lines if line.strip().endswith("1.2 GB") and "node_modules" in line
     )
 
     assert "✓" in leaf
-    assert "◐" not in "".join(line for line in lines if "apps/" not in line)
+    marks = [line[:4] for line in lines if line.strip().endswith("GB") or line.endswith("KB")]
+    assert not any("◐" in mark or "?" in mark for mark in marks if "apps/ ·" not in mark)
 
 
 def test_the_count_is_over_every_leaf_rather_than_the_rows_on_screen() -> None:
     """A folder row is one row standing for five paths; a count of rows would mean
     something different on every screen of the same tree."""
-    lines = _painted(checked=frozenset({"apps/web/.env"}), total=5)
+    lines = _painted(answers={"apps/web/.env": True}, total=5)
 
     assert any("1 of 5 in" in line for line in lines)
 
 
 def test_the_footer_says_what_enter_will_do_to_the_row_under_the_cursor() -> None:
-    """`Enter` opens a folder and accepts anywhere else, so the footer names the one
-    that applies — a screen says what its keys do (docs/CONVENTIONS.md §3)."""
+    """`Enter` does a different thing to each kind of row and nothing at all to a leaf,
+    so the footer names whichever applies — a screen says what its keys do (§3)."""
     on_a_leaf = _painted(cursor=0)[-1]
     on_a_folder = _painted(cursor=1)[-1]
 
-    assert "enter accept" in on_a_leaf
+    assert "enter" not in on_a_leaf, "a footer that names a key doing nothing teaches a lie"
+    assert "space" in on_a_leaf, "and the key that *does* answer a leaf is still named"
     assert "enter open" in on_a_folder
-    assert "ctrl-c back out" in on_a_leaf and "ctrl-c back out" in on_a_folder
 
 
 # -- what the screen says about itself -------------------------------------------
@@ -354,7 +386,7 @@ def test_the_footer_says_what_enter_will_do_to_the_row_under_the_cursor() -> Non
 
 def _lines(
     *,
-    checked: frozenset[str] = frozenset(),
+    answers: dict[str, bool] | None = None,
     cursor: int = 0,
     width: int = 120,
     height: int = 40,
@@ -364,7 +396,7 @@ def _lines(
         "3 paths lane has not been told about",
         COLUMNS,
         _rows(),
-        checked=checked,
+        answers=answers or {},
         cursor=cursor,
         top=0,
         width=width,
@@ -375,39 +407,43 @@ def _lines(
 
 def _painted(
     *,
-    checked: frozenset[str] = frozenset(),
+    answers: dict[str, bool] | None = None,
     cursor: int = 0,
     total: int | None = None,
-    back: str = "",
+    nested: bool = False,
 ) -> list[str]:
     return paint(
         "5 paths lane has not been told about",
         COLUMNS,
         _tree(),
-        checked=checked,
+        answers=answers or {},
         cursor=cursor,
         top=0,
         width=120,
         height=40,
         total=total,
-        back=back,
+        nested=nested,
     ).lines
 
 
-def test_a_ticked_row_draws_the_tick_and_an_unticked_one_draws_nothing() -> None:
-    """`✓` is already in the symbol set; it gains a meaning rather than a glyph."""
-    lines = _lines(checked=frozenset({"apps/web/.env"}))
-    ticked = next(line for line in lines if "apps/web/.env" in line)
-    untouched = next(line for line in lines if "apps/console/dist" in line)
+def test_a_row_that_is_in_ticks_one_that_is_out_crosses_and_an_untouched_one_rings() -> None:
+    """Three marks for three answers. `✓` and `✗` are already in the symbol set and gain
+    a meaning rather than a glyph; `○` is the one *unanswered* needed, because the state
+    it replaced was the absence of a mark and so could not be told from either."""
+    lines = _lines(answers={"apps/web/.env": True, "apps/console/dist": False})
+    inside = next(line for line in lines if "apps/web/.env" in line)
+    outside = next(line for line in lines if "apps/console/dist" in line)
+    untouched = next(line for line in lines if "apps/web/node_modules" in line)
 
-    assert "✓" in ticked
-    assert "✓" not in untouched
+    assert "✓" in inside
+    assert "✗" in outside and "✓" not in outside
+    assert "○" in untouched and "✓" not in untouched and "✗" not in untouched
 
 
 def test_the_screen_keeps_a_running_count_of_what_is_in() -> None:
     """Forty rows do not fit on a screen, so the one number that says what you have
     decided has to be somewhere you are already looking."""
-    assert any("1 of 3 in" in line for line in _lines(checked=frozenset({"apps/web/.env"})))
+    assert any("1 of 3 in" in line for line in _lines(answers={"apps/web/.env": True}))
 
 
 def test_the_count_says_nothing_is_in_rather_than_zero() -> None:
@@ -416,7 +452,7 @@ def test_the_count_says_nothing_is_in_rather_than_zero() -> None:
 
 def test_the_caller_can_add_what_the_widget_cannot_know() -> None:
     """How many is the widget's; how much is the action's — it owns the sizes."""
-    lines = _lines(checked=frozenset({"apps/web/.env"}), summary="1.4 KB coming in")
+    lines = _lines(answers={"apps/web/.env": True}, summary="1.4 KB coming in")
     line = next(line for line in lines if "of 3 in" in line)
 
     assert line.strip() == "1 of 3 in · 1.4 KB coming in"
@@ -427,10 +463,12 @@ def test_the_footer_names_space_because_space_is_the_key_this_screen_adds() -> N
     rather than in a row — a checklist has nothing to choose between."""
     footer = _lines()[-1]
 
-    assert "space toggle" in footer
-    assert "enter accept" in footer
-    assert "ctrl-c back out" in footer
-    assert "←" not in "\n".join(_lines()), "no Back row: the footer is the visible exit"
+    assert "space" in footer
+    assert "ctrl-c" not in "\n".join(_lines()), (
+        "the way out is the `discard` row now, and Ctrl-C is the one thing about a "
+        "terminal program nobody has to be taught"
+    )
+    assert "←" not in "\n".join(_lines()), "the root has nowhere to go back to"
 
 
 # -- layout under pressure -------------------------------------------------------
@@ -440,19 +478,16 @@ def test_more_rows_than_room_scroll_and_the_footer_says_where_you_are() -> None:
     """Forty loose files in one folder is a real screen, and the widget it replaced
     could not scroll — which is why this is not `CheckboxList`."""
     rows = [_leaf(f"logs/app{n}.log", "2 KB") for n in range(40)]
-    painted = paint(
-        "40 paths", COLUMNS, rows, checked=frozenset(), cursor=0, top=0, width=120, height=20
-    )
+    painted = paint("40 paths", COLUMNS, rows, answers={}, cursor=0, top=0, width=120, height=20)
+    shown = len(rows) + len(tail_rows(nested=False))
 
-    assert painted.room < 40
-    assert f"1–{painted.room} of 40" in painted.lines[-1]
+    assert painted.room < shown
+    assert f"1–{painted.room} of {shown}" in painted.lines[-1]
 
 
 def test_the_cursor_stays_on_screen_when_it_walks_past_the_window() -> None:
     rows = [_leaf(f"path-{n}", "2 KB") for n in range(40)]
-    painted = paint(
-        "40 paths", COLUMNS, rows, checked=frozenset(), cursor=39, top=0, width=120, height=20
-    )
+    painted = paint("40 paths", COLUMNS, rows, answers={}, cursor=39, top=0, width=120, height=20)
 
     assert any("path-39" in line for line in painted.lines)
     assert painted.top > 0
@@ -467,7 +502,7 @@ def test_the_tick_survives_a_forty_column_terminal() -> None:
         "1 path",
         COLUMNS,
         rows,
-        checked=frozenset({path}),
+        answers={path: True},
         cursor=0,
         top=0,
         width=40,
@@ -489,7 +524,7 @@ def _ignore(result: object) -> None:
 def test_the_widget_binds_the_pickers_keys_plus_space_and_nothing_else() -> None:
     """Asserted on the binding table rather than by driving keys, because a bound
     handler that happens to do nothing still swallows the keystroke."""
-    bindings = bindings_for(Walk(_rows), set(), _ignore)
+    bindings = bindings_for(Walk(_rows), {}, _ignore)
     bound = {key for binding in bindings.bindings for key in binding.keys}
 
     assert bound == {
@@ -529,7 +564,7 @@ def test_a_slow_column_lands_behind_the_screen_you_are_already_reading(keys: Pip
         sizes["apps/web/node_modules"] = "1.2 GB"
         notify()
         landed.wait(30)
-        keys.send_text(ENTER)
+        keys.send_text(APPLY_ROW)
 
     check(
         "1 path",
@@ -545,11 +580,12 @@ def test_a_slow_column_lands_behind_the_screen_you_are_already_reading(keys: Pip
     assert any("1.2 GB" in line for line in painted), "and the size arrived behind them"
 
 
-def test_ctrl_c_from_inside_a_folder_backs_out_of_the_whole_screen(keys: PipeInput) -> None:
-    """`← Back` goes up a level; `ctrl-c` is the way *out*, from any depth, exactly as it
-    is at every other prompt in lane."""
-    with pytest.raises(Abandoned):
-        _check(keys, DOWN + ENTER + SPACE + "\x03", nodes=_tree)
+def test_ctrl_c_quits_from_any_depth_rather_than_going_up_one_level(keys: PipeInput) -> None:
+    """The report said Ctrl-C went up a folder. It never did in this code — it abandoned
+    the whole screen from any depth — but it is worth a test at depth either way, because
+    "up one level" is a plausible thing for a nested screen to have grown."""
+    with pytest.raises(Quit):
+        _check(keys, DOWN + ENTER + DOWN + ENTER + SPACE + "\x03", nodes=_tree)
 
 
 def test_the_prefix_a_level_shares_gives_way_before_the_path_does() -> None:
@@ -564,12 +600,12 @@ def test_the_prefix_a_level_shares_gives_way_before_the_path_does() -> None:
         f"{shared} · 2 ignored paths",
         COLUMNS,
         rows,
-        checked=frozenset({"node_modules"}),
+        answers={"node_modules": True},
         cursor=0,
         top=0,
         width=30,
         height=20,
-        back=BACK_LABEL,
+        nested=True,
     ).lines
     row = next(line for line in lines if "node_modules" in line and "·" not in line)
 
@@ -578,16 +614,266 @@ def test_the_prefix_a_level_shares_gives_way_before_the_path_does() -> None:
     assert "✓" in row
 
 
-def test_the_way_out_stays_readable_on_a_narrow_terminal() -> None:
-    """§2's rule is that the one way out is *visible*. A hint clipped to `ctr…` is not,
-    so the footer gives up its least surprising part — the arrows — before it gives up
-    naming Ctrl-C."""
-    footer = _lines(width=46)[-1]
+def test_the_footer_gives_up_the_arrows_before_the_keys_on_a_narrow_terminal() -> None:
+    """It sheds what can be spared, in order: the arrows first, because nobody needs
+    telling that arrows move; then what each key does. The keys themselves survive."""
+    narrow = _lines(width=20)[-1]
 
-    assert "ctrl-c back out" in footer
-    assert "space" in footer
-    assert len(footer) <= 46
+    assert "space" in narrow
+    assert "↑↓" not in narrow
+    assert len(narrow) <= 20
 
 
 def test_the_footer_keeps_the_arrows_when_there_is_room() -> None:
     assert "↑↓ move" in _lines(width=120)[-1]
+
+
+def _two_folders() -> list[Node[str]]:
+    """Two sibling folders at the root, so leaving one and going into the other is a walk
+    a test can actually take."""
+    return [
+        _folder("apps/ · 2 ignored paths", "1 GB", [_leaf("apps/one"), _leaf("apps/two")]),
+        _folder("libs/ · 2 ignored paths", "2 GB", [_leaf("libs/one"), _leaf("libs/two")]),
+    ]
+
+
+def test_enter_opens_a_folder_at_the_root_and_inside_another_open_one(keys: PipeInput) -> None:
+    """The one thing `Enter` on a row has always meant in lane — act on the row under the
+    cursor — and depth changes nothing about it."""
+    walk: Walk[str] = Walk(_tree)
+    walk.index = 1
+
+    assert walk.enter(), "at the root"
+    walk.index = 1
+    assert walk.enter(), "and inside the folder that opened"
+    nodes, title = walk.level()
+
+    assert [node.row.value for node in nodes] == ["apps/web/node_modules", "apps/web/.env"]
+    assert title == "apps/web/ · 2 ignored paths"
+
+    # And through the keys, at the deeper of the two: a Space there answers one leaf,
+    # which no cursor position on either level above could produce.
+    assert _check(keys, DOWN + ENTER + DOWN + ENTER + SPACE + APPLY_ROW, nodes=_tree) == {
+        "apps/web/node_modules": True
+    }
+
+
+def test_the_way_back_row_keeps_every_answer_made_inside_the_level_it_leaves(
+    keys: PipeInput,
+) -> None:
+    """`← Back` moves the cursor. It is not a second `discard`, and nothing about a row
+    labelled *back* should have to be read as *and throw away what you just decided*."""
+    # Into `apps/`, answer its first leaf, down onto `← Back`, up and out — then apply
+    # from the root without touching anything else.
+    sent = DOWN + ENTER + SPACE + DOWN + DOWN + ENTER + APPLY_ROW
+
+    assert _check(keys, sent, nodes=_tree) == {"apps/api/.env": True}
+
+
+def test_an_answer_two_levels_down_survives_walking_back_out_and_into_another_folder(
+    keys: PipeInput,
+) -> None:
+    """The answers are one set for the whole visit, and the walk does not touch it. Held
+    down by a test rather than by the shape of the code, because it is the sort of
+    guarantee a later refactor of the descent could quietly drop."""
+    into, back_out = ENTER, DOWN + DOWN + ENTER
+
+    # Into `apps/`, answer its first leaf, back out; into `libs/`, answer its first, back
+    # out; then apply from the root.
+    sent = into + SPACE + back_out + DOWN + into + SPACE + back_out + APPLY_ROW
+
+    assert _check(keys, sent, nodes=_two_folders) == {"apps/one": True, "libs/one": True}
+
+
+def test_apply_from_a_nested_level_commits_every_answer_made_at_any_depth(
+    keys: PipeInput,
+) -> None:
+    """`apply` ends the **screen**, not the level it was pressed on — the one place the
+    old accept genuinely was per-level, and the source of the "a stray Enter cannot end
+    preparation from three levels down" reasoning that no longer has anything to guard."""
+    # Answer a root leaf, then walk two levels down, answer one there, and apply without
+    # ever coming back up.
+    sent = SPACE + DOWN + ENTER + DOWN + ENTER + SPACE + APPLY_ROW
+
+    assert _check(keys, sent, nodes=_tree) == {
+        "node_modules": True,
+        "apps/web/node_modules": True,
+    }
+
+
+# -- apply and discard, on every level -------------------------------------------
+
+
+def test_apply_is_a_row_at_the_root_and_enter_on_it_accepts(keys: PipeInput) -> None:
+    """A screen with no reachable "I am done" is a screen you cannot leave forwards, and
+    that is what the root had: `Enter` accepted only from a **root-level leaf**, and a
+    repository whose ignored paths are all grouped under folders has none of those.
+
+    So accepting is a row, like `← Back` is — reachable by moving the cursor onto it,
+    which needs no knowledge of what `Enter` happens to mean where you are standing.
+    """
+    assert any(line.strip() == "apply" for line in _lines())
+
+    # Three leaves, so three presses of Down land on `apply` — which answers nothing,
+    # so the Space is a no-op and applying returns what was decided before it: nothing.
+    assert _check(keys, DOWN * 3 + SPACE + ENTER) == {}
+
+
+def test_discard_is_a_row_at_the_root_and_enter_on_it_abandons(keys: PipeInput) -> None:
+    """The way out is a row too, for the same reason the way back always has been: a
+    screen whose only exit is a keystroke is one you have to be taught to leave.
+
+    It abandons, exactly as it always did — the widget answers `None`, which `check`
+    turns into `Abandoned`, so nothing an action was going to write gets written.
+    """
+    assert any(line.strip() == "discard" for line in _lines())
+
+    with pytest.raises(Abandoned):
+        _check(keys, SPACE + DISCARD_ROW)
+
+
+def test_the_two_rows_say_what_they_will_do_while_the_cursor_is_on_them() -> None:
+    """`apply` and `discard` are one verb each, and a verb does not say how much it
+    covers. The panel the tree's rows already use is where that goes — and `discard` is
+    the row that has to have it, being the only one on screen that throws work away."""
+    on_apply = "\n".join(_lines(cursor=len(_rows())))
+    on_discard = "\n".join(_lines(cursor=len(_rows()) + 1))
+
+    assert "asked again" in on_apply
+    assert "thrown away" in on_discard
+
+
+def test_apply_and_discard_are_on_every_level_and_come_after_the_way_back(
+    keys: PipeInput,
+) -> None:
+    """ "Always", not "after you have walked back up to the top".
+
+    Reachable only from the root is what the accept used to be, and it made a nested
+    level a place you could get into and not finish from — you had to remember the way
+    out was `← Back`, repeatedly, before the screen would let you say you were done.
+    """
+    inside = _painted(nested=True)
+    trailing = [line.strip() for line in inside if line.strip() in {BACK_LABEL, "apply", "discard"}]
+
+    assert trailing == [BACK_LABEL, "apply", "discard"], "the way back belongs with the tree"
+
+    # Two levels down — root, into `apps/`, into `apps/web/` — and finish from there.
+    two_deep = DOWN + ENTER + DOWN + ENTER
+    assert _check(keys, two_deep + SPACE + APPLY_ROW, nodes=_tree) == {
+        "apps/web/node_modules": True
+    }
+
+
+def test_discard_two_levels_down_abandons_the_whole_screen(keys: PipeInput) -> None:
+    with pytest.raises(Abandoned):
+        _check(keys, DOWN + ENTER + DOWN + ENTER + SPACE + DISCARD_ROW, nodes=_tree)
+
+
+# -- five states per folder ------------------------------------------------------
+
+
+def _pkg(*names: str) -> Node[str]:
+    """A folder of loose leaves — the shape every state below is measured on."""
+    return _folder(f"pkg/ · {len(names)} ignored paths", "1 GB", [_leaf(name) for name in names])
+
+
+ALL, SOME = ("a", "b", "c"), ("a", "b")
+
+
+@pytest.mark.parametrize(
+    ("answers", "mark", "state"),
+    [
+        ({}, UNSET, "nothing beneath it answered"),
+        (dict.fromkeys(ALL, True), TICK, "every leaf in"),
+        (dict.fromkeys(ALL, False), CROSS, "every leaf explicitly out"),
+        ({"a": True, "b": False, "c": True}, MIXED, "all decided, and they disagree"),
+        ({"a": True, "b": False}, PARTLY, "a mix, and one leaf still unanswered"),
+        (dict.fromkeys(SOME, True), PARTLY, "all in but one, which is unanswered"),
+        (dict.fromkeys(SOME, False), PARTLY, "all out but one, which is unanswered"),
+        ({"a": True}, PARTLY, "one answered, two still unanswered"),
+    ],
+)
+def test_a_folder_draws_which_of_the_five_states_it_is_in(
+    answers: dict[str, bool], mark: str, state: str
+) -> None:
+    """Five, not two: a folder stands for paths that are not on screen, so every state
+    those paths can be collectively in needs a mark that does not lie about them.
+
+    `?` and `◐` are the pair worth being careful about — *there is still a question under
+    here* and *this is decided, and mixed* are different facts, and only one of them is
+    something the user still has to come back to.
+    """
+    assert mark_for(_pkg(*ALL), answers) == mark, state
+
+
+def test_the_five_states_are_exhaustive_and_mutually_exclusive() -> None:
+    """Every way three leaves can be answered lands in exactly one of the five, and in
+    the one the partition names. Asserted over the whole space rather than over the two
+    cases that used to exist, because "exhaustive" is not a claim a sample can make."""
+    folder = _pkg(*ALL)
+
+    for combination in itertools.product((True, False, None), repeat=len(ALL)):
+        answers = {
+            name: value for name, value in zip(ALL, combination, strict=True) if value is not None
+        }
+        inside, outside, unset = (combination.count(one) for one in (True, False, None))
+        mark = mark_for(folder, answers)
+        held = {
+            UNSET: unset == len(ALL),
+            PARTLY: 0 < unset < len(ALL),
+            TICK: unset == 0 and inside == len(ALL),
+            CROSS: unset == 0 and outside == len(ALL),
+            MIXED: unset == 0 and 0 < inside < len(ALL),
+        }
+
+        assert sum(held.values()) == 1, f"{combination} is in more than one state at once"
+        assert held[mark], f"{combination} drew {mark!r}, which its counts do not describe"
+
+
+def test_no_two_of_the_five_marks_are_told_apart_by_colour_alone() -> None:
+    """§6: colour never carries meaning alone — and three of the five are drawn `warn`,
+    so the glyphs are the whole of what distinguishes them."""
+    marks = [TICK, CROSS, UNSET, PARTLY, MIXED]
+
+    assert len(set(marks)) == len(marks)
+    assert len({mark.strip() for mark in marks}) == len(marks)
+
+
+def test_a_folders_state_is_drawn_on_its_row() -> None:
+    """The partition is only worth having if it reaches the screen: `apps/` holds three
+    leaves, one of them answered, so it is the folder with a question still in it."""
+    partly = next(line for line in _painted(answers={"apps/web/.env": True}) if "apps/ · 3" in line)
+    decided = next(
+        line
+        for line in _painted(answers=dict.fromkeys(_APPS, True) | {"apps/web/.env": False})
+        if "apps/ · 3" in line
+    )
+    untouched = next(line for line in _painted() if "apps/ · 3" in line)
+
+    assert "?" in partly and "◐" not in partly
+    assert "◐" in decided and "?" not in decided
+    assert "○" in untouched
+
+
+# -- three answers per leaf ------------------------------------------------------
+
+
+def test_a_leaf_starts_unset_and_an_untouched_screen_answers_nothing(keys: PipeInput) -> None:
+    """*Never touched this visit* is an answer the old two-state set could not hold: it
+    collapsed into *out*, so accepting a screen wrote a `skip` for every row nobody had
+    looked at. An untouched screen now answers nothing at all."""
+    assert _check(keys, APPLY_ROW) == {}
+
+
+def test_space_takes_a_leaf_in_then_out_and_never_back_to_unset(keys: PipeInput) -> None:
+    """Unset is where a row *starts*, not somewhere `Space` can put it back: the first
+    press answers the question, and every press after it changes the answer."""
+    path = "apps/web/node_modules"
+
+    assert _check(keys, SPACE + APPLY_ROW) == {path: True}
+    with create_pipe_input() as second:
+        assert _check(second, SPACE * 2 + APPLY_ROW) == {path: False}
+    with create_pipe_input() as third:
+        assert _check(third, SPACE * 3 + APPLY_ROW) == {path: True}
+    with create_pipe_input() as fourth:
+        assert _check(fourth, SPACE * 4 + APPLY_ROW) == {path: False}

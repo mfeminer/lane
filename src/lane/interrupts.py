@@ -1,20 +1,22 @@
 """Deferring Ctrl-C across a step that must not be left half-done.
 
-Everywhere else in lane, Ctrl-C stops what is happening: inside a prompt it is
-bound and backs out, and during a spinner it becomes `Abandoned`. Both are clean
+Everywhere else in lane, Ctrl-C leaves at once: at a prompt the widgets raise `Quit`,
+and during a spinner `ConsoleUi.progress` turns it into the same thing. Both are clean
 because every question comes before the first irreversible step, so there is
 nothing in flight to leave behind.
 
-Removing a worktree is the exception. It is the one step where stopping half-way is
-worse than either finishing or never starting — a partly deleted working copy is a
-state nothing in lane knows how to describe, let alone repair. So for the duration
-of that step the interrupt is *deferred*: recorded, acknowledged, and raised once
-the step is done, at which point stopping costs nothing.
+Removing a worktree is the exception, and it is an exception about **when**, not about
+whether. It is the one step where stopping half-way is worse than either finishing or
+never starting — a partly deleted working copy is a state nothing in lane knows how to
+describe, let alone repair. So for the duration of that step the interrupt is *deferred*:
+recorded, acknowledged, and raised once the step is done, at which point stopping costs
+nothing.
 
 Deferred is not discarded. The user asked to stop and still means it, so leaving the
-block raises `KeyboardInterrupt` and the session reports it. And a second Ctrl-C is
-never deferred: it means "now", and it is the only way out of a step that turns out
-to take far longer than the first one implied.
+block raises `KeyboardInterrupt`, the session says what may be half-done, and lane
+exits — it does not report it and carry on to the menu. And a second Ctrl-C is never
+deferred: it means "now", and it is the only way out of a step that turns out to take
+far longer than the first one implied.
 
 This pairs with `start_new_session` in the git backend. Without that, the terminal
 delivers SIGINT to every process in the foreground group, so git would be killed

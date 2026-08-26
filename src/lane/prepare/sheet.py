@@ -12,25 +12,33 @@ two things:
 
 Neither is a difference in behaviour, and neither is allowed to become one.
 
-**A leaf is in or out.** Ticked means the path comes into the lane, unticked means it
-stays out; both are remembered, and every row starts wherever the stored answer left it.
+**A leaf is in, out, or not yet answered.** `✓` means the path comes into the lane, `✗`
+means it stays out, and both are remembered — every row starts wherever the stored answer
+left it, or at `○` where there is no stored answer at all.
 
-**A folder row is not a leaf, and it has three answers rather than two** — everything
-under it in, everything out, or a mix (`◐`). It is also a screen you can go into, one
-level of the tree per screen, because two hundred ignored paths drawn flat is not a
-screen (see `prepare.tree`). What it is *not*, at any depth, is a step for its own
-directory: it stands for the leaves beneath it and stores one step each.
+That third state is what `steps()` turns into the property this module exists for: **a
+path nobody answered gets no step written**, so `prepare.unanswered` offers it again next
+time, exactly as it would a path nobody has ever seen. With two states there was no way
+to say it — accepting a screen filed a `skip` for every row the user had not got to, and
+in settings that stored `skip` then drew identically to a path never asked about.
+
+**A folder row is not a leaf, and it has five states rather than a leaf's three** —
+everything in, everything out, a question still open under it (`?`), or fully answered and
+disagreeing (`◐`). It is also a screen you can go into, one level of the tree per screen,
+because two hundred ignored paths drawn flat is not a screen (see `prepare.tree`). What it
+is *not*, at any depth, is a step for its own directory: it stands for the leaves beneath
+it and stores one step each.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Container, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lane.prepare import Candidate, Group, Item, Step, Verb, apply, tree
-from lane.ui.seam import Cell, Column, Node, Row
+from lane.ui.seam import Answers, Cell, Column, Node, Row
 
 MEASURING = Cell("measuring…", tone="dim")
 ALREADY_THERE = "already there"
@@ -64,7 +72,7 @@ class Sheet:
         candidates: Sequence[Candidate],
         *,
         source: Callable[[Candidate], Path],
-        inside: Container[tuple[str, str]] = frozenset(),
+        stored: Mapping[tuple[str, str], bool] | None = None,
         lead: bool = False,
         lane: bool = False,
     ) -> None:
@@ -72,7 +80,7 @@ class Sheet:
         self._source = source
         self._lead = lead
         self._lane = lane
-        self._inside = inside
+        self._stored = stored if stored is not None else {}
         self.sizes: dict[tuple[str, str], int | None] = {}
         self._lock = threading.Lock()
         self.items = self._group()
@@ -95,14 +103,23 @@ class Sheet:
             return [self._node(item, "") for item in self.items]
 
     @property
-    def checked(self) -> frozenset[Item]:
-        """What arrives already answered — every **leaf** that is in.
+    def answers(self) -> dict[Item, bool]:
+        """What arrives already answered — every **leaf** with a stored answer, as it is.
 
         Only leaves: a folder's mark is worked out from what is under it, which is what
         lets a folder whose paths disagree draw `◐` instead of being opened out into its
         own rows to avoid a tick that would be false for half of it.
+
+        A path with **no** stored answer is simply absent, and that is the whole gain over
+        the set this replaced: settings can now show `○` for a path nobody has ever been
+        asked about, where before a stored `skip` and a question never put drew the same
+        blank.
         """
-        return frozenset(one for one in self.candidates if self._is_inside(one))
+        return {
+            one: inside
+            for one in self.candidates
+            if (inside := self._stored.get(_key(one))) is not None
+        }
 
     def _node(self, item: Item, within: str) -> Node[Item]:
         """One row, and the level it opens on where it has one.
@@ -150,23 +167,31 @@ class Sheet:
         return tuple(lines)
 
     # -- the answers ---------------------------------------------------------
-    def steps(self, chosen: frozenset[Item]) -> tuple[Step, ...]:
-        """Every path's answer, in the order they were offered.
+    def steps(self, answered: Answers[Item]) -> tuple[Step, ...]:
+        """Every path that was **answered**, in the order they were offered.
 
-        One step per path even for a folder ticked in one go, which is the property that
+        One step per path even for a folder answered in one go, which is the property that
         keeps a folder safe: it is never a step for its directory. See `prepare.Group`.
+
+        A path left **unanswered** gets no step at all, which is the point of having a
+        third state: `prepare.unanswered` filters on the subjects that have one, so an
+        untouched path is offered again next time exactly as a path nobody has ever seen
+        is. That is what makes `apply` sensible on a screen with unanswered rows still on
+        it — it commits what has been decided and leaves the rest for later, rather than
+        filing a `skip` on the user's behalf.
         """
-        wanted = {one.path for item in chosen for one in _within(item)}
+        decided = {_key(one): inside for item, inside in answered.items() for one in _within(item)}
         return tuple(
             Step(
                 project=candidate.project,
-                verb=Verb.CLONE if candidate.path in wanted else Verb.SKIP,
+                verb=Verb.CLONE if decided[_key(candidate)] else Verb.SKIP,
                 path=candidate.path,
             )
             for candidate in self.candidates
+            if _key(candidate) in decided
         )
 
-    def summary(self, chosen: frozenset[Item]) -> str:
+    def summary(self, answered: Answers[Item]) -> str:
         """How much is actually about to be copied, beside the widget's how many.
 
         Paths already in the lane are left out of the total, because a tick on one of
@@ -176,7 +201,13 @@ class Sheet:
         With no lane in hand nothing is copied on accepting, so it says **in each lane**
         rather than *coming in*: the same number, and the truth about when it is spent.
         """
-        pending = [one for item in chosen for one in _within(item) if not one.present]
+        pending = [
+            one
+            for item, inside in answered.items()
+            if inside
+            for one in _within(item)
+            if not one.present
+        ]
         if not pending:
             return ""
         keys = [_key(one) for one in pending]
@@ -220,9 +251,6 @@ class Sheet:
             items.extend(tree(found))
         return tuple(items)
 
-    def _is_inside(self, candidate: Candidate) -> bool:
-        return _key(candidate) in self._inside
-
 
 def _within(item: Item) -> tuple[Candidate, ...]:
     """The paths a row stands for — itself, or every file in the folder."""
@@ -252,8 +280,12 @@ def _left_alone(already: int, total: int) -> str:
     return f"{already} of them are already in this lane — ticking leaves those as they are."
 
 
-def inside_from(steps: Iterable[Step]) -> frozenset[tuple[str, str]]:
-    """Which `(project, path)` pairs a set of remembered steps says are in."""
-    return frozenset(
-        (step.project, step.path) for step in steps if step.verb is Verb.CLONE and step.path
-    )
+def answers_from(steps: Iterable[Step]) -> dict[tuple[str, str], bool]:
+    """What a set of remembered steps says about each `(project, path)` — in or out.
+
+    A pair that is *absent* is one no step covers, which the screen draws as unanswered.
+    A stored `skip` is `False` and no longer indistinguishable from it: that was the gap
+    the two-state set left in settings, where a path deliberately kept out and a path
+    never asked about rendered identically.
+    """
+    return {(step.project, step.path): step.verb is Verb.CLONE for step in steps if step.path}

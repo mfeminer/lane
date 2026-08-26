@@ -38,7 +38,7 @@ from lane.config import (
 )
 from lane.context import Context
 from lane.prepare import Candidate, Step, Verb, apply
-from lane.prepare.sheet import Sheet, inside_from
+from lane.prepare.sheet import Sheet, answers_from
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
 from lane.ui.seam import Abandoned, Cell, Choice, Column, Row
 
@@ -276,24 +276,24 @@ def _run_preparation(context: Context) -> None:
     sheet = Sheet(
         _candidates(paths),
         source=lambda one: _source_of(context, one),
-        inside=inside_from(paths),
+        stored=answers_from(paths),
         lead=True,
     )
 
     ui.blank()
     try:
-        chosen = ui.check(
+        decided = ui.check(
             _prepared_title(paths),
             sheet.columns,
             sheet.rows,
-            checked=sheet.checked,
+            answers=sheet.answers,
             summary=sheet.summary,
             fill=sheet.fill,
         )
     except Abandoned:
         return
 
-    answered = sheet.steps(chosen)
+    answered = sheet.steps(decided)
     # One write, not one per path: `add` reloads and rewrites the file each time, which
     # over fifty rows is fifty read-modify-write cycles and fifty chances to be
     # interrupted half way through the set the user just accepted.

@@ -83,31 +83,37 @@ Preparing demo/broken-pagination
 
     path                        size      in lane
 ❯ ✓ node_modules               1.2 GB
-  ◐ apps/ · 12 ignored paths   4.2 MB
-    console/dist               340 MB    already there
+  ? apps/ · 12 ignored paths   4.2 MB
+  ✗ vendor                     88 MB
+  ○ console/dist               340 MB    already there
 
-  2 of 14 in · 1.2 GB coming in
-  ↑↓ move · space toggle · enter open · ctrl-c back out
+  1 of 14 in · 1.2 GB coming in
+  ↑↓ move · space answer
 ```
 
-`Space` answers the row under the cursor; `Enter` accepts the whole screen. A dozen paths
-is a dozen keystrokes and one more — no going into a row and back out again. Ticked means
-the path is copied in from your main clone, which on APFS is copy-on-write and costs almost
-nothing and almost no disk. Answer once and every lane in that project after it comes up
-ready.
+`Space` answers the row under the cursor; a dozen paths is a dozen keystrokes, with no
+going into a row and back out again. `✓` means the path is copied in from your main clone,
+which on APFS is copy-on-write and costs almost nothing and almost no disk. `✗` means you
+have decided to leave it out. `○` means you have not said yet — and lane will ask again
+next time rather than deciding for you.
 
-A path that is **already there** is left exactly as it is: ticking it never overwrites
-something you changed inside the lane.
+Below the paths are two more rows: **`apply`** records everything you have decided and
+gets on with it, and **`discard`** records nothing. Both are there on every level of the
+screen. Answer once and every lane in that project after it comes up ready.
+
+A path that is **already there** is left exactly as it is: answering it *in* never
+overwrites something you changed inside the lane.
 
 A real repository can hide a couple of hundred ignored paths under package after package,
 so the screen shows the **top** of the tree rather than every leaf: a row like
 `apps/ · 12 ignored paths` is a folder you open with `Enter`, with a `← Back` row inside
-it. One `Space` on it answers everything beneath it, however deep. `◐` means some of what
-it stands for is in and some is out — a path has two answers, a folder has three.
+it that keeps everything you have answered. One `Space` on it answers everything beneath
+it, however deep. On a folder, `?` means there is still an unanswered path under there and
+`◐` means it is fully answered and its paths disagree.
 
-`↑` `↓` move and `Ctrl-C` backs out, from anywhere, and always safely: every question comes
-before the first irreversible step. There are **no subcommands**; `--version` and `--help`
-are the only arguments.
+`↑` `↓` move, `Enter` acts on the row under the cursor, and `Ctrl-C` quits lane — from
+anywhere, and always safely: every question comes before the first irreversible step.
+There are **no subcommands**; `--version` and `--help` are the only arguments.
 
 ## Configure
 
