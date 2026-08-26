@@ -6,13 +6,24 @@ repositories. The filesystem runs for real too.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from lane.environment import EditorLaunch
 from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Node, Row, Summary
+from lane.ui.seam import (
+    BACK_LABEL,
+    Abandoned,
+    Answers,
+    Choice,
+    Column,
+    Fill,
+    Node,
+    Quit,
+    Row,
+    Summary,
+)
 
 
 class FakeEnvironment:
@@ -106,11 +117,15 @@ class Told:
 class FakeUi:
     """Replays scripted answers and records what the user was told.
 
-    Answers are consumed in order. The sentinel `ABANDON` raises `Abandoned`,
-    which is how a test drives "the user pressed Esc".
+    Answers are consumed in order. The sentinel `ABANDON` raises `Abandoned`, which is
+    how a test drives choosing a visible way back — `← Back`, or the checklist's
+    `discard`. `CTRL_C` raises `Quit`, which is the other gesture entirely: it leaves
+    lane. Two sentinels because they are two different things a user can do, and the
+    whole of *Ctrl-C is answered everywhere* turns on not confusing them.
     """
 
     ABANDON = object()
+    CTRL_C = object()
 
     def __init__(self, answers: Sequence[object] = ()) -> None:
         self._answers = list(answers)
@@ -132,6 +147,8 @@ class FakeUi:
         answer = self._answers.pop(0)
         if answer is FakeUi.ABANDON:
             raise Abandoned
+        if answer is FakeUi.CTRL_C:
+            raise Quit
         return answer
 
     # -- asking --------------------------------------------------------------
@@ -196,25 +213,27 @@ class FakeUi:
         columns: Sequence[Column],
         rows: Callable[[], Sequence[Node[T]]],
         *,
-        checked: Iterable[T] = (),
+        answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
         on_render: Callable[[str], None] | None = None,
-    ) -> frozenset[T]:
+    ) -> Answers[T]:
         """Records the whole screen, then answers it with one scripted keystroke run.
 
         The answer is **what to answer**, in order, the way the keys would arrive — so
         the script is the user's hand rather than a restatement of the result. *"Bring
-        the first row in and the third, then accept"* is:
+        the first row in and the third, then apply"* is:
 
             FakeUi([["apps/web/node_modules", 2]])
 
-        `[]` is the untouched screen: one `Enter` and nothing in. A row is named by its
+        `[]` is the untouched screen: `apply` pressed with nothing answered, which
+        answers **nothing** rather than answering everything *out*. A row is named by its
         value, its position, or any of its cell texts, exactly as in `browse` — **at any
         depth**, because a folder is a screen you go into and a test should not have to
         spell out the walk to reach it. Naming a folder answers every leaf beneath it,
         which is what `Space` on it does; naming one whose leaves are all in takes them
-        all out again.
+        all out again. Naming a leaf twice takes it from in to **out**, which is the third
+        state and not the same as never naming it.
 
         A position means a row of the screen the checklist *opens* on, since that is the
         one level a script can point at without walking.
@@ -224,7 +243,7 @@ class FakeUi:
             fill(lambda: None)
 
         self._paint_tree(title, rows(), on_render)
-        ticked = set(checked)
+        answered: dict[T, bool] = dict(answers or {})
         answer = self._next(title)
         if not isinstance(answer, list | tuple | set | frozenset):
             raise TypeError(f"check() needs a list of rows to answer, got {answer!r}")
@@ -232,19 +251,24 @@ class FakeUi:
         for one in answer:
             flat = _flatten(rows())
             index = _index_of(title, [node.row for node in flat], one)
-            leaves = set(flat[index].leaves)
-            # The widget's own rule: a folder that is all in goes out, and anything else
-            # — out, or a mix — comes in.
-            if leaves <= ticked:
-                ticked -= leaves
+            node = flat[index]
+            leaves = node.leaves
+            if not node.children:
+                # The widget's own rule for a leaf: the first press answers it, and every
+                # press after it flips the answer. Never back to unanswered.
+                answered[leaves[0]] = not answered.get(leaves[0], False)
             else:
-                ticked |= leaves
+                # And for a folder: all in goes out, anything else — out, or a mix, or
+                # untouched — comes in.
+                inside = all(answered.get(value) is True for value in leaves)
+                for value in leaves:
+                    answered[value] = not inside
             # Repainted as the real widget does, so an answer is on screen and recorded.
             self._paint_tree(title, rows(), on_render)
 
         if summary is not None:
-            self.told.append(Told("summary", summary(frozenset(ticked))))
-        return frozenset(ticked)
+            self.told.append(Told("summary", summary(dict(answered))))
+        return answered
 
     def _paint_tree[T](
         self,
@@ -303,10 +327,7 @@ class FakeUi:
         title: str,
         *,
         default: str = "",
-        on_render: Callable[[str], None] | None = None,
     ) -> str:
-        if on_render is not None:
-            on_render("ctrl-c back out")
         answer = self._next(title)
         if answer == "":
             return default
@@ -318,10 +339,7 @@ class FakeUi:
         title: str,
         *,
         default: bool = False,
-        on_render: Callable[[str], None] | None = None,
     ) -> bool:
-        if on_render is not None:
-            on_render("ctrl-c back out")
         answer = self._next(title)
         assert isinstance(answer, bool), f"confirm() needs a bool, got {answer!r}"
         return answer

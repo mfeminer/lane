@@ -15,7 +15,7 @@ Both accept Esc everywhere, and Ctrl-C behaves like Esc inside a prompt.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 
 from prompt_toolkit.input import Input
 from prompt_toolkit.output import Output
@@ -26,7 +26,18 @@ from lane.ui import render, splash
 from lane.ui.checklist import check as check_list
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
-from lane.ui.seam import BACK_LABEL, Abandoned, Choice, Column, Fill, Node, Row, Summary
+from lane.ui.seam import (
+    BACK_LABEL,
+    Abandoned,
+    Answers,
+    Choice,
+    Column,
+    Fill,
+    Node,
+    Quit,
+    Row,
+    Summary,
+)
 from lane.ui.splash import Line
 from lane.ui.table import browse as browse_table
 
@@ -106,20 +117,21 @@ class ConsoleUi:
         columns: Sequence[Column],
         rows: Callable[[], Sequence[Node[T]]],
         *,
-        checked: Iterable[T] = (),
+        answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
         on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
-    ) -> frozenset[T]:
-        """Hand off to the checklist widget. No way-back row to supply: it draws its own,
-        on every level that has one to go back to."""
+    ) -> Answers[T]:
+        """Hand off to the checklist widget. No rows to supply: it draws its own —
+        `← Back` on every level that has one to go back to, `apply` and `discard` on
+        all of them."""
         return check_list(
             title,
             columns,
             rows,
-            checked=checked,
+            answers=answers,
             summary=summary,
             fill=fill,
             on_render=on_render,
@@ -132,12 +144,9 @@ class ConsoleUi:
         title: str,
         *,
         default: str = "",
-        on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
     ) -> str:
-        if on_render is not None:
-            on_render("ctrl-c back out")
         return prompt_text(title, default=default, input=input, output=output)
 
     def confirm(
@@ -145,12 +154,9 @@ class ConsoleUi:
         title: str,
         *,
         default: bool = False,
-        on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
     ) -> bool:
-        if on_render is not None:
-            on_render("ctrl-c back out")
         return confirm_widget(title, default=default, input=input, output=output)
 
     # -- telling -------------------------------------------------------------
@@ -211,5 +217,9 @@ class ConsoleUi:
         with self._console.status(f"[dim]{render.escape(text)}[/dim]", spinner="dots"):
             try:
                 return work()
-            except KeyboardInterrupt as exc:
-                raise Abandoned from exc
+            except KeyboardInterrupt:
+                # Zone 1: a spinner before anything irreversible, so this is as clean as
+                # Ctrl-C at a prompt and means the same thing — leave lane. `Quit` rather
+                # than `KeyboardInterrupt` is what tells the session it was clean, so it
+                # does not warn about work that may be half-done when none was under way.
+                raise Quit from None

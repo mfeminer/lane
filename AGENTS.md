@@ -91,7 +91,7 @@ whole mechanism, and it is why almost nothing needs binding:
 | `↑` `↓` `Home` `End` | move |
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
-| `Ctrl-C` | back out |
+| `Ctrl-C` | quit lane |
 | `Space` | answer the row under the cursor — **the checklist only** |
 
 **That table is the whole vocabulary**, and the last row is the only key any screen has
@@ -103,19 +103,28 @@ carries its own answer, and it was taken deliberately rather than slipped in:
   keystrokes instead of a dozen round trips into a sub-screen. On a **folder** row it
   answers every path beneath it at once, which is what stops two hundred ignored paths
   being two hundred keystrokes.
-- **`Enter` there opens the folder under the cursor, and anywhere else accepts the level
-  you are standing in** — the root being the screen, and inside a folder being that
-  folder. Opening is `Enter` doing exactly what it does in the lanes table; accepting is
-  the one place in lane it does not mean "act on the row", and it applies where and only
-  where the row has nothing to open. That difference is the reason `Space` had to exist:
-  the previous screen cycled the row with `Enter` and then had no key left to accept
-  with, so it grew a `continue` row to stand in for one.
-- The checklist's footer names both, and names which of `open` / `go up` / `accept`
-  applies to the row under the cursor, because a screen that adds a key announces it. The
-  lanes table's footer does not, because it adds none.
+- **`Enter` there does to a row exactly what that row *is*, and nothing else.** It opens
+  a folder — `Enter` doing what it does in the lanes table — leaves the level from
+  `← Back`, accepts from `apply`, abandons from `discard`, and on a **leaf** it does
+  nothing at all, because a leaf's answer is `Space`'s job and there is nothing to open.
+  So `Enter` never means "accept" on this screen either: accepting is a row, exactly as
+  going back is. That is the reason `Space` had to exist in the first place — the screen
+  before this one cycled the row with `Enter` and then had no key left to finish with, so
+  it grew a `continue` row to stand in for one.
+- **What it replaced, and why it was wrong.** `Enter` used to open the row if it opened
+  and otherwise accept the level you were standing in — root being the screen, inside a
+  folder being that folder. Two faults, both from the same fallthrough: on a **leaf** at
+  any depth it fell through to *leave the level*, so a press on a file walked you up out
+  of the folder you were reading; and the accept was reachable only from a **root-level
+  leaf**, which a repository whose ignored paths all sit under folders does not have —
+  a screen with no way to finish at all.
+- The checklist's footer names which of `open` / `go up` / `apply` / `discard` applies to
+  the row under the cursor, and names **none** on a leaf, because naming a key that does
+  nothing teaches a lie. The lanes table's footer names nothing, because it adds no key
+  and `Enter` there always means the same thing.
 
-One widget, one key. **A new screen still introduces none.** It describes Ctrl-C *at a prompt*; what it
-does while lane is **working** is below, under *Ctrl-C is answered everywhere*. A letter key for "close" was considered and
+One widget, one key. **A new screen still introduces none.** What Ctrl-C does, at a
+prompt and while lane is **working**, is below, under *Ctrl-C quits lane*. A letter key for "close" was considered and
 rejected: a footer legend would make it discoverable, but it would still be this
 tool's invention. Choosing a row opens a two-entry menu instead — one keystroke
 more, no new vocabulary. If a future change wants letter keys, that is a decision
@@ -162,34 +171,59 @@ complete lane that is merely unprepared**, which the listing describes, the clos
 can act on, and the next enter repairs. The rule is about half-finished work, and there
 is none.
 
-### Ctrl-C is answered everywhere, and means three different things
+### Ctrl-C quits lane, from anywhere, and the only variation is *when*
 
-The structural guarantee above covers prompts. Ctrl-C can also arrive while lane is
-*working*, where there is no prompt to catch it, and **nothing lane does may end in
-a traceback** — that is the one outcome a user can do nothing with. Three zones,
-and which one a new step is in is a question worth asking deliberately:
+**Ctrl-C exits the process.** At a prompt, at any depth of any screen, during a spinner,
+in the middle of a step — one gesture, one outcome, and it leaves by the same door `quit`
+does, farewell included. Two lines of evidence put it here rather than at "back out":
 
-1. **While a spinner is up, before anything irreversible** — fetching origin,
-   asking GitHub, reading lane status. Identical to backing out of a prompt:
-   `ConsoleUi.progress` turns the interrupt into `Abandoned` and the screen you
-   were on comes back, silently. Nothing had happened yet, so nothing is said.
-2. **During a close's removal phase** — the one stretch where stopping half-way is
-   worse than either finishing or never starting. A partly deleted working copy,
-   or a lane whose worktree is gone but whose branch and metadata survive, is a
-   state nothing in lane can describe, let alone repair. So the interrupt is
-   **deferred** (`lane.interrupts`): acknowledged on screen the moment it lands,
-   raised once the phase is done. A second Ctrl-C is never deferred — it means
-   *now*, and the acknowledgement says so. This needs `start_new_session` on git
-   subprocesses to mean anything (see *The git backend*).
-3. **Anywhere else** — the session reports it in one line, says a step already
-   under way may be half-done, names `lanes` as the screen that shows where things
-   stand, and returns to the menu. `cli.main` is the backstop underneath all of
-   this and exits `130`.
+- **What lane's own code already assumes.** Going back is a **visible row** everywhere in
+  this application — `← Back`, the checklist's `discard`, the listing's `← Back to the
+  menu`, the menu's `quit`. Ctrl-C was standing in for a job lane had already solved
+  another way, and a key that duplicates a visible row is a key with nothing left to do.
+- **What comparable tools do.** One-shot wizards (`npm init`, `gh`'s survey prompts) treat
+  Ctrl-C as "abort the whole thing" because they have no navigation model to back up
+  through. Persistent, multi-screen tools closer to lane's shape — `k9s`, `lazygit` —
+  bind it to "quit the application", unconditionally, and move between their own views
+  with an entirely different key. lane is structurally the second kind: a menu loop you
+  return to, not a single wizard.
 
-Zone 2 is the **only** place an interrupt is deferred, and it is deferred because
-its questions are all behind it — not as licence to defer one elsewhere. If a new
-step wants deferral, check first whether it is really asking for its questions to
-be moved earlier.
+**Nothing lane does may end in a traceback** — that is still the one outcome a user can
+do nothing with, and `cli.main` is the backstop under all of it. What differs between
+situations is only what is *said* on the way out, and whether the exit waits:
+
+1. **At a prompt, or while a spinner is up before anything irreversible** — fetching
+   origin, asking GitHub, reading lane status, any screen at any depth. Nothing was under
+   way, so nothing is said: farewell, and out. The widgets raise `Quit`; `ConsoleUi.progress`
+   turns a `KeyboardInterrupt` into the same thing, because a Zone 1 spinner is as clean
+   as a prompt.
+2. **During a close's removal phase** — the one stretch where stopping half-way is worse
+   than either finishing or never starting. A partly deleted working copy, or a lane whose
+   worktree is gone but whose branch and metadata survive, is a state nothing in lane can
+   describe, let alone repair. So the interrupt is **deferred** (`lane.interrupts`):
+   acknowledged on screen the moment it lands, raised once the phase is done — and then
+   lane exits, rather than reporting it and showing the menu again. A second Ctrl-C is
+   never deferred: it means *now*, and the acknowledgement says so. This needs
+   `start_new_session` on git subprocesses to mean anything (see *The git backend*).
+3. **Anywhere else** — it landed while a step was actually running, so unlike the first
+   case it is *not* guaranteed to be a clean no-op. lane says so in one line, names
+   `lanes` as the screen that shows where things stand, and *then* exits.
+
+The two exceptions carry that difference: **`Quit`** is Ctrl-C at a prompt or a Zone 1
+spinner, and exits silently; **`KeyboardInterrupt`** is one that landed while lane was
+working, and exits after saying what may be half-done. `session.run` is where both are
+turned into the same farewell and the same exit code, and it is the only place either is
+caught. `cli.main` still answers `130` for an interrupt that escapes the session entirely
+— a lane that did not get to close its own road is a different fact from one that did.
+
+**`Abandoned` is not one of these** and must not be folded into them. It is what a
+**visible row** raises — `← Back`, the checklist's `discard` — and it returns to the
+screen above, silently, exactly as it always has. A row that says *back* has to go back
+rather than out.
+
+Zone 2 is the **only** place an interrupt is deferred, and it is deferred because its
+questions are all behind it — not as licence to defer one elsewhere. If a new step wants
+deferral, check first whether it is really asking for its questions to be moved earlier.
 
 **Preparation is Zone 1, and it was a deliberate decision rather than a default.** Its
 questions are behind it too, which is the shape Zone 2 has — but two things put it back
@@ -200,6 +234,13 @@ deferring would leave Ctrl-C apparently doing nothing for two minutes, which is 
 perception Zone 2's acknowledgement exists to prevent. It does, however, borrow one
 thing from Zone 3: it **says** what it was doing, because earlier steps completed and
 are real work, so Zone 1's silence would be a lie.
+
+**One cost of this, named rather than left to be discovered.** `text` and `confirm` have
+no visible row to go back with — there is nothing to choose between — so Ctrl-C was their
+only way out, and it is now a way *out of lane*. A mistyped answer at a text prompt is
+answered by finishing it and correcting from the screen that follows, not by backing out
+of it. If that turns out to bite, the fix is to give those two prompts a visible way back,
+not to give Ctrl-C a second meaning.
 
 ## The lanes screen
 
@@ -438,13 +479,14 @@ and the progress indication for a long step ("Fetching origin…") is telling. S
 asks one question. `browse` is a screen the user stands in and acts on one row of.
 **`check` is a screen where every row carries its own answer** — which ignored
 paths come into a lane — so it is a decision over a *set* rather than a question with an
-answer, and it returns every **leaf** that was in when `Enter` was pressed. It takes the
-same columns `browse` does and a `rows` callable returning a **tree** of them, one level
-per screen, plus what arrives already answered and an optional `summary` for the running
-count. A leaf has two answers; a folder stands for everything under it and has three,
-`◐` being the mix. Its root has no `back` row, because there is nothing above it and §2's
-footer hint is the right amount of visibility — every level inside a folder has one,
-because it has somewhere to go back to.
+answer, and it returns every **leaf** that was answered, and which way, when `apply` was
+chosen. It takes the same columns `browse` does and a `rows` callable returning a **tree**
+of them, one level per screen, plus what arrives already answered and an optional `summary`
+for the running count. A leaf has three answers — in, out, and *not yet answered*, which is
+an **absent key** rather than a value; a folder stands for everything under it and so has
+five, adding *partly unanswered* (`?`) to the mix (`◐`). Every level ends with `apply` and
+`discard` rows, and every level inside a folder has a `← Back` above them; the root has no
+`← Back`, because there is nothing above it.
 
 **`browse` is a screen the user stands in, not a question they are asked** — that
 is the whole difference between it and `choose`. It takes columns and a *callable*
@@ -469,17 +511,20 @@ per-row verb menu, around the close it launches, and around the enter it launche
 that backing out of any of them returns to the table rather than to the main menu; the
 table is a screen you are standing in. All three are safe for exactly the same reason as
 everywhere else: every question still comes before the first irreversible step, so an
-abandoned verb menu, close or preparation has changed nothing. The close is included
-because Ctrl-C during its fetch is Zone 1 above, and throwing away the screen the
-keystroke happened on would punish impatience with a lost place; preparation is included
-because it *is* a screen. Do not take this as licence elsewhere; if another action wants
-it, it wants a screen.
+abandoned verb menu, close or preparation has changed nothing. Preparation is included
+because it *is* a screen, and its `discard` row is an `Abandoned` like any other — so
+discarding it lands back on the table you started from rather than at the main menu. Do
+not take this as licence elsewhere; if another action wants it, it wants a screen.
 
-**Preparation catches it too, for one line and then re-raises.** It is the only step in
-lane that does several independent pieces of work in sequence *after* the last question,
-so it is the only one where Zone 1's silence would be a lie — it names the step the
-interrupt struck, says entering again finishes the job, and lets the exception carry on
-to the listing. It never swallows one.
+It catches `Abandoned` and **only** `Abandoned`. `Quit` and `KeyboardInterrupt` pass
+straight through to the session, because they are not backing out of anything — see
+*Ctrl-C quits lane*.
+
+**Preparation catches the interrupt too, for one line and then re-raises.** It is the
+only step in lane that does several independent pieces of work in sequence *after* the
+last question, so it is the only one where Zone 1's silence would be a lie — it names the
+step the interrupt struck, says entering again finishes the job, and lets the `Quit` carry
+on to the session, which exits. It never swallows one.
 
 The prompt layer is **an interface the action calls, not a library it imports**.
 Actions never touch `prompt_toolkit`; they ask through this seam and get an answer
@@ -500,7 +545,7 @@ treatment** — `ui/table.py` and `ui/checklist.py`, below the seam, with
 `tests/test_table.py` and `tests/test_checklist.py` driving them through pipe
 input. The checklist reuses the table's layout (`fit`, `clip`, `window`, `vertical`,
 `row_fragments`) rather than growing a second one, and adds a two-character mark gutter in
-front of every row for the tick. **The drill-down is the widget's, not the action's**:
+front of every row for the answer. **The drill-down is the widget's, not the action's**:
 `Walk` holds which level is on screen and where the cursor was parked on the way into
 each, so the seam is called once for the whole tree. Threading "now descend into this
 one" back out through the action would put the widget's own state in the caller's hands,
@@ -565,7 +610,8 @@ These must never regress. Each is one line of behaviour and one line of why.
   source. The mechanism is generic and the project-specific knowledge is configuration,
   or the list of ecosystems is endless and always one short.
 - **Entering a lane never overwrites what the lane changed.** Full stop, with no
-  exception to remember: a ticked path already in the lane is left exactly as it is. A
+  exception to remember: a path answered *in* that is already in the lane is left exactly
+  as it is. A
   dependency tree the user patched by hand is work, and losing it silently is the one thing
   this feature could do that is worse than not existing. This used to carry "unless the
   user asked for that path to be refreshed", and dropping `refresh` is what let the rule
@@ -583,12 +629,15 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **A folder row is never a step for the folder** — it stands for the paths inside it and
   stores one step each. A partly ignored directory holds tracked work, so a step for the
   directory itself would overwrite it.
-- **A leaf has two answers and a folder has three** — in, out, and `◐` for a mix. A
-  folder is folded whatever its paths were answered, because the mark can now say "some of
-  these"; what it must never do is show a tick that is false for half of what it stands
-  for. This replaced *"a folder is not folded unless its paths agree"*, which was the
-  honest workaround for a mark with two states and which cost the screen its shape: a
-  disagreement opened a folder out into a flat run of rows.
+- **A leaf has three answers and a folder has five** — `✓` in, `✗` out, `○` not yet
+  answered; a folder adds `?` for *something under here is still unanswered* and `◐` for
+  *all answered and they disagree*. A folder is folded whatever its paths were answered,
+  because the marks can say "some of these"; what it must never do is show a mark that is
+  false for half of what it stands for. This replaced *"a folder is not folded unless its
+  paths agree"*, which was the honest workaround for a mark with two states and which cost
+  the screen its shape: a disagreement opened a folder out into a flat run of rows. The
+  partition of the five is exhaustive and lives in exactly one function
+  (`checklist.mark_for`), with a leaf as its degenerate case rather than a rule of its own.
 - **A folder is a screen you go into, and one keystroke on it answers everything under
   it** — around two hundred ignored paths is a real repository, and choosing among two
   hundred flat rows is not a screen. The tree comes from grouping discovery's own answer
@@ -637,9 +686,20 @@ These must never regress. Each is one line of behaviour and one line of why.
   both binding tables themselves, because a bound handler that happens to do nothing still
   swallows the keystroke, which is not the same as leaving a key unbound.
 - **The checklist binds the picker's keys plus `Space`, and nothing else ever** — and
-  `Enter` there accepts the screen rather than acting on the row, which is the single
-  deliberate exception to what `Enter` means everywhere else. Its footer names both, because
-  a screen that adds a key announces it.
+  `Enter` there acts on the row under the cursor exactly as it does everywhere else in
+  lane, which is why `apply` and `discard` are **rows** rather than a key or a meaning
+  `Enter` carries on some rows and not others. Its footer names what `Enter` will do to
+  the row it is on, and names nothing on a leaf, where it does nothing.
+- **`apply` and `discard` are on every level of the checklist, root and nested alike** —
+  reachable only from the root is what the accept used to be, and on a tree whose paths
+  all sit under folders that was a screen with no way to finish. `← Back` moves the cursor
+  up a level and keeps every answer given; it is not a second `discard`.
+- **A checklist leaf has three answers, not two: in, out, and not yet answered** — and a
+  leaf left unanswered has **no step written for it**, so it is offered again next time.
+  Two states could not tell "kept out on purpose" from "nobody has asked", which meant
+  accepting a screen filed a refusal for every row the user had not got to. `Space` never
+  returns a row to unanswered: the first press answers it, and every press after it
+  changes the answer.
 - **The listing never blocks on `gh`** — git status is collected before the first
   paint, pull request state fills in behind it. It is the difference between a
   screen that appears and one that appears two seconds later.
@@ -649,10 +709,15 @@ These must never regress. Each is one line of behaviour and one line of why.
   rows that rearrange themselves is worse than no cursor.
 - **Escape is not bound at all** — eagerly it swallows Option+Arrow; normally it
   takes over a second to register. Neither is acceptable and neither is needed.
-- **Ctrl-C never surfaces as a traceback, wherever it lands** — a stack trace is
-  the one outcome a user can do nothing with. At a prompt it backs out, during a
-  spinner it abandons, during a close's removal it is deferred and then reported,
-  and `cli.main` exits `130` under all of it.
+- **Ctrl-C quits lane, wherever it lands, and never surfaces as a traceback** — a stack
+  trace is the one outcome a user can do nothing with. At a prompt or a Zone 1 spinner it
+  exits silently (`Quit`); anywhere else it exits after saying what may be half-done
+  (`KeyboardInterrupt`); during a close's removal it is deferred, the phase finishes, and
+  *then* it exits. Every one of those ends with the same farewell `quit` prints, and
+  `cli.main` exits `130` for anything that escapes the session entirely.
+- **Backing out is a visible row and never Ctrl-C** — `Abandoned` is what `← Back` and
+  the checklist's `discard` raise, and it returns to the screen above. Folding it into
+  the quit path would make `← Back` leave the application.
 - **Every step slow enough to notice runs under `ui.progress`, including the ones
   after the last question** — the removal is the slowest thing a close does and the
   only one with no prompt on screen to explain the wait, so leaving it silent is
@@ -836,15 +901,17 @@ than two.
   The mechanism is generic; the project-specific knowledge is configuration.
 - **`link` was a third verb and is gone, on purpose.** It made a symlink into the main
   clone: always current, one copy rather than one per lane, which suited a large read-only
-  asset and suited secrets. It was removed because **a row has exactly two answers** — in
-  or out — and a checkbox cannot carry a third; a screen that had to be entered to change
-  an answer is what the whole rebuild was for. Consequences to keep rather than rediscover:
+  asset and suited secrets. It was removed because **a row asks one question with two
+  answers** — does this come into the lane — and one keystroke cannot carry a third thing
+  to *do*; a screen that had to be entered to change an answer is what the whole rebuild
+  was for. Not to be confused with the row's three **states**: *not yet answered* is the
+  absence of a decision, not a third thing lane can do to a path. Consequences to keep rather than rediscover:
   a `verb = "link"` in an older `prepare.toml` is dropped on read like any unknown verb, so
   that path is asked about again and the symlink already in the lane reads as *already
   there*; and the trailing-slash `linkable` question went with it, while the **`writable`
   half of the same bulk `check-ignore` stayed**, because that is what stops a tracked path
   ever being offered. Do not reintroduce `link` as a hidden setting: it would be a third
-  state wearing a different hat.
+  third verb wearing a different hat.
 - **`refresh` went with it.** A `clone` step could be marked "reapply on every enter",
   settable only in settings — and settings' per-step editor is exactly what the checklist
   replaced, so it had nowhere left to be set. Removing it also made the overwrite rule
@@ -868,30 +935,41 @@ than two.
   and sameness cannot. It had already drifted: entering cycled a row in place while
   settings made you press `Enter`, choose *change*, and pick a verb — three screens to move
   one path, a dozen times over for a dozen paths.
-- **A path is in or out, and there is no third state.** Ticked means the path comes into
-  the lane, unticked means it stays out; both are remembered. Every row starts wherever the
-  stored answer left it, and on the screen where a path is first answered that is *out* —
-  so one `Enter` is always safe. **`◐` is not a third answer for a path**: it is a folder
-  row saying that the paths under it were answered differently, and no path is ever stored
-  as anything but in or out.
-- **`Space` on a folder sets every leaf under it to one answer, and a mix goes *in*.** All
-  out becomes all in, all in becomes all out, and a mix becomes all in — because *in* is
-  what somebody reaching for a directory row is after, and because the alternative
-  collapses a mix to *out*, which is the answer that quietly leaves work undone. The mix it
+- **A path is in, out, or not yet answered — and only the first two are ever stored.**
+  `✓` means the path comes into the lane and `✗` means it stays out; both are written down.
+  `○` means nobody has said, which is where every row starts, and it writes **nothing** —
+  so `prepare.unanswered` offers that path again next time, exactly as it would one nobody
+  has ever seen. That is what makes `apply` safe on a screen with unanswered rows still on
+  it: it commits what was decided and leaves the rest, rather than filing a refusal on the
+  user's behalf. `Space` never returns a row to unanswered.
+  **`◐` and `?` are not answers for a path**: they are folder rows saying that the paths
+  under them disagree, or that one of them is still unanswered.
+- **Two states could not say this, and the cost was real in both directions.** Accepting a
+  screen recorded `skip` for every row the user had not got to, so a path skipped past once
+  was never offered again; and in settings a stored `skip` and a path never asked about
+  drew the same blank gutter, which is the same ambiguity seen from the other end.
+- **`Space` on a folder sets every leaf under it to one answer, and anything short of
+  *all in* goes *in*.** All in becomes all out; everything else — all out, a mix, or
+  untouched — becomes all in, because *in* is what somebody reaching for a directory row is
+  after, and because the alternative collapses a mix to *out*, which is the answer that
+  quietly leaves work undone. **Unanswered counts towards "not all in"**, so one press on a
+  folder nobody has touched brings the whole subtree in. The mix it
   replaces is not recoverable, which is why the row's panel says how many it is about to
   move before the key is pressed.
-- **A ticked path that is already in the lane is left alone rather than overwritten.** The
-  checkbox cannot carry this, so it is stated once and holds always — and because it holds
-  always, one function (`prepare.needed`) decides what every step does, where there used to
-  be two that disagreed on exactly this point. The row says **`already there`** in its own
-  column, and the cursor panel repeats it, because a tick that is a no-op and a tick that
-  copies a gigabyte have to look different.
+- **A path answered *in* that is already in the lane is left alone rather than
+  overwritten.** The mark cannot carry this, so it is stated once and holds always — and
+  because it holds always, one function (`prepare.needed`) decides what every step does,
+  where there used to be two that disagreed on exactly this point. The row says
+  **`already there`** in its own column, and the cursor panel repeats it, because an answer
+  that is a no-op and one that copies a gigabyte have to look different. This is a
+  different axis from the answer itself and both stay visible: *is it already on disk* and
+  *have you decided to bring it in* are separate questions.
 - **The screen carries a running count of what is in**, and beside it how much is about to
   be copied (`4 of 6 in · 1.2 GB coming in`). Forty rows do not fit on a terminal, so
   without it the only way to know what you have just decided is to scroll back through it.
-  The count is the widget's, because it owns the ticks; the size is the action's, because it
-  owns the sizes. Paths already in the lane are left out of the total — a tick on one of
-  those does nothing, and counting it would describe work lane is not going to do.
+  The count is the widget's, because it owns the answers; the size is the action's, because
+  it owns the sizes. Paths already in the lane are left out of the total — an answer on one
+  of those does nothing, and counting it would describe work lane is not going to do.
 - **The rows are a tree, one level of it per screen**, because `--directory` only
   collapses a directory git ignores *entirely*: one tracked file in it and every ignored
   file inside is listed separately. Measured on a four-pattern repository: **55 rows, 40 of
@@ -908,14 +986,16 @@ than two.
   other directory already has a row on the screen above it to be answered from; the root
   has none, so `./` is the only place its loose files can be answered in one keystroke.
 - **A folder is folded whatever its paths were answered.** A directory holding two `.env`
-  files that are in and thirty logs that are out draws `◐`, which is exactly what it is.
-  This is the one thing the flat screen could not do: a checkbox has two states, so such a
-  folder had to be opened out into its own rows instead — truthful, and the flat run of
-  rows this shape exists to replace. A mix can still only arrive from answers already on
-  disk, since nothing is answered on the screen where a path is first offered.
+  files that are in and thirty logs that are out draws `◐`, which is exactly what it is;
+  one where half of them are still unanswered draws `?`, which is a different fact and gets
+  a different mark. This is the one thing the flat screen could not do: a checkbox has two
+  states, so such a folder had to be opened out into its own rows instead — truthful, and
+  the flat run of rows this shape exists to replace. Entering a lane now reaches `?` on its
+  first screen, where every leaf starts unanswered; `◐` still arrives only from answers
+  already on disk, which is why settings is where it turns up.
 - **A folder is presentation, never a step for its directory.** The directory is only
   partly ignored — that is why its files were listed one by one — so it holds tracked work
-  too, and cloning it would overwrite that. Ticking a folder stores one step per path.
+  too, and cloning it would overwrite that. Answering a folder stores one step per path.
   A file that appears there later is therefore a path nobody has answered, and is asked
   about rather than silently swept in.
 - **Nothing is recorded per lane.** The only state is the filesystem — is the path there —
@@ -953,7 +1033,7 @@ branch if asked, remove the worktree, prune, delete the branch. **Every one of
 those steps shows a spinner** — they run after the last question, with nothing on
 screen to explain the wait, and removing a worktree of a few thousand files is the
 longest thing a close does. **The whole phase defers Ctrl-C**, which is Zone 2 of
-*Ctrl-C is answered everywhere* above.
+*Ctrl-C quits lane* above.
 
 **Diagnostics** — when no projects are found, say how many subfolders were looked
 at, and if the repositories turn out to be nested (`<root>/<org>/<repo>`), point at
@@ -1138,10 +1218,13 @@ All of it arrived at test-first:
 - every step of a close's removal phase announcing itself, in order, after the last
   question
 - Ctrl-C during that phase finishing it rather than stopping half-way — a real
-  `SIGINT` to the test process, because that is what a terminal sends — and being
-  raised afterwards rather than discarded
-- Ctrl-C during a spinner abandoning, Ctrl-C inside an action being reported with
-  what might be half-done, and the boundary exiting `130` rather than tracing back
+  `SIGINT` to the test process, because that is what a terminal sends — being raised
+  afterwards rather than discarded, and the session then **exiting** rather than
+  reporting it and showing the menu again, with the ordering asserted so the removal can
+  never interleave with the exit
+- Ctrl-C during a spinner quitting lane, Ctrl-C inside an action being reported with
+  what might be half-done and *then* quitting, Ctrl-C at a bare menu prompt still
+  quitting, and the boundary exiting `130` rather than tracing back
 - git running outside lane's process group, so the terminal's Ctrl-C cannot reach it
 - a non-TTY invocation refusing cleanly while `--version` still works
 - the version reaching the build from the tag, and the config stamp being the
@@ -1151,12 +1234,19 @@ All of it arrived at test-first:
 - discovery listing one row per ignored directory, and collapsing a row nested inside
   another; the ignore question distinguishing `x/` from `x` and never returning a tracked
   path
-- `Space` ticking the row under the cursor without moving it, several rows all landing,
-  `Enter` accepting the whole screen, and the widget binding the picker's keys plus `Space`
+- `Space` answering the row under the cursor without moving it, several rows all landing,
+  `apply` accepting the whole screen, and the widget binding the picker's keys plus `Space`
   and nothing else — all through pipe input
+- a leaf cycling unanswered → in → out → in and never back to unanswered, and all five
+  folder states over the **whole** partition of in/out/unanswered rather than a sample
+- `Enter` doing nothing on a leaf at the root and two levels down, opening a folder at
+  both, leaving a level from `← Back` without discarding what was answered inside it, and
+  `apply`/`discard` being reachable at every depth
+- applying with rows still unanswered writing steps only for the answered ones, and the
+  untouched paths being offered again on the next visit
 - the screen not appearing at all when no path is unanswered, and the same component being
   the one settings opens — counted, not eyeballed
-- a ticked path already in the lane keeping the lane's own copy, with the row saying
+- a path answered *in* that is already in the lane keeping the lane's own copy, with the row saying
   `already there` and nothing being applied
 - a clone reproducing a tree, the copy being independent of it, and a failed swap leaving
   the original whole with nothing staged behind
@@ -1166,8 +1256,8 @@ All of it arrived at test-first:
   drawing nothing — counted through the real backend
 - the table binding no key beyond the picker's set, and the checklist binding exactly
   that set plus `Space` — asserted on both binding tables, not by driving keys
-- the tick surviving a 40-column terminal while the other columns are dropped and the
-  path truncates, and the footer shortening rather than clipping `ctrl-c back out` away
+- the mark surviving a 40-column terminal while the other columns are dropped and the
+  path truncates, and the footer giving up the arrows before it gives up naming the keys
 - a failed step reporting its fix while the remaining steps still run and the editor still
   opens; entering again finishing what it left
 - Ctrl-C during a step naming the step, saying entering again finishes the job, and not
@@ -1178,14 +1268,16 @@ All of it arrived at test-first:
   keystroke — writing one step per path and never touching the directory, which a tracked
   file in it proves — and a folder whose remembered answers disagree keeping that one row
   and drawing `◐` on it
+- settings, over a project with a stored `clone`, a stored `skip` and a path with no
+  stored answer at all, drawing three visibly different marks — which two states could not
 - nine ignored paths scattered under three packages opening on **one** row rather than
   nine, the level below it being the packages rather than their files, and one keystroke
   at the top of that tree writing nine steps and no step for a directory
 - a chain of directories with a single child collapsing to the one row it was always
   about, and a level of two rows being drawn in its parent rather than behind a keystroke
-- `Enter` opening the folder under the cursor, `Enter` on a leaf inside one going back up
-  rather than ending the screen, and a level returned to having its rows and its cursor
-  exactly as they were left
+- `Enter` opening the folder under the cursor, a level returned to having its rows and
+  its cursor exactly as they were left, and an answer given two levels down surviving a
+  walk back out and into a different folder
 - the branch list merging a branch that is both local and remote into **one** row,
   excluding `origin/HEAD` (which `refname:short` renders as a bare `origin`), and
   putting the most recently committed first

@@ -10,10 +10,14 @@ Two verbs cover every case found so far, and they are deliberately generic:
   secrets, anything a fresh checkout is missing.
 * `run`   — a configured command, in a configured directory.
 
-**A path is in or out, and nothing else.** `link` was a third answer once — a symlink
+**A path is in or out, and nothing else.** `link` was a third *verb* once — a symlink
 into the main clone — and it is gone: the question a row asks is *does this come into the
-lane*, which has two answers, and a screen that answers it with a checkbox cannot carry a
-third. What it cost is worth naming rather than forgetting: a linked path was always
+lane*, which has two answers, and a screen that answers it with one keystroke cannot carry
+a third. (Not to be confused with the screen's three *states*: `in`, `out` and *not yet
+answered*, which is the absence of an answer rather than a third thing lane can do to a
+path — an unanswered path has no `Step` at all.)
+
+What dropping `link` cost is worth naming rather than forgetting: a linked path was always
 current and existed once rather than once per lane, which suited a large read-only asset.
 What it bought is a screen where a dozen paths take a dozen keystrokes.
 
@@ -169,10 +173,11 @@ class Group:
 
     **`items` are the rows one level down, and they may be groups themselves**; the
     `candidates` are every leaf beneath, however deep. A group stands for all of them —
-    which is three states rather than two, all in, all out or a mix, and the mark that
-    says so is `◐` (docs/CONVENTIONS.md §5). A folder used to be opened out into its own
+    which is five states rather than a leaf's three, because it can also be *partly*
+    unanswered, and the marks that say so are `?` and `◐` (docs/CONVENTIONS.md §5, and
+    `checklist.mark_for` for the partition). A folder used to be opened out into its own
     rows when its paths disagreed, because a checkbox could not say "some of these"; the
-    mark can, so the shape no longer has to lie or to flatten.
+    marks can, so the shape no longer has to lie or to flatten.
     """
 
     directory: str

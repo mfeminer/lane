@@ -146,16 +146,17 @@ def _interrupting(label: str) -> Action:
     return Action(key=label, label=label, description="raises Ctrl-C", run=run)
 
 
-def test_ctrl_c_while_an_action_is_working_returns_to_the_menu(
+def test_ctrl_c_while_an_action_is_working_ends_the_session(
     monkeypatch: pytest.MonkeyPatch, projects_root: Path, lanes_root: Path
 ) -> None:
-    """Inside a prompt Ctrl-C is bound and backs out. Outside one — while a step is
-    actually running — it used to escape as a traceback, killing the session."""
+    """It used to escape as a traceback; then it was reported and the menu came back.
+    Now it does what Ctrl-C does in every persistent terminal program: it leaves."""
     monkeypatch.setattr(session, "ACTIONS", (_interrupting("boom"), *ACTIONS))
-    ui = FakeUi(["boom", "quit"])
+    ui = FakeUi(["boom"])
 
     assert session.run(_context(ui, projects_root, lanes_root)) == 0
     assert ui.said("interrupted")
+    assert ui.told[-1].kind == "farewell", "and by the same door quit uses"
 
 
 def test_an_interruption_says_what_might_be_half_done(
@@ -165,13 +166,74 @@ def test_an_interruption_says_what_might_be_half_done(
     the interrupt may have landed in the middle of a step. Saying nothing would
     imply it was clean."""
     monkeypatch.setattr(session, "ACTIONS", (_interrupting("boom"), *ACTIONS))
-    ui = FakeUi(["boom", "quit"])
+    ui = FakeUi(["boom"])
 
     session.run(_context(ui, projects_root, lanes_root))
 
     assert ui.said("half-done")
     # Named by its current menu name, so the next step is one the user can find.
     assert ui.said("lanes")
+
+
+def test_ctrl_c_at_a_prompt_inside_an_action_ends_the_session_silently(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """The same exit, without the half-done line — because at a prompt nothing is under
+    way. Two situations, two exceptions (`Quit` and `KeyboardInterrupt`), one outcome."""
+    git(["init", "--quiet", str(projects_root / "a")])
+    git(["init", "--quiet", str(projects_root / "b")])
+    ui = FakeUi(["open", FakeUi.CTRL_C])
+
+    assert session.run(_context(ui, projects_root, lanes_root)) == 0
+    assert ui.told[-1].kind == "farewell"
+    assert not ui.said("half-done"), "nothing was under way, so nothing may be half-done"
+    assert not lanes_root.exists()
+
+
+def test_ctrl_c_at_the_bare_menu_prompt_still_ends_the_session(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """It already did, by a different route. Pinned so a later change cannot quietly
+    turn the menu's Ctrl-C back into "show the menu again"."""
+    ui = FakeUi([FakeUi.CTRL_C])
+
+    assert session.run(_context(ui, projects_root, lanes_root)) == 0
+    assert ui.told[-1].kind == "farewell"
+
+
+def test_ctrl_c_in_the_preparation_checklist_ends_the_session(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Not "back to the menu with the lane unprepared" — out. Nothing is written and no
+    editor opens, exactly as `discard` leaves things; what differs is where you land."""
+    _origin, clone = build_repo(projects_root / "_b", default_branch="main")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    (repo / ".gitignore").write_text("node_modules/\n")
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "pkg").write_text("from the main clone\n")
+
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    ui = FakeUi(
+        [
+            "open",
+            "thing",
+            "new work",
+            "Fix the CSV export",
+            "branch",
+            "bugfix/fix-the-csv-export",
+            FakeUi.CTRL_C,
+        ]
+    )
+    context = _context(ui, projects_root, lanes_root, environment=environment)
+
+    assert session.run(context) == 0
+    assert ui.told[-1].kind == "farewell"
+    assert context.prepare_store().load().steps == ()
+    assert environment.launched == []
 
 
 # -- D7: without git, everything but doctor refuses -------------------------------
@@ -320,6 +382,52 @@ def test_two_lanes_run_side_by_side_without_colliding(
     # Neither lane tracks anything, so a bare push in either cannot reach main.
     assert backend.status(first, "main").upstream is None
     assert backend.status(second, "main").upstream is None
+
+
+def test_discarding_the_preparation_screen_leaves_the_lane_exactly_as_it_was(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """`discard` unwinds the whole way, and every step of that is worth pinning now that
+    it is a named row rather than an accident of Ctrl-C's plumbing.
+
+    `Abandoned` out of `_prepare` skips `_launch` entirely, and the session catches it and
+    shows the menu again. Nothing is written, no editor opens, and what is left behind is
+    a complete lane that is merely unprepared — which the listing describes and the next
+    enter repairs.
+    """
+    _origin, clone = build_repo(projects_root / "_b", default_branch="main")
+    repo = projects_root / "thing"
+    clone.rename(repo)
+    (repo / ".gitignore").write_text("node_modules/\n")
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+    git(["push", "--quiet", "origin", "HEAD"], cwd=repo)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "pkg").write_text("from the main clone\n")
+
+    environment = FakeEnvironment(tools={"git": "/g", "cursor": "/c"})
+    ui = FakeUi(
+        [
+            "open",
+            "thing",
+            "new work",
+            "Fix the CSV export",
+            "branch",
+            "bugfix/fix-the-csv-export",
+            FakeUi.ABANDON,  # `discard`, which is what the row does
+            "quit",
+        ]
+    )
+    context = _context(ui, projects_root, lanes_root, environment=environment)
+    lane_path = lanes_root / "thing" / "fix-the-csv-export"
+
+    assert session.run(context) == 0
+    assert ui.unanswered() == 0, "the menu came back and took the next answer"
+
+    assert lane_path.is_dir(), "a complete lane, merely unprepared"
+    assert not (lane_path / "node_modules").exists()
+    assert context.prepare_store().load().steps == ()
+    assert environment.launched == [], "the editor is on the other side of preparation"
 
 
 # -- The road: the session opens on it and closes it ------------------------------

@@ -51,7 +51,7 @@ from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
 from lane.ui.picker import ESCAPE_TIMEOUT, HINT
-from lane.ui.seam import Abandoned, Cell, Column, Fill, Row
+from lane.ui.seam import Abandoned, Cell, Column, Fill, Quit, Row
 
 CURSOR_WIDTH = 2
 """The `❯ ` in front of the row under the cursor, and the space in front of the rest."""
@@ -333,9 +333,9 @@ def bindings_for[T](
         return current[index] if index < len(current) else None
 
     @bindings.add("c-c")
-    def _abandon(event: KeyPressEvent) -> None:
-        del event
-        exit_with(None)
+    def _quit(event: KeyPressEvent) -> None:
+        # The visible back row is this screen's way out; Ctrl-C leaves lane.
+        event.app.exit(exception=Quit)
 
     @bindings.add("up")
     def _up(event: KeyPressEvent) -> None:

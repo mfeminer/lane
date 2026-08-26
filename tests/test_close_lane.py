@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from lane import session
 from lane.actions import close_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
@@ -674,10 +675,10 @@ def test_permission_to_force_delete_is_asked_before_the_worktree_is_gone(
     asked_while_present: list[bool] = []
 
     class Watching(FakeUi):
-        def confirm(self, title, *, default=False, on_render=None):  # type: ignore[no-untyped-def]
+        def confirm(self, title, *, default=False):  # type: ignore[no-untyped-def]
             if "delete it anyway" in title.lower():
                 asked_while_present.append(lane.exists())
-            return super().confirm(title, default=default, on_render=on_render)
+            return super().confirm(title, default=default)
 
     ui = Watching([True, False])
     _close(
@@ -1035,6 +1036,49 @@ def test_ctrl_c_during_the_removal_says_it_landed(
     assert ui.said("finishing")
     # The way out of a step that turns out to take far longer than it implied.
     assert ui.said("ctrl-c again")
+
+
+def test_the_removal_finishes_and_then_lane_exits_rather_than_returning_to_the_menu(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """The one carve-out in *Ctrl-C quits lane*, and it is about **when**, not whether.
+
+    The removal is the one stretch that must not stop half-way, so the interrupt is
+    deferred across it exactly as before. What changed is what happens once it is
+    honoured: the session used to report it and show the menu again, and now it leaves.
+
+    Both halves are asserted here, and the ordering is the point — every step of the
+    removal is on screen *before* the interrupt is reported, never interleaved with it.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "stopme", "feature/stopme")
+
+    ui = InterruptingUi(
+        # menu → lanes → the row → close it → confirm. Nothing after: the session ends
+        # of its own accord, and a leftover answer would prove it had not.
+        ["lanes", "stopme", "close", True],
+        at="removing the worktree",
+    )
+    context = _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest()))
+
+    assert session.run(context) == 0
+    assert ui.unanswered() == 0, "the menu never came back to be answered"
+
+    # The removal ran to completion, branch and metadata included.
+    assert not lane.exists()
+    assert store.list_lanes() == []
+    assert not CliGitBackend().branch_exists(repo, "feature/stopme")
+
+    said = [told.text for told in ui.told]
+    reported = next(index for index, text in enumerate(said) if text == "Interrupted.")
+    closed = next(index for index, text in enumerate(said) if text.startswith("Lane closed"))
+    deleted = next(
+        index for index, text in enumerate(said) if "feature/stopme" in text and index > closed
+    )
+
+    assert closed < reported, "the worktree was gone before the interrupt was honoured"
+    assert deleted < reported, "and so was the branch — the whole phase, not only the removal"
+    assert ui.told[-1].kind == "farewell", "and then lane left, by the same door quit uses"
 
 
 def test_the_rescue_is_covered_by_the_same_deferral(

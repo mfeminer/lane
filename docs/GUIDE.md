@@ -58,9 +58,9 @@ menu` row, and the main menu ends with `quit`.
 | Key | What it does |
 |---|---|
 | `↑` `↓` | move through a list or a table (`Home` / `End` jump to the ends) |
-| `Enter` | choose, or accept what you typed |
+| `Enter` | choose, act on the row under the cursor, or accept what you typed |
 | `y` / `n` | answer a yes/no question; `Enter` takes the default shown in `[y/N]` |
-| `Ctrl-C` | back out, from anywhere |
+| `Ctrl-C` | quit lane, from anywhere |
 
 That's the whole list. No `q`, no vim keys, no number shortcuts — and `Esc` is not
 bound to anything, so you never need it. In a text prompt you also get the line
@@ -71,11 +71,19 @@ The lanes table didn't add a key either — there's no `c` for close. That's why
 `Enter` on a row offers you its verbs instead of a legend telling you which letters
 do what.
 
-**One screen adds one key**, and it's the preparation screen below: `Space` ticks the row
-under the cursor. That's the universal multi-select keystroke rather than an invention of
-this tool, and it's what turns a dozen answers into a dozen keystrokes. On that screen — and
-only there — `Enter` accepts everything rather than acting on the row, because the row's
-answer is already `Space`'s job. Its footer names both, every time it's up.
+**One screen adds one key**, and it's the preparation screen below: `Space` answers the
+row under the cursor. That's the universal multi-select keystroke rather than an invention
+of this tool, and it's what turns a dozen answers into a dozen keystrokes. `Enter` there
+still means what it means everywhere else — act on the row you're standing on — so
+finishing the screen is a **row** (`apply`), exactly as going back always has been. Its
+footer names whichever of those `Enter` will do, and names nothing at all when you're on a
+file, because there `Enter` does nothing.
+
+**Ctrl-C quits lane**, wherever you are — the same door `quit` uses, and it prints the
+same goodbye. It is not a way back: going back is always something you can *see*, so you
+never have to guess. The one thing it waits for is a close that has started removing a
+worktree; that finishes first, because half a removal is worse than either outcome, and
+then lane leaves. (Press it a second time if you don't want to wait.)
 
 **Backing out is always safe.** Every question an action asks comes *before* its
 first irreversible step, so leaving half-way through leaves your disk exactly as it
@@ -83,7 +91,7 @@ was. There's nothing to undo because nothing has happened yet — which is why l
 doesn't announce anything when you go back; it just shows the menu again.
 
 Leaving closes the road behind you (`see you in the next lane`), whether you chose
-`quit` or pressed Ctrl-C at the menu.
+`quit` or pressed Ctrl-C.
 
 lane needs a terminal. Piped or redirected, it says so and exits non-zero —
 `--version` and `--help` are the exceptions and work anywhere, including CI.
@@ -233,26 +241,35 @@ Preparing demo/broken-pagination
 
     path                    size      in lane
 ❯ ✓ node_modules            1.2 GB
-  ◐ apps/ · 12 ignored paths  4.2 MB
-    console/dist            340 MB    already there
+  ? apps/ · 12 ignored paths  4.2 MB
+  ✗ vendor                  88 MB
+  ○ console/dist            340 MB    already there
 
-  2 of 14 in · 1.2 GB coming in
-  ↑↓ move · space toggle · enter accept · ctrl-c back out
+  1 of 14 in · 1.2 GB coming in
+  apply
+  discard
+  ↑↓ move · space answer
 ```
 
-**Every row is in or out, and `Space` is what changes it** — under the cursor, in place,
-one keystroke, no going into the row and back out again. `Enter` accepts the whole screen
-and carries on to your editor. A dozen paths costs a dozen keystrokes and one more.
+**Every row is in, out, or not answered yet, and `Space` is what changes it** — under the
+cursor, in place, one keystroke, no going into the row and back out again. A dozen paths
+costs a dozen keystrokes.
 
-That's the one place in lane where `Enter` doesn't act on the row you're on, and it's
-deliberate: on this screen the row's answer is `Space`'s job, so `Enter` is free to mean
-"done" — except on a folder row, which is a screen you can go *into*, and there `Enter`
-does exactly what it does everywhere else in lane: it opens the thing under the cursor.
-The footer says which of the two you're about to get, every time.
+`✓` is in, `✗` is out, and `○` means you haven't said. The first `Space` on a row answers
+it *in*; every press after that flips it. There's no press that puts it back to
+unanswered — that's where a row starts, not somewhere you can send it.
 
-Every row starts **out**, so pressing `Enter` straight away is safe: nothing is copied, and
-lane stops asking. Answers are remembered, so the **second** lane in that project asks
-nothing at all and just comes up ready.
+**`apply` and `discard` are rows, at the bottom of every level.** `apply` records
+everything you've decided and carries on to your editor; `discard` records nothing at all.
+`Enter` on either does what it says, exactly as `Enter` on a folder opens it and `Enter` on
+`← Back` goes up — the key always acts on the row you're standing on. On a file it does
+nothing, because a file's answer is `Space`'s job, and the footer stops naming it there.
+
+Leaving rows unanswered is fine and is the point of having the third state: `apply` commits
+what you decided and lane asks about the rest next time. So pressing `apply` straight away
+is safe — nothing is copied, and nothing is written down as refused on your behalf.
+Answers *are* remembered, so once you've answered a project's paths the **next** lane in it
+asks nothing at all and just comes up ready.
 
 The line above the footer keeps count — how many are in, and how much is actually about to
 be copied. Forty rows don't fit on a screen, and that line is what tells you what you've
@@ -275,9 +292,9 @@ in from there:
 
 ```
     path                        size      in lane
-❯ ◐ packages/ · 180 ignored paths  8.4 GB
-    node_modules                1.2 GB
-    .env                        1.4 KB
+❯ ? packages/ · 180 ignored paths  8.4 GB
+  ○ node_modules                1.2 GB
+  ○ .env                        1.4 KB
 ```
 
 `Enter` opens `packages/`, and you're on the level below it, with a visible way back:
@@ -289,17 +306,23 @@ in from there:
 ❯ ✓ packages/api/ · 3 ignored paths  1.1 GB
   ◐ packages/web/ · 3 ignored paths  2.2 GB
     ← Back
+    apply
+    discard
 ```
 
 **One `Space` on a folder answers everything under it**, however deep — all 180 of them
 from that first row, if that's what you want. Nobody has to descend into fourteen packages
 one at a time. Press it on a folder that's all in and it takes all of it back out.
 
-**`◐` means some in, some out.** A path has two answers and a tick says both; a folder
-stands for everything beneath it, so it has three, and a mix gets its own mark rather than
-being rounded to one of the others. A `Space` on a mixed folder brings the **whole** thing
-in (the press after that takes it all out), so the row's panel tells you how many paths
-that is before you press it.
+**A folder's mark has two more states than a path's**, because it stands for everything
+beneath it: `?` means there's still an unanswered path down there, and `◐` means it's all
+answered and the answers disagree. They're deliberately different marks — one of them is
+work you still have to come back to and the other isn't. A `Space` on a folder that isn't
+already all-in brings the **whole** thing in (the press after that takes it all out), so
+the row's panel tells you how many paths that is before you press it.
+
+**`← Back` keeps everything you've answered.** It moves the cursor up a level and nothing
+else; only `discard` throws answers away, and it says so on the panel while you're on it.
 
 Levels with nothing to choose between don't get a screen of their own:
 
@@ -313,18 +336,18 @@ it, cursor included.
 
 > **A folder row is never an answer about the folder itself.** That directory is only
 > *partly* ignored — that's why its files were listed one by one — so it holds your tracked
-> work too. Ticking a folder records one answer per file inside it and never touches the
+> work too. Answering a folder records one answer per file inside it and never touches the
 > directory. Which also means a file that turns up there later is one lane hasn't been told
 > about, so it asks, rather than quietly sweeping it in.
 
-### What a tick actually does
+### What answering a path *in* actually does
 
-A ticked path is copied in from your main clone. On APFS that's a copy-on-write clone: a
+A path answered *in* is copied in from your main clone. On APFS that's a copy-on-write clone: a
 64 MB tree takes about a third of a millisecond and no extra disk until something writes to
 it. That's what makes this cheap rather than merely automatic. If your projects and lanes
 folders are on **different** volumes it can't be a clone at all and becomes a real copy —
 slow, and real disk. `doctor` tells you which you've got, and settings warns you when you
-tick something and the answer is no.
+bring something in and the answer is no.
 
 There's one other kind of step, and it isn't a path: a **command** to run when a lane
 opens. A command isn't something lane can discover, so it's added from **settings →
@@ -335,10 +358,12 @@ skips one that doesn't.
 A path your branch actually *tracks* is never offered at all — lane will not write over
 your files, and a prepared lane still reads `✓ clean`.
 
-> **There used to be a third answer, `link`** — a symlink into your main clone, always
-> current and stored once rather than once per lane. It's gone. A row asks one question with
-> two answers, and a checkbox can't carry a third; a screen you had to go *into* to change an
-> answer is what this replaced. If lane finds a `link` in an older `prepare.toml` it asks
+> **There used to be a third thing lane could *do* to a path, `link`** — a symlink into
+> your main clone, always current and stored once rather than once per lane. It's gone. A
+> row asks one question — *does this come into the lane* — with two answers, and one
+> keystroke can't carry a third; a screen you had to go *into* to change an answer is what
+> this replaced. (Not to be confused with the row's three *states*: `○` isn't a third thing
+> lane can do, it's not having been asked yet.) If lane finds a `link` in an older `prepare.toml` it asks
 > about that path again, and the symlink already in your lane simply reads as `already
 > there`.
 
@@ -351,10 +376,10 @@ The row says so, in its own column, before you answer:
 ❯ ✓ apps/web/node_modules      1.2 GB    already there
 ```
 
-**A tick never overwrites what your lane changed.** You may have patched something inside
-that tree; ticking the row leaves it exactly as it is, and lane does nothing at all for it.
-The column is there so a tick that's a no-op and a tick that copies a gigabyte don't look
-the same.
+**Answering it *in* never overwrites what your lane changed.** You may have patched
+something inside that tree; the answer leaves it exactly as it is, and lane does nothing at
+all for it. The column is there so an answer that's a no-op and one that copies a gigabyte
+don't look the same.
 
 ### Changing an answer later
 
@@ -781,11 +806,11 @@ your editor command is on PATH. lane prints the path so you can open it yourself
 name, or the project directory was renamed. Answers are keyed by project name; check
 **settings → preparation**.
 
-**A path I ticked isn't in my lane** — it has to exist in your main clone for there to be
-anything to copy, and it has to be ignored by the lane's own `.gitignore`. A lane branched
-from an older base that predates the `.gitignore` entry ignores nothing, so nothing is
-offered. And if the path was **already there**, ticking it does nothing on purpose: lane
-never overwrites what your lane changed.
+**A path I answered *in* isn't in my lane** — it has to exist in your main clone for there
+to be anything to copy, and it has to be ignored by the lane's own `.gitignore`. A lane
+branched from an older base that predates the `.gitignore` entry ignores nothing, so
+nothing is offered. And if the path was **already there**, answering it *in* does nothing
+on purpose: lane never overwrites what your lane changed.
 
 **Bringing paths in is slow and eating disk** — your projects and lanes folders are on
 different volumes, so it can't be a copy-on-write clone. `doctor` says so explicitly; leave

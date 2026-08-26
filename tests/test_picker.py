@@ -14,7 +14,7 @@ from prompt_toolkit.input.base import PipeInput
 from prompt_toolkit.output import DummyOutput
 
 from lane.ui.picker import confirm, pick, prompt_text
-from lane.ui.seam import Abandoned, Choice
+from lane.ui.seam import Abandoned, Choice, Quit
 
 
 @pytest.fixture
@@ -108,8 +108,11 @@ def test_escape_is_not_bound_and_does_nothing(keys: PipeInput) -> None:
     assert _pick(keys, "\x1b\r") == "open"
 
 
-def test_ctrl_c_abandons_rather_than_killing_the_session(keys: PipeInput) -> None:
-    with pytest.raises(Abandoned):
+def test_ctrl_c_quits_lane_rather_than_backing_out_of_the_prompt(keys: PipeInput) -> None:
+    """Backing out here is the `← Back` entry the `Ui` layer appends, which is a row you
+    can see. That leaves Ctrl-C free to mean what it means in every other terminal
+    program — leave — and the session ends by the same door `quit` uses."""
+    with pytest.raises(Quit):
         _pick(keys, "\x03")
 
 
@@ -189,12 +192,12 @@ def test_confirm_ignores_unrecognised_keys_rather_than_aborting(keys: PipeInput)
     assert confirm("Close it?", input=keys, output=DummyOutput()) is True
 
 
-def test_confirm_ctrl_c_abandons(keys: PipeInput) -> None:
-    for key in ("\x03",):
-        with create_pipe_input() as pipe:
-            pipe.send_text(key)
-            with pytest.raises(Abandoned):
-                confirm("Close it?", input=pipe, output=DummyOutput())
+def test_confirm_ctrl_c_quits_lane(keys: PipeInput) -> None:
+    del keys
+    with create_pipe_input() as pipe:
+        pipe.send_text("\x03")
+        with pytest.raises(Quit):
+            confirm("Close it?", input=pipe, output=DummyOutput())
 
 
 # -- macOS Option+Arrow, and why Escape must not be eager -------------------------
@@ -279,7 +282,7 @@ def test_escape_in_a_text_prompt_leaves_word_movement_alone(keys: PipeInput) -> 
     assert prompt_text("Say", input=keys, output=DummyOutput()) == "one Xtwo"
 
 
-def test_ctrl_c_abandons_a_text_prompt(keys: PipeInput) -> None:
+def test_ctrl_c_quits_lane_from_a_text_prompt(keys: PipeInput) -> None:
     keys.send_text("\x03")
-    with pytest.raises(Abandoned):
+    with pytest.raises(Quit):
         prompt_text("Anything", input=keys, output=DummyOutput())

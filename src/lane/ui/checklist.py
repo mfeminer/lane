@@ -1,4 +1,4 @@
-"""A tree of rows, each in or out, changed under the cursor with one keystroke.
+"""A tree of rows, each in, out or not yet answered, changed under the cursor with one key.
 
 The table's layout with a mark in front of every row, and the one screen in lane
 whose rows carry their own answer. It sits **below** the `Ui` seam for the same
@@ -10,9 +10,18 @@ reason the picker and the table do — a component with its own tests, driven th
 Two hundred ignored paths drawn flat is not a screen, it is an ordeal, so the rows
 are the branching points and a folder is something you go **into**: the same "you
 stand in it and act on it" screen the lanes table is, one level at a time, with a
-visible `← Back` row exactly as everywhere else. A folder's mark is three-state,
-because it stands for every leaf beneath it and those can be all in, all out, or a
-mix — `◐` (docs/CONVENTIONS.md §5). A leaf keeps the two it always had.
+visible `← Back` row exactly as everywhere else.
+
+## Three answers per leaf, five states per folder
+
+A leaf is **in**, **out**, or **not yet answered** — and the third is not a nicety. With
+two states, *out* was the absence of an answer, so a row the user had deliberately kept
+out and one they simply had not got to were the same thing; accepting a screen therefore
+filed a refusal for every row nobody had looked at, and the path was never offered again.
+`Answers` (`seam.py`) is the shape that can tell them apart, and `mark_for` is the
+partition that draws them: `✓`, `✗`, `○`, and for a folder — which stands for every leaf
+beneath it — `?` when a question is still open under there and `◐` when it is fully
+answered and its paths disagree (docs/CONVENTIONS.md §5).
 
 ## It binds one key the rest of lane does not
 
@@ -20,24 +29,28 @@ mix — `◐` (docs/CONVENTIONS.md §5). A leaf keeps the two it always had.
 |---|---|
 | `↑` `↓` `Home` `End` | move |
 | `Space` | answer the row under the cursor — a leaf, or every leaf under a folder |
-| `Enter` | open the folder under the cursor; anywhere else accept the level you are in |
-| `Ctrl-C` | back out |
+| `Enter` | act on the row under the cursor, whatever that row is |
+| `Ctrl-C` | quit lane |
 
 `Space` is the addition, and it was decided deliberately rather than slipped in
 (AGENTS.md, *Going back is visible*): this is the universal multi-select convention,
 it is what makes a dozen answers a dozen keystrokes, and a screen where `Enter`
-answered the row would need a second key to accept — which is the vocabulary this one
+answered the row would need a second key to finish — which is the vocabulary this one
 is spending its budget on.
 
-**`Enter` opens the row if it opens, and otherwise accepts the level you are standing
-in** — which at the root is the screen, exactly what it has always meant here, and
-inside a folder is that folder, so a stray press cannot end preparation from three
-levels down. The footer names whichever of the two applies to the row under the
-cursor, because a screen says what its keys do.
+**`Enter` does to a row exactly what that row *is***: opens a folder, leaves the level
+from `← Back`, accepts from `apply`, abandons from `discard`, and nothing at all on a
+leaf, whose answer is `Space`'s job. No fallthrough, so no row's behaviour has to be
+worked out from how deep the screen happens to be — which is what the fallthrough this
+replaced got wrong twice over (see `_action`, and `tail_rows` for where the accept went).
 
-The root has no `← Back` row: it is the level with nothing above it, so its way out is
-the footer hint, exactly as `text` and `confirm` do it (docs/CONVENTIONS.md §2). Every
-level inside a folder has one, because it has somewhere to go back to.
+## The rows below the tree
+
+`← Back` where there is a level above, then `apply` and `discard`, on **every** level.
+Accepting and abandoning are rows for the same reason going back always has been: a
+screen whose way forward is a keystroke you have to know is the same fault as one whose
+way back is. The root has no `← Back` — it is the level with nothing above it — and it
+has the other two like every level does.
 
 ## Why not prompt_toolkit's `CheckboxList`
 
@@ -51,7 +64,7 @@ paint. All four are things this screen needs, and all four the table already has
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.formatted_text import FormattedText
@@ -64,7 +77,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 
 from lane.ui.picker import ESCAPE_TIMEOUT
-from lane.ui.seam import BACK_LABEL, Abandoned, Column, Fill, Node
+from lane.ui.seam import BACK_LABEL, Abandoned, Answers, Column, Fill, Node, Quit
 from lane.ui.table import (
     CURSOR_WIDTH,
     GAP,
@@ -79,63 +92,182 @@ from lane.ui.table import (
     window,
 )
 
-ACCEPT, OPEN, UP = "accept", "open", "go up"
-"""What `Enter` does to the row under the cursor, in the footer's words."""
+APPLY, DISCARD = "apply", "discard"
+"""The two rows every level ends with, and what `Enter` on each of them does.
+
+Rows rather than keys, exactly as `← Back` is: the vocabulary is closed (AGENTS.md,
+*Going back is visible*), and a screen whose way forward is a keystroke you have to know
+is the same fault as one whose way back is. Lower case, one word, a verb — §4, the same
+rule the menu's own entries follow.
+
+They are on **every** level, root and nested alike. Reachable only from the root is what
+the accept used to be, and on a tree whose every path sits under a folder that meant a
+screen with no way to finish at all.
+"""
+
+NOTHING, OPEN, UP = "", "open", "go up"
+"""What `Enter` does to the row under the cursor, in the footer's words.
+
+`NOTHING` is a leaf, and it is not an oversight: a leaf's answer is `Space`'s job, so
+`Enter` there has nothing left to do. What it used to do instead was decided by how deep
+the screen happened to be — accept at the root, go up anywhere else — which is how a
+press on a **file** ended up leaving the level it was pressed in. The footer stops naming
+`enter` where `enter` does nothing, rather than naming a key that teaches a lie.
+"""
 
 
-def hints(action: str = ACCEPT) -> tuple[str, ...]:
+def tail_rows(nested: bool) -> tuple[str, ...]:
+    """The rows below the tree, in the order they are drawn.
+
+    `← Back` first where there is a level to go back to, because it belongs with the
+    tree it is leaving; then the two that end every level. One function so that "apply
+    and discard are reachable at every depth" is a single fact rather than one repeated
+    in `paint`, in `Walk` and in the key bindings.
+    """
+    return ((BACK_LABEL,) if nested else ()) + (APPLY, DISCARD)
+
+
+TAIL_DETAIL = {
+    APPLY: "Records every answer given so far. Anything still unanswered is asked again.",
+    DISCARD: "Records nothing at all — every answer on this screen is thrown away.",
+    BACK_LABEL: "Goes up one level. Every answer given so far is kept.",
+}
+"""What each of the three does, for the panel under the cursor.
+
+The tree's own rows get theirs from the caller (`Row.detail`); these three are the
+widget's, so their words are too. `discard` is the one that has to be there — it is the
+only row on the screen that throws work away, and a row whose label is a single verb
+cannot say by itself how much that verb covers.
+"""
+
+
+def hints(action: str = NOTHING) -> tuple[str, ...]:
     """The hint, and what it becomes on a terminal too narrow for it.
 
     One hint per widget, not one per call site (docs/CONVENTIONS.md §2). It names
-    `space` because `space` is the key this screen adds, and `enter` because `enter`
-    means something different here; the table's hint names neither, because the table
-    adds none.
+    `space` because `space` is the key this screen adds, and names what `enter` will do
+    to the row under the cursor because that differs per row; the table's hint names
+    neither, because the table adds no key and `Enter` there always means one thing.
 
-    §2 requires the one way out to be *visible*, and a hint clipped to `ctr…` is not. So
-    it gives things up in the order they can be spared: the arrows first, because nobody
-    needs telling that arrows move; then what each key *does*, because the keys
-    themselves are the part that has to survive. `ctrl-c back out` is never shortened —
-    it is the only thing on the screen that says how to leave.
+    It gives things up in the order they can be spared: the arrows first, because nobody
+    needs telling that arrows move; then what each key *does*, because the keys themselves
+    are the part that has to survive.
+
+    `ctrl-c back out` is **not** in it, and used to be. It was there because Ctrl-C meant
+    something lane-specific on this screen — *back out* — and a hint clipped to `ctr…`
+    would not have made that visible. Neither half of that reasoning survives: the way
+    out is the `discard` row, which is visible in the way §2 actually asks for, and
+    Ctrl-C now means the one thing every terminal user already assumes it means
+    (AGENTS.md, *Ctrl-C quits lane*).
     """
+    if not action:
+        # A leaf, where `enter` does nothing. Naming it would be worse than silence.
+        return ("↑↓ move · space answer", "space answer", "space")
     return (
-        f"↑↓ move · space toggle · enter {action} · ctrl-c back out",
-        f"space toggle · enter {action} · ctrl-c back out",
-        "space · enter · ctrl-c back out",
+        f"↑↓ move · space answer · enter {action}",
+        f"space answer · enter {action}",
+        "space · enter",
     )
 
 
 HINT = hints()[0]
 
 TICK = "✓ "
-"""`✓` already means *this is fine* elsewhere; here it means *this one is in*. Same
+"""Every leaf this row stands for is **in**.
+
+`✓` already means *this is fine* elsewhere; here it means *this one is in*. Same
 symbol, no new one — and the meaning is carried by the tick's presence rather than
 by its colour (docs/CONVENTIONS.md §5, §6)."""
 
-MIXED = "◐ "
-"""Some of what this row stands for is in and some is out — a folder only, never a leaf.
+CROSS = "✗ "
+"""Every leaf this row stands for is **explicitly out**, and none is unanswered.
 
-The one new symbol this screen needed, and it needed one: a folder has three answers
-where a path has two, and the two that already exist both mean *all of them*. `✗` was
-never a candidate — it means refused/failed everywhere else in lane, and *out* is
-already said by the absence of a mark rather than by a glyph of its own.
+A widened use of `✗` rather than a fourth glyph, exactly the move `TICK` already made:
+`✗` means refused/failed elsewhere in lane, and *out* is the same family of meaning —
+this row was refused. What separates it from *unanswered* is which mark is present, not
+what colour it is drawn in (§5, §6). *Out* used to be the absence of a mark, which is
+precisely what could not be told apart from a question nobody had answered.
+"""
+
+UNSET = "○ "
+"""**Nothing** this row stands for has been answered — an empty ring for an empty answer.
+
+The state the old two-state screen could not draw, because it had no glyph left: *out*
+was the absence of a mark, so a row nobody had touched and a row deliberately left out
+looked identical. Every row starts here.
+"""
+
+PARTLY = "? "
+"""**Something** under this row is still unanswered — a folder only, never a leaf.
+
+Deliberately not another circle. `○`/`◐`/`✗`/`✓` all answer *how much of this is in*, and
+this one answers a different question — *is there still a question in here* — so a shape
+from that family would be read as a fifth fill level and mistaken for `◐`. `?` cannot be:
+it is the one mark on the screen that is not a circle at all, which is what §5 asks for
+when two states mean different things and must not be told apart by colour alone.
+"""
+
+MIXED = "◐ "
+"""Every leaf beneath is answered, and they disagree — a folder only, never a leaf.
+
+A folder has more answers than a path, and the marks that say *all in* and *all out* both
+mean *all of them*, so a mix forced into either is a row that lies about paths not on
+screen. Distinct from `?`: this folder has no question left in it, it has a real mix of
+answers (docs/CONVENTIONS.md §5).
 """
 
 BLANK = "  "
+"""No mark: the gutter of a row that carries no answer — `← Back`, `apply`, `discard`."""
 
 SUMMARY_LINES = 1
 """The running count sits between the panel and the footer, always drawn."""
 
-_MARK_STYLES = {TICK: "class:table.good", MIXED: "class:table.warn", BLANK: ""}
+_MARK_STYLES = {
+    TICK: "class:table.good",
+    CROSS: "class:table.bad",
+    UNSET: "class:table.warn",
+    PARTLY: "class:table.warn",
+    MIXED: "class:table.warn",
+    BLANK: "",
+}
 """Colour decorates the mark; the mark is what carries the meaning (§6)."""
 
 
-def mark_for(node: Node[object], checked: frozenset[object]) -> str:
-    """`✓` all in, `◐` a mix, blank all out. A leaf stands for itself, so it has two."""
+def mark_for[T](node: Node[T], answers: Answers[T]) -> str:
+    """Which of the five states a row is in, from the counts of what is beneath it.
+
+    The partition over a folder's `in`/`out`/`unset` leaves. Its five cases are mutually
+    exclusive and exhaustive, which is a property worth having in one place: a folder
+    stands for paths that are not on screen, so a state with no mark of its own would be
+    drawn as one of the others and lie about them.
+
+    | | |
+    |---|---|
+    | `unset == total` | nothing here is answered — `○` |
+    | `0 < unset < total` | something here is still unanswered — `?` |
+    | `unset == 0 and in == total` | all in — `✓` |
+    | `unset == 0 and out == total` | all out — `✗` |
+    | `unset == 0 and 0 < in < total` | decided, and they disagree — `◐` |
+
+    A **leaf** is the degenerate case of the same partition rather than a rule of its
+    own: it stands for one value, so `total` is 1 and only the first three rows can ever
+    apply — which is exactly its three answers. That is why there is one function here
+    and not two, and why `◐` and `?` cannot appear on a path.
+    """
     leaves = node.leaves
-    inside = sum(1 for value in leaves if value in checked)
-    if not inside:
-        return BLANK
-    return TICK if inside == len(leaves) else MIXED
+    inside = sum(1 for value in leaves if answers.get(value) is True)
+    outside = sum(1 for value in leaves if answers.get(value) is False)
+    unanswered = len(leaves) - inside - outside
+
+    if unanswered == len(leaves):
+        return UNSET
+    if unanswered:
+        return PARTLY
+    if inside == len(leaves):
+        return TICK
+    if outside == len(leaves):
+        return CROSS
+    return MIXED
 
 
 def leaves_of(nodes: Sequence[Node[object]]) -> tuple[object, ...]:
@@ -143,33 +275,39 @@ def leaves_of(nodes: Sequence[Node[object]]) -> tuple[object, ...]:
     return tuple(value for node in nodes for value in node.leaves)
 
 
-def paint(
+def paint[T](
     title: str,
     columns: Sequence[Column],
-    nodes: Sequence[Node[object]],
+    nodes: Sequence[Node[T]],
     *,
-    checked: frozenset[object],
+    answers: Answers[T],
     cursor: int,
     top: int,
     width: int,
     height: int,
     summary: str = "",
     total: int | None = None,
-    back: str = "",
+    nested: bool = False,
 ) -> Painted:
     """Draw one frame of one level. Pure, which is what makes the layout rules testable.
 
-    `back` is the visible way up, drawn as a row like any other exactly as the lanes
-    table draws its own; empty is the root, which has nowhere to go up to. `total` is how
+    `nested` says whether this level has one above it, which is the only thing that
+    differs between the root's trailing rows and a folder's: `apply` and `discard` are
+    drawn on both, `← Back` only where there is somewhere to go back to. `total` is how
     many leaves the whole tree holds — the count means the same thing on every screen of
     it, so a level cannot be asked to work it out from what it can see.
     """
     rows = [node.row for node in nodes]
-    shown_rows = len(rows) + (1 if back else 0)
+    tail = tail_rows(nested)
+    shown_rows = len(rows) + len(tail)
     cursor = max(0, min(cursor, shown_rows - 1)) if shown_rows else 0
-    on_back = bool(back) and cursor == len(rows)
+    on_tail = cursor >= len(rows)
 
-    wanted = () if on_back or not rows else rows[cursor].detail[:MAX_DETAIL_LINES]
+    wanted: tuple[str, ...] = ()
+    if on_tail:
+        wanted = (TAIL_DETAIL[tail[cursor - len(rows)]],)
+    elif rows:
+        wanted = rows[cursor].detail[:MAX_DETAIL_LINES]
     room, detail = vertical(height, wanted, extra=SUMMARY_LINES)
     top = window(shown_rows, cursor, top, room)
 
@@ -187,12 +325,14 @@ def paint(
         fragments.append(("", "\n"))
 
     for position in range(top, min(top + room, shown_rows)):
-        if position == len(rows):
-            fragments.append(("class:table.pointer", "❯ " if on_back else "  "))
-            fragments.append(("class:table.selected" if on_back else "", f"{BLANK}{back}"))
+        if position >= len(rows):
+            here = position == cursor
+            fragments.append(("class:table.pointer", "❯ " if here else "  "))
+            label = tail[position - len(rows)]
+            fragments.append(("class:table.selected" if here else "", f"{BLANK}{label}"))
             fragments.append(("", "\n"))
             continue
-        mark = mark_for(nodes[position], checked)
+        mark = mark_for(nodes[position], answers)
         fragments += row_fragments(
             rows[position],
             kept,
@@ -210,7 +350,8 @@ def paint(
     if detail:
         fragments.append(("", "\n"))
 
-    counted = tally(len(checked), len(leaves_of(nodes)) if total is None else total)
+    inside = sum(1 for answer in answers.values() if answer)
+    counted = tally(inside, len(leaves_of(nodes)) if total is None else total)
     if summary:
         counted = f"{counted} · {summary}"
     fragments.append(("class:table.panel", f"  {clip(counted, width - 2)}"))
@@ -219,7 +360,7 @@ def paint(
     shown = ""
     if shown_rows > room:
         shown = f" · {top + 1}–{min(top + room, shown_rows)} of {shown_rows}"
-    action = _action(nodes, cursor, on_back=on_back, nested=bool(back))
+    action = _action(nodes, cursor, tail=tail)
     fragments.append(
         ("class:table.footer", f"  {clip(footer(width - 2, shown, action), width - 2)}")
     )
@@ -227,20 +368,24 @@ def paint(
     return Painted(fragments=fragments, top=top, room=room)
 
 
-def _action(nodes: Sequence[Node[object]], cursor: int, *, on_back: bool, nested: bool) -> str:
-    """What `Enter` will do to the row under the cursor, for the footer to say."""
-    if on_back:
-        return UP
-    if cursor < len(nodes) and nodes[cursor].children:
-        return OPEN
-    return UP if nested else ACCEPT
+def _action[T](nodes: Sequence[Node[T]], cursor: int, *, tail: Sequence[str]) -> str:
+    """What `Enter` will do to the row under the cursor, for the footer to say.
+
+    One rule, and it is the whole of §1's table: what `Enter` does depends on nothing
+    except what the row under the cursor **is**. No fallthrough, so there is no row whose
+    behaviour has to be worked out from how deep the screen happens to be.
+    """
+    if cursor >= len(nodes):
+        label = tail[cursor - len(nodes)]
+        return UP if label == BACK_LABEL else label
+    return OPEN if nodes[cursor].children else NOTHING
 
 
-def footer(width: int, shown: str = "", action: str = ACCEPT) -> str:
+def footer(width: int, shown: str = "", action: str = NOTHING) -> str:
     """The longest hint that fits, with the scroll position where there is room for it.
 
-    The position goes before any of the hint does: `1–19 of 40` is a convenience, and the
-    hint is the only thing on screen saying how to leave.
+    The position goes before any of the hint does: `1–19 of 40` is a convenience, and
+    what the keys do is the part a screen has to keep saying.
     """
     available = hints(action)
     for hint in available:
@@ -306,12 +451,19 @@ class Walk[T]:
         return nodes, title
 
     def rows_here(self) -> int:
-        """Rows on this screen, the visible way back included."""
+        """Rows on this screen, the trailing ones included."""
         nodes, _ = self.level()
-        return len(nodes) + (1 if self.nested else 0)
+        return len(nodes) + len(tail_rows(self.nested))
+
+    def tail_row(self) -> str:
+        """Which of the trailing rows the cursor is on, or `""` when it is on the tree."""
+        nodes, _ = self.level()
+        tail = tail_rows(self.nested)
+        position = self.index - len(nodes)
+        return tail[position] if 0 <= position < len(tail) else ""
 
     def node(self) -> Node[T] | None:
-        """The node under the cursor, or None on the way-back row."""
+        """The node under the cursor, or None on one of the trailing rows."""
         nodes, _ = self.level()
         return nodes[self.index] if self.index < len(nodes) else None
 
@@ -351,8 +503,8 @@ def _title_of(node: Node[object]) -> str:
 
 def bindings_for[T](
     walk: Walk[T],
-    checked: set[T],
-    exit_with: Callable[[frozenset[T] | None], None],
+    answered: dict[T, bool],
+    exit_with: Callable[[Answers[T] | None], None],
 ) -> KeyBindings:
     """The keys this checklist answers to: the picker's set, plus `Space`.
 
@@ -365,9 +517,10 @@ def bindings_for[T](
         return max(1, walk.rows_here())
 
     @bindings.add("c-c")
-    def _abandon(event: KeyPressEvent) -> None:
-        del event
-        exit_with(None)
+    def _quit(event: KeyPressEvent) -> None:
+        # Not this screen's way back — `discard` is that, and `← Back` the way up a
+        # level. Ctrl-C leaves lane, from any depth, as it does at every other prompt.
+        event.app.exit(exception=Quit)
 
     @bindings.add("up")
     def _up(event: KeyPressEvent) -> None:
@@ -394,28 +547,43 @@ def bindings_for[T](
         del event
         node = walk.node()
         if node is None:
-            return  # the way-back row answers nothing
-        leaves = set(node.leaves)
+            return  # `← Back`, `apply` and `discard` answer nothing
         # The cursor does not move. "The answer changes under the cursor, in place"
         # is the whole requirement, and a list that advances on toggle makes
         # correcting the row you just ticked a two-key job.
-        #
-        # A folder is all of its leaves at once, and a **mix goes in** rather than out:
-        # *in* is the answer somebody reaching for a directory row is after, and the
-        # press after it takes the whole subtree out.
-        if leaves <= checked:
-            checked.difference_update(leaves)
-        else:
-            checked.update(leaves)
+        leaves = node.leaves
+        if not node.children:
+            # A leaf: the first press *answers* it, and every press after it changes
+            # the answer. Unset is where a row starts, never somewhere Space can put
+            # it back — a screen that could un-answer a row would make "I have
+            # decided about this one" impossible to state.
+            answered[leaves[0]] = not answered.get(leaves[0], False)
+            return
+        # A folder is all of its leaves at once, and everything short of *all in* goes
+        # **in**: *in* is the answer somebody reaching for a directory row is after, and
+        # the press after it takes the whole subtree out. An unanswered leaf counts
+        # towards "not all in", so one press on a folder nobody has touched brings it in.
+        inside = all(answered.get(value) is True for value in leaves)
+        for value in leaves:
+            answered[value] = not inside
 
     @bindings.add("enter")
-    def _accept(event: KeyPressEvent) -> None:
+    def _chosen(event: KeyPressEvent) -> None:
         del event
-        if walk.enter():
+        # What `Enter` does is decided by what the row **is**, and by nothing else. The
+        # "otherwise leave, otherwise accept" fallthrough this replaced is what sent
+        # `Enter` on a *file* up a level, and what left the accept reachable only from a
+        # root-level leaf — which a tree whose paths all sit under folders does not have.
+        if walk.node() is not None:
+            walk.enter()  # a folder opens; on a leaf there is nothing to open
             return
-        if walk.leave():
-            return
-        exit_with(frozenset(checked))
+        match walk.tail_row():
+            case label if label == BACK_LABEL:
+                walk.leave()
+            case label if label == APPLY:
+                exit_with(dict(answered))
+            case _:
+                exit_with(None)
 
     return bindings
 
@@ -425,14 +593,14 @@ def check[T](
     columns: Sequence[Column],
     rows: Callable[[], Sequence[Node[T]]],
     *,
-    checked: Iterable[T] = (),
-    summary: Callable[[frozenset[T]], str] | None = None,
+    answers: Answers[T] | None = None,
+    summary: Callable[[Answers[T]], str] | None = None,
     fill: Fill | None = None,
     on_render: Callable[[str], None] | None = None,
     input: Input | None = None,
     output: Output | None = None,
-) -> frozenset[T]:
-    """Every leaf that was in when `Enter` accepted the root. `Ctrl-C` raises `Abandoned`.
+) -> Answers[T]:
+    """Every leaf that was answered when `apply` was chosen. `discard` raises `Abandoned`.
 
     The answers are the widget's own, unlike the table's `rows`: in-or-out is the whole
     of what this screen records, so there is nothing about what an answer *means*
@@ -443,26 +611,26 @@ def check[T](
     `summary` is the caller's half of the running count — *how much* is coming in,
     which only the action knows, beside the widget's *how many*.
     """
-    ticked: set[T] = set(checked)
+    ticked: dict[T, bool] = dict(answers or {})
     walk: Walk[T] = Walk(rows)
 
     def render() -> FormattedText:
         nodes, here = walk.level()
         walk.clamp()
         size = application.output.get_size()
-        settled = frozenset(ticked)
+        settled = dict(ticked)
         painted = paint(
             here or title,
             columns,
             nodes,
-            checked=settled,
+            answers=settled,
             cursor=walk.index,
             top=walk.top,
             width=size.columns,
             height=size.rows - 1,
             summary=summary(settled) if summary is not None else "",
             total=len(leaves_of(list(rows()))),
-            back=BACK_LABEL if walk.nested else "",
+            nested=walk.nested,
         )
         walk.top = painted.top
         if on_render is not None:

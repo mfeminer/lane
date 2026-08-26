@@ -12,7 +12,7 @@ through to the next statement.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -23,6 +23,21 @@ class Abandoned(Exception):
     Not an error: the session catches it and returns to the menu. Because every
     question an action asks comes before its first irreversible step, this is
     always a clean no-op.
+    """
+
+
+class Quit(Exception):
+    """The user pressed Ctrl-C. Leave lane.
+
+    A different thing from `Abandoned`, and the difference is the whole point: backing
+    out is a **visible row** — `← Back`, `discard`, the menu's `quit`-adjacent entries —
+    and it returns to the screen above. Ctrl-C is not a way back at all any more, so it
+    cannot share an exception with one. The session ends by the same door `quit` uses,
+    farewell included.
+
+    Not `KeyboardInterrupt`: that one means the interrupt landed while lane was *working*,
+    where a step may be half-done and the session says so. At a prompt nothing is under
+    way, so saying it would be a lie. Two situations, two exceptions, one outcome.
     """
 
 
@@ -85,10 +100,11 @@ class Row[T]:
 class Node[T]:
     """One row of a checklist, and whatever it stands for.
 
-    A **leaf** has no children: it is one thing, with one two-state answer, and its
+    A **leaf** has no children: it is one thing, with one answer of its own, and its
     `value` is what comes back when the screen is accepted. A node **with** children is
     a folder: a row you can go into, standing for every leaf beneath it however deep —
-    which is three answers rather than two, all in, all out or a mix.
+    which is five states rather than a leaf's three, because it can also be *partly*
+    unanswered (`Answers`, and `checklist.mark_for`).
 
     The tree is the caller's; one level of it is a screen. Nothing about what the
     answers *mean* lives here, exactly as with `Row`.
@@ -115,7 +131,18 @@ that, "render what is known and fill the rest in" could only be tested with slee
 """
 
 
-type Summary[T] = Callable[[frozenset[T]], str]
+type Answers[T] = Mapping[T, bool]
+"""Every leaf that has been **answered**, and which way — in (`True`) or out (`False`).
+
+A key that is **absent** is the third answer: *nobody has said*. Two states could not
+hold it — a set knows "in it" or "not in it", so *explicitly out* and *never asked*
+collapsed into one thing, and a screen accepted with rows nobody had looked at recorded
+a decision for every one of them. Three states are what let `apply` mean "commit what I
+have decided" rather than "answer everything I did not touch".
+"""
+
+
+type Summary[T] = Callable[[Answers[T]], str]
 """What the caller can add to a checklist's running count that the widget cannot know.
 
 The widget counts *how many* are in, because it owns the ticks. *How much* — the total
@@ -181,12 +208,12 @@ class Ui(Protocol):
         columns: Sequence[Column],
         rows: Callable[[], Sequence[Node[T]]],
         *,
-        checked: Iterable[T] = (),
+        answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
         on_render: Callable[[str], None] | None = None,
-    ) -> frozenset[T]:
-        """Every row in or out, changed under the cursor: what was in on `Enter`.
+    ) -> Answers[T]:
+        """Every leaf that was answered, and which way, when `apply` was chosen.
 
         The third screen shape, and the one for a decision taken over a *set*: `choose`
         asks one question, `browse` is a screen you stand in and act on one row of, and
@@ -194,20 +221,28 @@ class Ui(Protocol):
         keystroke changes it.
 
         `rows` is a **tree**, one level of it per screen, because two hundred ignored
-        paths drawn flat is not a screen. A `Node` with no children is a leaf and has the
-        two answers it always had; one with children is a folder standing for every leaf
-        beneath it, so it has three — all in, all out, or a mix — and only leaves are ever
+        paths drawn flat is not a screen. A `Node` with no children is a leaf; one with
+        children is a folder standing for every leaf beneath it, and only leaves are ever
         returned. `Space` answers the row under the cursor, a folder and all of it at
-        once; `Enter` opens the folder under the cursor, and anywhere else accepts the
-        level you are standing in, which at the root is the screen. Both were decided
-        deliberately; see `checklist.py`.
+        once. `Enter` does to a row exactly what that row *is*: it opens a folder, leaves
+        a level from `← Back`, accepts from `apply`, abandons from `discard`, and on a
+        leaf it does nothing at all — the leaf's answer is `Space`'s job.
 
-        `checked` is what arrives already answered, so settings can open the same screen
-        over decisions made months ago and show them as they stand.
+        **Three answers per leaf, not two**: in, out, and *not yet answered*, which is
+        where every row starts (`Answers`). A leaf left unanswered is absent from the
+        result, so a caller records nothing for it and can ask again — which is what
+        makes `apply` mean "commit what I have decided" on a screen that still has
+        unanswered rows on it.
 
-        The root has no `back` row: it is the level with nothing above it, so the way out
-        is the footer hint, exactly as `text` and `confirm` do it. Every level inside a
-        folder has one. `Ctrl-C` raises `Abandoned` as everywhere else.
+        `answers` is what arrives already answered, so settings can open the same screen
+        over decisions made months ago and show them as they stand — including the paths
+        it has no answer for, which two states could not tell from the ones it refused.
+
+        `apply` and `discard` are rows on **every** level, root and nested alike, so
+        neither is reachable only by walking back to the top; `← Back` is drawn above
+        them wherever there is a level to go back to, and moves the cursor without
+        discarding anything. `discard` raises `Abandoned`. `Ctrl-C` quits lane, as
+        everywhere else.
         """
         ...
 
@@ -216,12 +251,8 @@ class Ui(Protocol):
         title: str,
         *,
         default: str = "",
-        on_render: Callable[[str], None] | None = None,
     ) -> str:
-        """Free text. `q` is ordinary input here; Esc abandons.
-
-        `on_render` receives the hint as it is displayed, for tests.
-        """
+        """Free text. `q` is ordinary input here; `Ctrl-C` quits lane."""
         ...
 
     def confirm(
@@ -229,12 +260,8 @@ class Ui(Protocol):
         title: str,
         *,
         default: bool = False,
-        on_render: Callable[[str], None] | None = None,
     ) -> bool:
-        """Yes or no. Esc abandons.
-
-        `on_render` receives the hint as it is displayed, for tests.
-        """
+        """Yes or no. `Ctrl-C` quits lane."""
         ...
 
     # -- telling -------------------------------------------------------------

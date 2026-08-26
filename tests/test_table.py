@@ -21,7 +21,7 @@ from prompt_toolkit.input.base import PipeInput
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.output import DummyOutput
 
-from lane.ui.seam import Abandoned, Cell, Column, Row
+from lane.ui.seam import Abandoned, Cell, Column, Quit, Row
 from lane.ui.table import bindings_for, browse, paint
 
 BACK = "← Back to the menu"
@@ -151,8 +151,9 @@ def test_the_back_row_is_drawn_after_every_lane() -> None:
     assert positions[0] > last_lane
 
 
-def test_ctrl_c_abandons(keys: PipeInput) -> None:
-    with pytest.raises(Abandoned):
+def test_ctrl_c_quits_lane(keys: PipeInput) -> None:
+    """The visible back row is this screen's way out; Ctrl-C leaves lane."""
+    with pytest.raises(Quit):
         _browse(keys, "\x03")
 
 

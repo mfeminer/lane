@@ -1,10 +1,23 @@
 """The menu loop.
 
-Choose an action, run it, come back to the menu. The session ends when you quit.
+Choose an action, run it, come back to the menu. The session ends when you quit — or
+when you press Ctrl-C, which is the same door and prints the same farewell.
 
 This is where `Abandoned` is caught. Because every question an action asks comes
 before its first irreversible step, catching it here and looping is all the
 "rollback" lane needs — and the only kind that cannot be got wrong.
+
+It is also where the **two ways of leaving** are told apart, which is the whole of
+*Ctrl-C quits lane* (AGENTS.md):
+
+* `Quit` — Ctrl-C at a prompt, at any depth. Nothing was under way, so nothing is said.
+* `KeyboardInterrupt` — Ctrl-C while lane was *working*, including one deferred across a
+  close's removal and raised once that finished. A step may be half-done, so it says so
+  first.
+
+Both end the session, and neither returns to the menu. `Abandoned` is the one that still
+does, because it is a **visible row** — `← Back`, the checklist's `discard` — and a row
+that says *back* has to go back rather than out.
 """
 
 from __future__ import annotations
@@ -14,9 +27,14 @@ from lane.actions import ACTIONS, Action
 from lane.context import Context
 from lane.errors import LaneError
 from lane.git.backend import GitError
-from lane.ui.seam import Abandoned, Choice
+from lane.ui.seam import Abandoned, Choice, Quit
 
 EXIT_OK = 0
+"""Ctrl-C leaves the same way `quit` does, so it reports the same thing to the shell.
+
+`cli.main` still answers `130` for an interrupt that escapes the session entirely — that
+one is a lane that did not get to close its own road, which is a different fact.
+"""
 
 
 def run(context: Context, *, git_available: bool = True) -> int:
@@ -32,9 +50,10 @@ def run(context: Context, *, git_available: bool = True) -> int:
     while True:
         try:
             action = _choose_action(context)
-        except Abandoned:
-            # Ctrl-C at the menu ends the session cleanly — by the same door as quit,
-            # which is why the road is closed here too and not only below.
+        except Abandoned, Quit:
+            # The menu has nowhere above it to go back to, so both gestures end the
+            # session cleanly — by the same door as quit, which is why the road is
+            # closed here too and not only below.
             ui.farewell()
             return EXIT_OK
 
@@ -48,7 +67,27 @@ def run(context: Context, *, git_available: bool = True) -> int:
             ui.detail("  Choose 'doctor' for the details.")
             continue
 
-        _run_action(context, action)
+        try:
+            _run_action(context, action)
+        except Quit:
+            # Ctrl-C at a prompt inside the action. Nothing was under way, so this is
+            # the silent exit — the same one `quit` takes.
+            ui.farewell()
+            return EXIT_OK
+        except KeyboardInterrupt:
+            # Ctrl-C outside a prompt. Unlike the above it is *not* guaranteed to be a
+            # clean no-op — the steps that must not be left half-done defer it
+            # (`lane.interrupts`) and it arrives here once they have finished, but
+            # nothing can promise where else it struck. Saying nothing would imply it
+            # was clean.
+            ui.blank()
+            ui.error("Interrupted.")
+            ui.detail(
+                "  A step already under way may be half-done — 'lanes' shows where things stand."
+            )
+            ui.blank()
+            ui.farewell()
+            return EXIT_OK
 
 
 def _choose_action(context: Context) -> Action | None:
@@ -72,15 +111,6 @@ def _run_action(context: Context, action: Action) -> None:
         # report: every other tool simply shows the menu again. "Left as it was."
         # explained nothing to anyone who had not read the source.
         pass
-    except KeyboardInterrupt:
-        # Ctrl-C outside a prompt. Inside one it is bound and backs out silently;
-        # here it landed while a step was actually running, so unlike an abandonment
-        # it is *not* guaranteed to be a clean no-op — the steps that must not be
-        # left half-done defer it (`lane.interrupts`), but nothing can promise where
-        # else it struck. Saying nothing would imply it was clean.
-        ui.blank()
-        ui.error("Interrupted.")
-        ui.detail("  A step already under way may be half-done — 'lanes' shows where things stand.")
     except LaneError as exc:
         ui.error(str(exc))
     except GitError as exc:

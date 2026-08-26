@@ -48,7 +48,7 @@ from lane.git.backend import GitError
 from lane.lanes import Lane
 from lane.prepare import Candidate, Effect, Step, Verb, apply
 from lane.prepare.sheet import Sheet, looks_like_secrets
-from lane.ui.seam import Abandoned
+from lane.ui.seam import Quit
 
 REMEMBERED = "Answers are remembered per project — change them in settings · preparation."
 
@@ -180,15 +180,15 @@ def _ask(context: Context, repo: Path, candidates: tuple[Candidate, ...]) -> tup
     ui.detail(f"  {REMEMBERED}")
     ui.blank()
 
-    chosen = ui.check(
+    decided = ui.check(
         _title(candidates),
         sheet.columns,
         sheet.rows,
-        checked=sheet.checked,
+        answers=sheet.answers,
         summary=sheet.summary,
         fill=sheet.fill,
     )
-    answered = sheet.steps(chosen)
+    answered = sheet.steps(decided)
     _warn_about_secrets(context, answered)
     return answered
 
@@ -236,10 +236,11 @@ def _apply(context: Context, lane: Lane, repo: Path, effects: tuple[Effect, ...]
             continue
         try:
             outcome = context.ui.progress(effect.phrase(), _work(lane, repo, effect))
-        except Abandoned:
+        except Quit:
             # Zone 1's mechanism, but not its silence: earlier steps completed and are
             # real work, so saying nothing would be a lie. Nothing here is half-done —
-            # a clone is staged and swapped — so entering again is the whole repair.
+            # a clone is staged and swapped — so entering again is the whole repair,
+            # which is worth saying on the way out because lane is about to close.
             context.ui.warn(f"Interrupted while {effect.phrase().lower().rstrip('…')}")
             context.ui.detail("  Entering the lane again finishes the job.")
             raise

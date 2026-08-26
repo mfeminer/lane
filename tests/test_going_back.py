@@ -22,7 +22,7 @@ from lane.git.cli_backend import CliGitBackend
 from lane.state import StateStore
 from lane.ui.console_ui import ConsoleUi
 from lane.ui.picker import ESCAPE_TIMEOUT
-from lane.ui.seam import Abandoned, Cell, Choice, Column, Row
+from lane.ui.seam import Abandoned, Cell, Choice, Column, Quit, Row
 from tests.conftest import git
 from tests.fakes import FakeEnvironment, FakeUi, StubGitHubClient
 
@@ -192,12 +192,12 @@ def test_the_escape_sequence_timeout_stays_short() -> None:
     assert ESCAPE_TIMEOUT <= 0.1
 
 
-def test_ctrl_c_still_backs_out_of_a_choice_prompt(keys: PipeInput) -> None:
-    """Not required either, but every terminal user reaches for it."""
+def test_ctrl_c_quits_lane_from_a_choice_prompt(keys: PipeInput) -> None:
+    """The visible `← Back` entry is what backs out; Ctrl-C leaves."""
     ui = ConsoleUi()
     keys.send_text("\x03")
 
-    with pytest.raises(Abandoned):
+    with pytest.raises(Quit):
         ui.choose(
             "Pick one",
             [Choice("first", "a"), Choice("second", "b")],
@@ -224,54 +224,46 @@ def test_backing_out_of_an_action_returns_to_the_menu_without_commentary(
     assert not ui.said("cancelled")
 
 
-# -- L3: text and confirm prompts show how to back out ----
+# -- text and confirm no longer teach Ctrl-C ------------------------------------
 
 
-def test_a_text_prompt_shows_how_to_back_out(keys: PipeInput) -> None:
-    """A free-text prompt renders a dim footer naming the one way out."""
+def test_a_text_prompt_does_not_teach_ctrl_c(keys: PipeInput) -> None:
+    """The hint existed because Ctrl-C meant something lane-specific here — *back out* —
+    and relying on that being universally known was judged insufficient. It is not
+    lane-specific any more: Ctrl-C quits, which is what every terminal user already
+    assumes, and a footer teaching that is a footer teaching nothing."""
     seen: list[str] = []
     ui = ConsoleUi()
     keys.send_text("test answer\r")
 
-    ui.text(
-        "What are you working on",
-        input=keys,
-        output=DummyOutput(),
-        on_render=seen.append,
-    )
+    ui.text("What are you working on", input=keys, output=DummyOutput())
 
-    assert any("ctrl-c" in line.lower() for line in seen), seen
+    assert not any("ctrl-c" in line.lower() for line in seen), seen
 
 
-def test_a_confirm_prompt_shows_how_to_back_out(keys: PipeInput) -> None:
-    """A yes/no prompt renders a dim footer naming the one way out."""
+def test_a_confirm_prompt_does_not_teach_ctrl_c(keys: PipeInput) -> None:
     seen: list[str] = []
     ui = ConsoleUi()
     keys.send_text("y")
 
-    ui.confirm(
-        "Close it?",
-        input=keys,
-        output=DummyOutput(),
-        on_render=seen.append,
-    )
-
-    assert any("ctrl-c" in line.lower() for line in seen), seen
+    assert ui.confirm("Close it?", input=keys, output=DummyOutput()) is True
+    assert not any("ctrl-c" in line.lower() for line in seen), seen
 
 
 # -- Ctrl-C while lane is working, not while it is asking ------------------------
 
 
-def test_ctrl_c_during_a_slow_step_backs_out_like_a_prompt() -> None:
-    """Fetching origin and asking GitHub both happen before anything irreversible,
-    so interrupting one is the same clean no-op as backing out of a prompt — and
-    reaches the same handler, rather than escaping as a traceback."""
+def test_ctrl_c_during_a_slow_step_quits_lane_like_a_prompt() -> None:
+    """Fetching origin and asking GitHub both happen before anything irreversible, so
+    interrupting one is as clean as pressing Ctrl-C at a prompt — and means the same
+    thing it means there: leave. `Quit` rather than `KeyboardInterrupt` is what says the
+    step was clean, so the session does not warn about work that may be half-done."""
     ui = ConsoleUi()
 
     def interrupted() -> None:
         raise KeyboardInterrupt
 
-    with pytest.raises(Abandoned):
+    with pytest.raises(Quit):
         ui.progress("Fetching origin…", interrupted)
 
 

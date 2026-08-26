@@ -51,7 +51,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.seam import Abandoned, Choice
+from lane.ui.seam import Abandoned, Choice, Quit
 
 _ABANDON = object()
 
@@ -60,11 +60,6 @@ HINT = "↑↓ move · enter choose"
 one, because it binds the same keys and nothing more."""
 
 FOOTER = f"\n  {HINT}\n"
-
-BACK_OUT_HINT = "ctrl-c back out"
-"""How to leave a free-text or confirmation prompt."""
-
-BACK_OUT_FOOTER = f"\n  {BACK_OUT_HINT}\n"
 
 ESCAPE_TIMEOUT = 0.05
 """How long the parser waits for the rest of an escape sequence, in seconds.
@@ -107,8 +102,10 @@ def _abandon_bindings() -> KeyBindings:
     bindings = KeyBindings()
 
     @bindings.add("c-c")
-    def _abandon(event: KeyPressEvent) -> None:
-        event.app.exit(result=_ABANDON)
+    def _quit(event: KeyPressEvent) -> None:
+        # Leaves lane, rather than this prompt. Going back is the visible `← Back`
+        # entry every choice prompt appends (AGENTS.md, *Going back is visible*).
+        event.app.exit(exception=Quit)
 
     return bindings
 
@@ -235,7 +232,6 @@ def confirm(
             [
                 ("class:picker.title", f"  {title} "),
                 ("class:picker.hint", suffix),
-                ("class:picker.footer", BACK_OUT_FOOTER),
             ]
         )
 
@@ -272,23 +268,25 @@ def prompt_text(
 
     Everything `prompt_toolkit` provides as standard works here — Option+Arrow to
     move by word, Ctrl-A and Ctrl-E, Option+Backspace to delete a word — precisely
-    because no custom binding is layered on top to get in the way. Esc and Ctrl-C go
-    back; Enter accepts, falling back to `default` when nothing was typed.
+    because no custom binding is layered on top to get in the way. Enter accepts,
+    falling back to `default` when nothing was typed; Ctrl-C quits lane.
     """
     session: PromptSession[object] = PromptSession(
         key_bindings=_abandon_bindings(),
         input=input,
         output=output,
         style=STYLE,
-        bottom_toolbar=lambda: FormattedText([("class:picker.footer", BACK_OUT_HINT)]),
     )
     # PromptSession takes no such constructor argument, so it is set on the app.
     session.app.ttimeoutlen = ESCAPE_TIMEOUT
     prompt = f"{title}: " if not default else f"{title} [{default}]: "
     try:
         answer = session.prompt(prompt)
-    except (KeyboardInterrupt, EOFError) as exc:
-        # Ctrl-C behaves like Esc inside a prompt rather than killing the session.
+    except KeyboardInterrupt:
+        # Bound above too, but `PromptSession` raises this one itself.
+        raise Quit from None
+    except EOFError as exc:
+        # Ctrl-D: no input is coming, which is not the same gesture as asking to leave.
         raise Abandoned from exc
 
     if answer is _ABANDON:
