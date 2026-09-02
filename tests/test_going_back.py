@@ -78,6 +78,22 @@ def test_the_back_entry_is_labelled_so_it_reads_as_an_action(keys: PipeInput) ->
     assert any("back" in label.lower() for label in seen), seen
 
 
+def test_the_back_entry_survives_a_filter_that_matches_nothing(keys: PipeInput) -> None:
+    """docs/CONVENTIONS.md §12: an action row survives an empty list, and the visible
+    way back is the action row every choice prompt has. A filter that hid it would make
+    going back a key you have to know again."""
+    ui = ConsoleUi()
+    keys.send_text("zzz\r")
+
+    with pytest.raises(Abandoned):
+        ui.choose(
+            "Pick one",
+            [Choice("first", "a"), Choice("second", "b")],
+            input=keys,
+            output=DummyOutput(),
+        )
+
+
 def test_choosing_a_real_option_still_returns_it(keys: PipeInput) -> None:
     ui = ConsoleUi()
     keys.send_text("\r")

@@ -77,25 +77,34 @@ def test_home_and_end_jump_to_the_ends(keys: PipeInput) -> None:
 
 
 def test_an_unrecognised_key_is_ignored_and_the_picker_stays_up(keys: PipeInput) -> None:
-    """The windowed equivalent of the bash picker's re-prompt: never abort."""
-    assert _pick(keys, "zx@\r") == "open"
+    """The windowed equivalent of the bash picker's re-prompt: never abort. Ctrl-L is
+    the shape of key this still covers — printable keys now filter (below), and a
+    filter that matches nothing leaves the prompt up rather than aborting it."""
+    assert _pick(keys, "\x0c\r") == "open"
+
+
+def test_a_filter_that_matches_nothing_leaves_the_prompt_up(keys: PipeInput) -> None:
+    """Enter has nothing to choose, so it does nothing and the prompt stays — the same
+    promise as for any key it cannot act on. Backspacing brings the list back."""
+    assert _pick(keys, "zzz\r\x7f\x7f\x7f\r") == "open"
 
 
 def test_ignored_keys_do_not_disturb_the_selection(keys: PipeInput) -> None:
-    assert _pick(keys, "\x1b[Bz\r") == "list"
+    assert _pick(keys, "\x1b[B\x0c\r") == "list"
 
 
 # -- C4: q, Esc and Ctrl-C all abandon -------------------------------------------
 
 
-def test_q_is_not_special_and_is_simply_ignored(keys: PipeInput) -> None:
+def test_q_is_not_special_and_is_one_more_character_of_the_filter(keys: PipeInput) -> None:
     """Deliberately not an abandon key.
 
-    Only universally understood keys are bound: arrows, Enter, Esc, Ctrl-C. `q`
-    meant one rule in a choice prompt and the opposite in a text prompt, which is
-    exactly the sort of thing a user should not have to remember.
+    Only universally understood keys are bound: arrows, Enter, Ctrl-C. `q` meant one
+    rule in a choice prompt and the opposite in a text prompt, which is exactly the
+    sort of thing a user should not have to remember — and now it means in both what
+    it means in a text prompt, which is a letter you typed.
     """
-    assert _pick(keys, "q\r") == "open"
+    assert _pick(keys, "q\x7f\r") == "open"
 
 
 def test_escape_is_not_bound_and_does_nothing(keys: PipeInput) -> None:
@@ -286,3 +295,69 @@ def test_ctrl_c_quits_lane_from_a_text_prompt(keys: PipeInput) -> None:
     keys.send_text("\x03")
     with pytest.raises(Quit):
         prompt_text("Anything", input=keys, output=DummyOutput())
+
+
+# -- one corner hint, shared with every other widget ------------------------------
+
+
+def _drawn(fragments: list[tuple[str, str]]) -> str:
+    return "".join(text for _, text in fragments)
+
+
+def test_the_pickers_corner_names_what_enter_does() -> None:
+    """The whole vocabulary of a choice prompt, in the corner, dim (AGENTS.md, *Going
+    back is visible*): arrows move, `Enter` chooses, typing filters, nothing else."""
+    from lane.ui.picker import KEYS, options_frame
+
+    assert (
+        _drawn(options_frame("Choose", _options(), index=0, width=80))
+        .splitlines()[-1]
+        .endswith("↑↓ move · enter choose · type to filter")
+    )
+    assert [key.key for key in KEYS] == ["enter", "type"]
+
+
+def test_text_and_confirm_take_their_corner_from_the_same_renderer_and_it_is_silent() -> None:
+    """They add no key and have nothing to choose between, so the one renderer answers
+    them with silence — which is exactly what they drew before it existed
+    (docs/CONVENTIONS.md §2). An absence in two widgets becomes one rule, and a key
+    given to either of them would appear in the corner without either being touched."""
+    from lane.ui import footer, picker
+
+    assert picker.TEXT_KEYS == ()
+    assert footer.line(picker.TEXT_KEYS, 80) == "", "not a line of padding either"
+    assert footer.hint(picker.TEXT_KEYS, 80) == ""
+
+
+def test_every_prompt_frame_takes_its_corner_from_the_shared_renderer() -> None:
+    """Both frames this module draws, checked against `ui/footer.py` rather than against
+    a string written here — which is what makes "one renderer, four widgets" a thing a
+    test can hold rather than a thing the docs assert."""
+    from lane.ui import footer
+    from lane.ui.picker import KEYS, TEXT_KEYS, confirm_frame, options_frame
+
+    chooser = _drawn(options_frame("Choose", _options(), index=0, width=80))
+    assert chooser.splitlines()[-1] == footer.line(KEYS, 80)
+
+    question = _drawn(confirm_frame("Close it?", default=False, width=80))
+    assert question.splitlines()[-1] == "  Close it? [y/N]" + footer.line(TEXT_KEYS, 80)
+
+
+# -- type to filter ---------------------------------------------------------------
+
+
+def test_typing_narrows_the_options_to_what_matches(keys: PipeInput) -> None:
+    """Nothing printable is bound in a choice prompt, so typing can mean this without
+    colliding with anything already there (AGENTS.md, *Going back is visible*)."""
+    assert _pick(keys, "clo\r") == "close"
+
+
+def test_backspacing_to_empty_brings_the_whole_list_back(keys: PipeInput) -> None:
+    """There is no key that clears the filter: backspacing to empty is the text editing
+    every terminal user already has, and `Ui.text` already relies on it (§3).
+
+    `clo` leaves only `close`, and the cursor follows it there. Backspacing to empty
+    brings the other two back, so Down wraps round to the first of three rather than
+    staying on the one row a filtered list would still hold.
+    """
+    assert _pick(keys, "clo\x7f\x7f\x7f\x1b[B\r") == "open"

@@ -69,16 +69,20 @@ class ConsoleUi:
         the label stays in one place.
         """
         offered: list[Choice[T | object]] = [Choice(o.label, o.value, o.hint) for o in options]
+        tail = 0
         if back is not None and len(options) > 1:
             # Not for a lone candidate: that is auto-selected, and adding an entry
             # would turn a question with one answer into a question with two.
             offered.append(Choice(back, _BACK))
+            # And a typed filter never hides it: an action row survives an empty list
+            # (docs/CONVENTIONS.md §12), and going back is never only a key.
+            tail = 1
 
         if on_render is not None:
             for option in offered:
                 on_render(option.label)
 
-        chosen = pick(title, offered, input=input, output=output)
+        chosen = pick(title, offered, tail=tail, input=input, output=output)
         if chosen is _BACK:
             raise Abandoned
         return chosen  # type: ignore[return-value]

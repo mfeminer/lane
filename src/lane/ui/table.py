@@ -50,7 +50,9 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.picker import ESCAPE_TIMEOUT, HINT
+from lane.ui import filtering
+from lane.ui.footer import line as footer_line
+from lane.ui.picker import ESCAPE_TIMEOUT, KEYS
 from lane.ui.seam import Abandoned, Cell, Column, Fill, Quit, Row
 
 CURSOR_WIDTH = 2
@@ -240,19 +242,32 @@ def paint(
     top: int,
     width: int,
     height: int,
+    text: str = "",
 ) -> Painted:
-    """Draw one frame. Pure, which is what makes the layout rules testable."""
+    """Draw one frame. Pure, which is what makes the layout rules testable.
+
+    `text` is the filter as typed. Only the rows it keeps are drawn; the visible way
+    back is drawn whatever it keeps, because an action row survives an empty list
+    (docs/CONVENTIONS.md §12).
+    """
+    everything = len(rows)
+    rows = [rows[at] for at in filtering.matching([filtering.row_text(row) for row in rows], text)]
+
     total = len(rows) + 1  # the visible way back is a row like any other
     cursor = max(0, min(cursor, total - 1))
     on_back = cursor == len(rows)
 
     wanted = () if on_back else rows[cursor].detail[:MAX_DETAIL_LINES]
-    room, detail = vertical(height, wanted)
+    said = filtering.status(matched=len(rows), total=everything, text=text)
+    room, detail = vertical(height, wanted, extra=1 if said else 0)
     top = window(total, cursor, top, room)
 
     kept, measured, leads, short = fit(columns, rows, width)
 
-    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n\n")]
+    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n")]
+    if said:
+        fragments += [("class:table.panel", f"  {clip(said, width - 2)}"), ("", "\n")]
+    fragments.append(("", "\n"))
 
     if kept and rows:
         header = "  " + "".join(
@@ -285,7 +300,8 @@ def paint(
         first = top + 1
         last = min(top + room, total)
         shown = f" · {first}–{last} of {len(rows)}"
-    fragments.append(("class:table.footer", f"  {HINT}{shown}"))
+    # The picker's keys, so the picker's corner — from the one renderer either way.
+    fragments.append(("class:table.footer", footer_line(KEYS, width, shown=shown)))
 
     return Painted(fragments=fragments, top=top, room=room)
 
@@ -312,6 +328,7 @@ def bindings_for[T](
     state: dict[str, int],
     rows: Callable[[], Sequence[Row[T]]],
     exit_with: Callable[[tuple[T, int] | None], None],
+    typed: filtering.Filter | None = None,
 ) -> KeyBindings:
     """The keys this table answers to: **the picker's set, and nothing else, ever.**
 
@@ -323,14 +340,23 @@ def bindings_for[T](
     which binds `Space` and is a different component for exactly that reason.
     """
     bindings = KeyBindings()
+    current_filter = typed if typed is not None else filtering.Filter()
+
+    def matched() -> list[int]:
+        """Where each visible row sits in the caller's own list."""
+        current = list(rows())
+        return filtering.matching([filtering.row_text(row) for row in current], current_filter.text)
 
     def last() -> int:
-        return state["rows"]  # the back row sits one past the last lane
+        return len(matched())  # the back row sits one past the last visible lane
 
-    def under_cursor() -> Row[T] | None:
+    def under_cursor() -> tuple[Row[T], int] | None:
         current = list(rows())
+        visible = matched()
         index = state["index"]
-        return current[index] if index < len(current) else None
+        if index >= len(visible):
+            return None
+        return current[visible[index]], visible[index]
 
     @bindings.add("c-c")
     def _quit(event: KeyPressEvent) -> None:
@@ -360,12 +386,24 @@ def bindings_for[T](
     @bindings.add("enter")
     def _accept(event: KeyPressEvent) -> None:
         del event
-        row = under_cursor()
-        if row is None:
+        found = under_cursor()
+        if found is None:
             # The back row, one past the last: the same result as Ctrl-C.
             exit_with(None)
             return
-        exit_with((row.value, state["index"]))
+        row, at = found
+        # `at`, not the cursor: the index goes back into `cursor` on the next call, and
+        # a place in a filtered list would land somewhere else on an unfiltered screen.
+        exit_with((row.value, at))
+
+    def chosen() -> int | None:
+        found = under_cursor()
+        return None if found is None else found[1]
+
+    def moved(was: int | None) -> None:
+        state["index"] = filtering.follow(was, matched())
+
+    filtering.bind(bindings, current_filter, chosen=chosen, moved=moved)
 
     return bindings
 
@@ -387,18 +425,19 @@ def browse[T](
     Raises `Abandoned` for the visible back row and for Ctrl-C — the two ways out
     mean the same thing to the caller, so they are the same result.
     """
-    state = {"index": max(0, cursor), "top": 0, "rows": 0, "opening": 1}
+    state = {"index": max(0, cursor), "top": 0, "opening": 1}
+    typed = filtering.Filter()
 
     def render() -> FormattedText:
         current = list(rows())
-        state["rows"] = len(current)
+        showing = len(filtering.matching([filtering.row_text(row) for row in current], typed.text))
         if state["opening"]:
             # A lane was closed while the cursor sat on the last row, so the index
             # handed back is now past the end. Land on the row that took its place
             # rather than on the way out.
             state["opening"] = 0
-            state["index"] = min(state["index"], max(0, len(current) - 1))
-        state["index"] = max(0, min(state["index"], len(current)))
+            state["index"] = min(state["index"], max(0, showing - 1))
+        state["index"] = max(0, min(state["index"], showing))
         size = application.output.get_size()
         painted = paint(
             title,
@@ -409,6 +448,7 @@ def browse[T](
             top=state["top"],
             width=size.columns,
             height=size.rows - 1,
+            text=typed.text,
         )
         state["top"] = painted.top
         if on_render is not None:
@@ -422,6 +462,7 @@ def browse[T](
         # Deferred rather than passed: `application.exit` does not exist until the
         # Application below has been built, and by then these handlers are only defined.
         lambda result: application.exit(result=result),
+        typed,
     )
 
     application: Application[object] = Application(

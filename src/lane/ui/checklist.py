@@ -76,6 +76,9 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 
+from lane.ui import filtering
+from lane.ui.footer import Key
+from lane.ui.footer import line as footer_line
 from lane.ui.picker import ESCAPE_TIMEOUT
 from lane.ui.seam import (
     BACK_LABEL,
@@ -160,17 +163,14 @@ def tail_detail(label: str, finish: Finish = FINISH) -> str:
     return finish.accept_detail if label == finish.accept else finish.reject_detail
 
 
-def hints(action: str = NOTHING) -> tuple[str, ...]:
-    """The hint, and what it becomes on a terminal too narrow for it.
+def keys_for(action: str = NOTHING) -> tuple[Key, ...]:
+    """The keys this screen has, for the one renderer that draws every corner.
 
-    One hint per widget, not one per call site (docs/CONVENTIONS.md §2). It names
-    `space` because `space` is the key this screen adds, and names what `enter` will do
-    to the row under the cursor because that differs per row; the table's hint names
-    neither, because the table adds no key and `Enter` there always means one thing.
-
-    It gives things up in the order they can be spared: the arrows first, because nobody
-    needs telling that arrows move; then what each key *does*, because the keys themselves
-    are the part that has to survive.
+    It names `space` because `space` is the key this screen adds, and names what
+    `enter` will do to the row under the cursor because that differs per row — on a
+    **leaf** `enter` does nothing, so it is not named at all, because naming a key that
+    does nothing teaches a lie. The table's corner names neither, because the table adds
+    no key and `Enter` there always means one thing.
 
     `ctrl-c back out` is **not** in it, and used to be. It was there because Ctrl-C meant
     something lane-specific on this screen — *back out* — and a hint clipped to `ctr…`
@@ -179,17 +179,11 @@ def hints(action: str = NOTHING) -> tuple[str, ...]:
     Ctrl-C now means the one thing every terminal user already assumes it means
     (AGENTS.md, *Ctrl-C quits lane*).
     """
+    answering = (Key("space", "answer"),)
     if not action:
-        # A leaf, where `enter` does nothing. Naming it would be worse than silence.
-        return ("↑↓ move · space answer", "space answer", "space")
-    return (
-        f"↑↓ move · space answer · enter {action}",
-        f"space answer · enter {action}",
-        "space · enter",
-    )
+        return (*answering, filtering.KEY)
+    return (*answering, Key("enter", action), filtering.KEY)
 
-
-HINT = hints()[0]
 
 TICK = "✓ "
 """Every leaf this row stands for is **in**.
@@ -308,6 +302,7 @@ def paint[T](
     total: int | None = None,
     nested: bool = False,
     finish: Finish = FINISH,
+    text: str = "",
 ) -> Painted:
     """Draw one frame of one level. Pure, which is what makes the layout rules testable.
 
@@ -317,6 +312,13 @@ def paint[T](
     many leaves the whole tree holds — the count means the same thing on every screen of
     it, so a level cannot be asked to work it out from what it can see.
     """
+    if total is None:
+        total = len(leaves_of(list(nodes)))
+    everything = len(nodes)
+    nodes = [
+        nodes[at]
+        for at in filtering.matching([filtering.row_text(node.row) for node in nodes], text)
+    ]
     rows = [node.row for node in nodes]
     tail = tail_rows(nested, finish)
     shown_rows = len(rows) + len(tail)
@@ -328,13 +330,17 @@ def paint[T](
         wanted = (tail_detail(tail[cursor - len(rows)], finish),)
     elif rows:
         wanted = rows[cursor].detail[:MAX_DETAIL_LINES]
-    room, detail = vertical(height, wanted, extra=SUMMARY_LINES)
+    said = filtering.status(matched=len(rows), total=everything, text=text)
+    room, detail = vertical(height, wanted, extra=SUMMARY_LINES + (1 if said else 0))
     top = window(shown_rows, cursor, top, room)
 
     prefix = CURSOR_WIDTH + MARK_WIDTH
     kept, measured, leads, short = fit(columns, rows, width, prefix)
 
-    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n\n")]
+    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n")]
+    if said:
+        fragments += [("class:table.panel", f"  {clip(said, width - 2)}"), ("", "\n")]
+    fragments.append(("", "\n"))
 
     if kept and rows:
         header = " " * prefix + "".join(
@@ -371,7 +377,7 @@ def paint[T](
         fragments.append(("", "\n"))
 
     inside = sum(1 for answer in answers.values() if answer)
-    counted = tally(inside, len(leaves_of(nodes)) if total is None else total)
+    counted = tally(inside, total)
     if summary:
         counted = f"{counted} · {summary}"
     fragments.append(("class:table.panel", f"  {clip(counted, width - 2)}"))
@@ -381,9 +387,7 @@ def paint[T](
     if shown_rows > room:
         shown = f" · {top + 1}–{min(top + room, shown_rows)} of {shown_rows}"
     action = _action(nodes, cursor, tail=tail)
-    fragments.append(
-        ("class:table.footer", f"  {clip(footer(width - 2, shown, action), width - 2)}")
-    )
+    fragments.append(("class:table.footer", footer_line(keys_for(action), width, shown=shown)))
 
     return Painted(fragments=fragments, top=top, room=room)
 
@@ -399,20 +403,6 @@ def _action[T](nodes: Sequence[Node[T]], cursor: int, *, tail: Sequence[str]) ->
         label = tail[cursor - len(nodes)]
         return UP if label == BACK_LABEL else label
     return OPEN if nodes[cursor].children else NOTHING
-
-
-def footer(width: int, shown: str = "", action: str = NOTHING) -> str:
-    """The longest hint that fits, with the scroll position where there is room for it.
-
-    The position goes before any of the hint does: `1–19 of 40` is a convenience, and
-    what the keys do is the part a screen has to keep saying.
-    """
-    available = hints(action)
-    for hint in available:
-        for whole in (hint + shown, hint):
-            if len(whole) <= width:
-                return whole
-    return available[-1]
 
 
 def tally(count: int, total: int) -> str:
@@ -438,13 +428,21 @@ class Walk[T]:
     place in, which is the cost the whole drill-down is supposed to avoid.
     """
 
-    def __init__(self, rows: Callable[[], Sequence[Node[T]]], finish: Finish = FINISH) -> None:
+    def __init__(
+        self,
+        rows: Callable[[], Sequence[Node[T]]],
+        finish: Finish = FINISH,
+        typed: filtering.Filter | None = None,
+    ) -> None:
         self._rows = rows
         self.finish = finish
         self._descent: list[int] = []
         self._parked: list[tuple[int, int]] = []
         self.index = 0
         self.top = 0
+        self.typed = typed if typed is not None else filtering.Filter()
+        """What has been typed on the level currently on screen. A level is a screen,
+        so going into a folder or back out of one starts a fresh one."""
 
     @property
     def nested(self) -> bool:
@@ -471,32 +469,46 @@ class Walk[T]:
         self._descent = walked
         return nodes, title
 
+    def visible(self) -> list[int]:
+        """Where each row the filter kept sits in this level's own list.
+
+        The descent is recorded in the level's own indexes rather than in what a filter
+        happened to be showing, so a folder is still the folder you opened however you
+        found it.
+        """
+        nodes, _ = self.level()
+        return filtering.matching([filtering.row_text(node.row) for node in nodes], self.typed.text)
+
     def rows_here(self) -> int:
         """Rows on this screen, the trailing ones included."""
-        nodes, _ = self.level()
-        return len(nodes) + len(tail_rows(self.nested, self.finish))
+        return len(self.visible()) + len(tail_rows(self.nested, self.finish))
 
     def tail_row(self) -> str:
         """Which of the trailing rows the cursor is on, or `""` when it is on the tree."""
-        nodes, _ = self.level()
         tail = tail_rows(self.nested, self.finish)
-        position = self.index - len(nodes)
+        position = self.index - len(self.visible())
         return tail[position] if 0 <= position < len(tail) else ""
 
     def node(self) -> Node[T] | None:
         """The node under the cursor, or None on one of the trailing rows."""
         nodes, _ = self.level()
-        return nodes[self.index] if self.index < len(nodes) else None
+        visible = self.visible()
+        return nodes[visible[self.index]] if self.index < len(visible) else None
 
     def enter(self) -> bool:
         """Go into the folder under the cursor, parking this level as it stands."""
         node = self.node()
         if node is None or not node.children:
             return False
+        # Read where the cursor is standing *before* touching the descent: `level()`
+        # rebinds `_descent` as it self-heals, so an append whose argument still had to
+        # be worked out would land on the list that was just replaced.
+        at = self.visible()[self.index]
         self._parked.append((self.index, self.top))
-        self._descent.append(self.index)
+        self._descent.append(at)
         self.index = 0
         self.top = 0
+        self.typed.text = ""
         return True
 
     def leave(self) -> bool:
@@ -505,6 +517,7 @@ class Walk[T]:
             return False
         self._descent.pop()
         self.index, self.top = self._parked.pop()
+        self.typed.text = ""
         return True
 
     def clamp(self) -> None:
@@ -588,6 +601,15 @@ def bindings_for[T](
         for value in leaves:
             answered[value] = not inside
 
+    def chosen() -> int | None:
+        visible = walk.visible()
+        return visible[walk.index] if walk.index < len(visible) else None
+
+    def moved(was: int | None) -> None:
+        walk.index = filtering.follow(was, walk.visible())
+
+    filtering.bind(bindings, walk.typed, chosen=chosen, moved=moved)
+
     @bindings.add("enter")
     def _chosen(event: KeyPressEvent) -> None:
         del event
@@ -656,6 +678,7 @@ def check[T](
             total=len(leaves_of(list(rows()))),
             nested=walk.nested,
             finish=finish,
+            text=walk.typed.text,
         )
         walk.top = painted.top
         if on_render is not None:

@@ -391,6 +391,7 @@ def _lines(
     width: int = 120,
     height: int = 40,
     summary: str = "",
+    text: str = "",
 ) -> list[str]:
     return paint(
         "3 paths lane has not been told about",
@@ -402,6 +403,7 @@ def _lines(
         width=width,
         height=height,
         summary=summary,
+        text=text,
     ).lines
 
 
@@ -535,6 +537,12 @@ def test_the_widget_binds_the_pickers_keys_plus_space_and_nothing_else() -> None
         Keys.ControlM,
         Keys.ControlC,
         " ",
+        # Typing filters and Backspace takes a character back, from the one
+        # `filtering.bind` the picker and the table also call. `Space` is still bound
+        # here and nowhere else, which is what this test is for: an exact binding
+        # outranks the `Any` catch-all, so it answers a row rather than typing one.
+        Keys.Any,
+        Keys.ControlH,
     }
 
 
@@ -973,3 +981,99 @@ def test_a_row_that_ends_a_level_has_a_word_on_it(accept: str, reject: str) -> N
     """
     with pytest.raises(ValueError):
         Finish(accept=accept, reject=reject)
+
+
+def test_the_checklists_footer_is_the_shared_corner_hint() -> None:
+    """One renderer for every screen's corner (`ui/footer.py`). This screen's key set
+    is the only one that changes with the cursor, and it is still the same renderer
+    that draws it. If the checklist went back to building its own string, this fails."""
+    from lane.ui import footer
+    from lane.ui.checklist import keys_for
+
+    assert _painted(cursor=1)[-1] == footer.line(keys_for("open"), 120)
+    assert _painted(cursor=0)[-1] == footer.line(keys_for(""), 120)
+
+
+# -- type to filter ---------------------------------------------------------------
+
+
+def test_typing_narrows_the_level_to_the_rows_that_match(keys: PipeInput) -> None:
+    """One `Space` then `apply`, on a screen narrowed to the one row that matched —
+    which is three keystrokes fewer than walking to it, and the same filter the picker
+    and the table now have."""
+    assert _check(keys, "console" + SPACE + APPLY_ROW) == {"apps/console/dist": True}
+
+
+def test_the_filter_is_named_under_the_title_rather_than_being_a_mode() -> None:
+    body = "\n".join(_lines(text="console"))
+
+    assert "1 of 3 · filter: console" in body
+    assert "apps/web/.env" not in body
+
+
+def test_a_filter_matching_nothing_leaves_one_line_and_the_rows_that_end_the_screen() -> None:
+    """docs/CONVENTIONS.md §12: one line, no table, no header — and `apply`/`discard`
+    survive, because a screen you cannot finish or leave is not an empty state."""
+    lines = _lines(text="zzz")
+    body = "\n".join(lines)
+
+    assert "No matches for 'zzz'." in body
+    assert "node_modules" not in body, "no data rows"
+    assert not any("path" in line and "size" in line for line in lines), "and no header"
+    assert "apply" in body and "discard" in body
+
+
+def test_a_filter_matching_nothing_can_still_be_discarded(keys: PipeInput) -> None:
+    with pytest.raises(Abandoned):
+        _check(keys, "zzz" + END + ENTER)
+
+
+def test_the_filter_is_per_screen_so_a_level_starts_with_a_fresh_one() -> None:
+    """One level is one screen, and the filter belongs to the screen: the word that
+    found a folder does not go on hiding rows inside it, or back out of it."""
+    walk: Walk[str] = Walk(_tree)
+    walk.typed.text = "apps"
+
+    assert walk.enter(), "the one row `apps` left is the folder"
+    assert walk.typed.text == ""
+
+    walk.typed.text = "env"
+    assert walk.leave()
+    assert walk.typed.text == ""
+
+
+def test_the_descent_is_recorded_in_the_levels_own_rows_not_the_filtered_ones() -> None:
+    """A folder is the folder you opened however you found it — otherwise a filter that
+    put it second on screen would send the next paint into whatever is second in the
+    unfiltered level."""
+    walk: Walk[str] = Walk(_tree)
+    walk.typed.text = "apps"
+    walk.enter()
+
+    nodes, title = walk.level()
+
+    assert title == "apps/ · 3 ignored paths"
+    assert [node.row.value for node in nodes] == ["apps/api/.env", "apps/web/ · 2 ignored paths"]
+
+
+def test_the_second_caller_of_check_filters_and_says_so_in_the_same_corner() -> None:
+    """The close screen is a checklist too, with its own words for the two rows that end
+    it — so the filter and the corner have to be right there as well, and they are the
+    same ones because they come from the same two functions rather than per screen."""
+    lines = paint(
+        "Closing thing/mylane",
+        COLUMNS,
+        _rows(),
+        answers={},
+        cursor=0,
+        top=0,
+        width=120,
+        height=40,
+        finish=CLOSING,
+        text="zzz",
+    ).lines
+    body = "\n".join(lines)
+
+    assert "No matches for 'zzz'." in body
+    assert "close" in body and "leave open" in body, "the rows that end the screen survive"
+    assert lines[-1].endswith("type to filter")
