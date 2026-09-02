@@ -121,7 +121,8 @@ added no key of its own**, which is the test the budget was being spent against:
   accepted would need a third key, and one where accepting is a row needs none.
 - The footer names whichever of `open` / `go up` / `apply` / `discard` `Enter` will
   actually do to the row under the cursor, and names **none** on a leaf, because naming a
-  key that does nothing teaches a lie (`checklist.HINT`, `checklist.hints()`). It does not
+  key that does nothing teaches a lie (`checklist.keys_for()`, drawn by `ui/footer.py`
+  like every other screen's — §3a). It does not
   name `ctrl-c`: that is no longer this screen's way out, and what it does now is the one
   thing about a terminal program nobody has to be taught. The lanes table's footer names
   nothing, because the table adds no key.
@@ -129,6 +130,28 @@ added no key of its own**, which is the test the budget was being spent against:
 That is the whole exception, and it is one widget wide. **A new screen still introduces no
 key**; if it seems to need one, that is a decision for the maintainer, made in the open
 like this one, not a convenience to slip in.
+
+## 3a. The corner hint
+
+**One renderer draws every screen's footer** — `ui/footer.py`, called by `picker.py`
+(`choose`, and `confirm`'s frame), `table.py` and `checklist.py`. Each screen says
+which keys it has (`picker.KEYS`, `checklist.keys_for()`) and the renderer decides
+what the corner says about them. *Why: the mechanism was the checklist's alone —
+three tiers, shrinking as the terminal narrows — and every other widget carried a
+constant of its own, which is how four screens came to hold four answers to the same
+question. A key added to one screen now shows up in its corner without a widget being
+touched.*
+
+- **Bottom-right, dim.** That is where a terminal already puts transient key hints — a
+  `tmux` status line, `fzf`'s own — and it is where `checklist.py` was already closest
+  to putting one. Dim is `ui.detail`'s tone, the same one every secondary line in lane
+  uses. There is no smaller font in a terminal, so *quieter* is styling and brevity,
+  and nothing else: the shortest wording that still says what the screen's keys do.
+- **One line, never two.** A screen with more to say says it in one more clause of the
+  same tiered line, which then sheds in the order §13 gives.
+- **A screen with no keys of its own draws nothing** — `text` and `confirm`
+  (`picker.TEXT_KEYS`), which is what they already drew (§2). Stated as an empty key
+  set rather than as an absence in two files, so the rule has no exceptions to keep.
 
 ## 4. Menu and list entry wording
 
@@ -412,10 +435,12 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   thing in words, so nothing is lost that cannot be got back), then `size` (which nothing
   repeats), then the dim `Cell.lead` — which on a level inside a folder is the directory
   every row on it shares and therefore identifies nothing — then the path truncates.
-  **The footer degrades too rather than being clipped** — `checklist.hints()` gives up the
+  **The footer degrades too rather than being clipped** — `footer.tiers()` gives up the
   arrows first, because nobody needs telling that arrows move, then what each key does,
-  and keeps the keys themselves. It no longer names `ctrl-c` at any width: the way out is
-  the `discard` row, which is visible in the way §2 actually asks for. **Built —
+  and keeps the keys themselves; the scroll position goes before any of the hint does.
+  That is now every screen's footer rather than the checklist's alone (§3a). It no
+  longer names `ctrl-c` at any width: the way out is the `discard` row, which is visible
+  in the way §2 actually asks for. **Built —
   Phase L, box L7, decision: abbreviate `state` before `pr` is ever endangered.**
   `Cell` (`seam.py`) gained a `short` field; `table.py`'s `_fit()` switches every
   cell to its short form, if it has one, before ever shrinking the lane-name column

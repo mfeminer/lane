@@ -122,8 +122,10 @@ one was spending its budget against. It was taken deliberately rather than slipp
   a screen with no way to finish at all.
 - The checklist's footer names which of `open` / `go up` / `apply` / `discard` applies to
   the row under the cursor, and names **none** on a leaf, because naming a key that does
-  nothing teaches a lie. The lanes table's footer names nothing, because it adds no key
-  and `Enter` there always means the same thing.
+  nothing teaches a lie. The lanes table's footer names nothing beyond the shared set,
+  because it adds no key and `Enter` there always means the same thing. **Both come out of
+  one renderer** — `ui/footer.py`, bottom-right and dim, which every widget calls with the
+  keys it actually has (docs/CONVENTIONS.md §3a).
 
 One widget, one key. **A new screen still introduces none.** What Ctrl-C does, at a
 prompt and while lane is **working**, is below, under *Ctrl-C quits lane*. A letter key for "close" was considered and
@@ -716,6 +718,11 @@ These must never regress. Each is one line of behaviour and one line of why.
   accepting a screen filed a refusal for every row the user had not got to. `Space` never
   returns a row to unanswered: the first press answers it, and every press after it
   changes the answer.
+- **Every screen's corner hint comes from one renderer** — `ui/footer.py`, given the keys
+  that screen actually has. Four widgets each building their own footer string is how four
+  answers to the same question came about, and a key added to a screen would then be a key
+  its corner forgot to mention. A screen with no keys of its own (`text`, `confirm`) draws
+  nothing, which is the same rule rather than an exception to it.
 - **The listing never blocks on `gh`** — git status is collected before the first
   paint, pull request state fills in behind it. It is the difference between a
   screen that appears and one that appears two seconds later.

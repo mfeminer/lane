@@ -490,3 +490,13 @@ def test_the_footer_is_the_hint_and_does_not_name_space() -> None:
 
     assert HINT in lines[-1]
     assert "space" not in lines[-1].lower()
+
+
+def test_the_tables_footer_is_the_shared_corner_hint() -> None:
+    """One renderer for every screen's corner (`ui/footer.py`), and the table's keys
+    are the picker's — which is why its corner is too. If the table went back to
+    building its own string, this fails."""
+    from lane.ui import footer
+    from lane.ui.picker import KEYS
+
+    assert _lines()[-1] == footer.line(KEYS, 120)

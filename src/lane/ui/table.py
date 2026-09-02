@@ -50,7 +50,8 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
-from lane.ui.picker import ESCAPE_TIMEOUT, HINT
+from lane.ui.footer import line as footer_line
+from lane.ui.picker import ESCAPE_TIMEOUT, KEYS
 from lane.ui.seam import Abandoned, Cell, Column, Fill, Quit, Row
 
 CURSOR_WIDTH = 2
@@ -285,7 +286,8 @@ def paint(
         first = top + 1
         last = min(top + room, total)
         shown = f" · {first}–{last} of {len(rows)}"
-    fragments.append(("class:table.footer", f"  {HINT}{shown}"))
+    # The picker's keys, so the picker's corner — from the one renderer either way.
+    fragments.append(("class:table.footer", footer_line(KEYS, width, shown=shown)))
 
     return Painted(fragments=fragments, top=top, room=room)
 

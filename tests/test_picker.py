@@ -286,3 +286,49 @@ def test_ctrl_c_quits_lane_from_a_text_prompt(keys: PipeInput) -> None:
     keys.send_text("\x03")
     with pytest.raises(Quit):
         prompt_text("Anything", input=keys, output=DummyOutput())
+
+
+# -- one corner hint, shared with every other widget ------------------------------
+
+
+def _drawn(fragments: list[tuple[str, str]]) -> str:
+    return "".join(text for _, text in fragments)
+
+
+def test_the_pickers_corner_names_what_enter_does() -> None:
+    """The whole vocabulary of a choice prompt, in the corner, dim (AGENTS.md, *Going
+    back is visible*): arrows move and `Enter` chooses, and there is nothing else."""
+    from lane.ui.picker import KEYS, options_frame
+
+    assert (
+        _drawn(options_frame("Choose", _options(), index=0, width=80))
+        .splitlines()[-1]
+        .endswith("↑↓ move · enter choose")
+    )
+    assert [key.key for key in KEYS] == ["enter"]
+
+
+def test_text_and_confirm_take_their_corner_from_the_same_renderer_and_it_is_silent() -> None:
+    """They add no key and have nothing to choose between, so the one renderer answers
+    them with silence — which is exactly what they drew before it existed
+    (docs/CONVENTIONS.md §2). An absence in two widgets becomes one rule, and a key
+    given to either of them would appear in the corner without either being touched."""
+    from lane.ui import footer, picker
+
+    assert picker.TEXT_KEYS == ()
+    assert footer.line(picker.TEXT_KEYS, 80) == "", "not a line of padding either"
+    assert footer.hint(picker.TEXT_KEYS, 80) == ""
+
+
+def test_every_prompt_frame_takes_its_corner_from_the_shared_renderer() -> None:
+    """Both frames this module draws, checked against `ui/footer.py` rather than against
+    a string written here — which is what makes "one renderer, four widgets" a thing a
+    test can hold rather than a thing the docs assert."""
+    from lane.ui import footer
+    from lane.ui.picker import KEYS, TEXT_KEYS, confirm_frame, options_frame
+
+    chooser = _drawn(options_frame("Choose", _options(), index=0, width=80))
+    assert chooser.splitlines()[-1] == footer.line(KEYS, 80)
+
+    question = _drawn(confirm_frame("Close it?", default=False, width=80))
+    assert question.splitlines()[-1] == "  Close it? [y/N]" + footer.line(TEXT_KEYS, 80)

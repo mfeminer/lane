@@ -973,3 +973,14 @@ def test_a_row_that_ends_a_level_has_a_word_on_it(accept: str, reject: str) -> N
     """
     with pytest.raises(ValueError):
         Finish(accept=accept, reject=reject)
+
+
+def test_the_checklists_footer_is_the_shared_corner_hint() -> None:
+    """One renderer for every screen's corner (`ui/footer.py`). This screen's key set
+    is the only one that changes with the cursor, and it is still the same renderer
+    that draws it. If the checklist went back to building its own string, this fails."""
+    from lane.ui import footer
+    from lane.ui.checklist import keys_for
+
+    assert _painted(cursor=1)[-1] == footer.line(keys_for("open"), 120)
+    assert _painted(cursor=0)[-1] == footer.line(keys_for(""), 120)

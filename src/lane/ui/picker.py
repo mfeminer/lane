@@ -37,7 +37,7 @@ neither is necessary once going back is a visible entry.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.application import Application
@@ -51,15 +51,26 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
+from lane.ui.footer import Key, tiers
+from lane.ui.footer import line as footer_line
 from lane.ui.seam import Abandoned, Choice, Quit
 
 _ABANDON = object()
 
-HINT = "↑↓ move · enter choose"
-"""The whole key vocabulary, in one string. The table below the seam shows the same
-one, because it binds the same keys and nothing more."""
+KEYS = (Key("enter", "choose"),)
+"""The whole key vocabulary of a choice prompt. The table below the seam shows the
+same corner, because it binds the same keys and nothing more."""
 
-FOOTER = f"\n  {HINT}\n"
+TEXT_KEYS: tuple[Key, ...] = ()
+"""`text` and `confirm` add no key and have nothing to choose between, so their corner
+is empty — which is exactly what they already drew (docs/CONVENTIONS.md §2). Stated as
+a key set rather than as an absence, so it comes from the one renderer like every other
+screen's, and a key given to either of them would appear without a widget being touched.
+"""
+
+HINT = tiers(KEYS)[0]
+"""The widest form of that corner, for the tests and the table that quote it."""
+
 
 ESCAPE_TIMEOUT = 0.05
 """How long the parser waits for the rest of an escape sequence, in seconds.
@@ -112,13 +123,14 @@ def _abandon_bindings() -> KeyBindings:
 
 def _run(
     bindings: KeyBindings,
-    render: object,
+    render: Callable[[int], FormattedText],
     *,
     erase: bool,
     input_: Input | None,
     output: Output | None,
 ) -> object:
-    assert callable(render)
+    """`render` is handed the terminal width, which is what lets a frame place its
+    corner hint (`footer.line`) where the table and the checklist already put theirs."""
     application: Application[object] = Application(
         layout=Layout(
             HSplit(
@@ -127,7 +139,10 @@ def _run(
                         # Without this the terminal cursor sits on the first
                         # character of the prompt, which reads as if that letter
                         # were selected.
-                        FormattedTextControl(render, show_cursor=False),
+                        FormattedTextControl(
+                            lambda: render(application.output.get_size().columns),
+                            show_cursor=False,
+                        ),
                         dont_extend_height=True,
                     )
                 ]
@@ -143,6 +158,45 @@ def _run(
     # Not a constructor argument, so it is set on the application.
     application.ttimeoutlen = ESCAPE_TIMEOUT
     return application.run()
+
+
+def options_frame[T](
+    title: str,
+    options: Sequence[Choice[T]],
+    *,
+    index: int,
+    width: int,
+) -> list[tuple[str, str]]:
+    """One frame of a choice prompt. Pure, which is what makes the layout testable.
+
+    The table and the checklist have had a pure `paint` since they were written; this
+    is the picker's, and it exists for the same reason — so the corner it draws can be
+    checked against `footer.line` rather than taken on trust.
+    """
+    fragments: list[tuple[str, str]] = []
+    if title:
+        fragments += [("class:picker.title", title), ("", "\n\n")]
+    max_label_width = max(len(o.label) for o in options) if options else 0
+    for position, option in enumerate(options):
+        chosen = position == index
+        fragments.append(("class:picker.pointer", "  ❯ " if chosen else "    "))
+        padded_label = option.label.ljust(max_label_width)
+        fragments.append(("class:picker.selected" if chosen else "", padded_label))
+        if option.hint:
+            fragments.append(("class:picker.hint", f"   {option.hint}"))
+        fragments.append(("", "\n"))
+    fragments.append(("class:picker.footer", f"\n{footer_line(KEYS, width)}\n"))
+    return fragments
+
+
+def confirm_frame(title: str, *, default: bool, width: int) -> list[tuple[str, str]]:
+    """One frame of a yes/no question. Its corner comes from the same renderer, and is
+    empty, because a question with nothing to choose between adds no key (`TEXT_KEYS`)."""
+    return [
+        ("class:picker.title", f"  {title} "),
+        ("class:picker.hint", "[Y/n]" if default else "[y/N]"),
+        ("class:picker.footer", footer_line(TEXT_KEYS, width)),
+    ]
 
 
 def pick[T](
@@ -164,21 +218,8 @@ def pick[T](
 
     state = {"index": 0}
 
-    def render() -> FormattedText:
-        fragments: list[tuple[str, str]] = []
-        if title:
-            fragments += [("class:picker.title", title), ("", "\n\n")]
-        max_label_width = max(len(o.label) for o in options) if options else 0
-        for position, option in enumerate(options):
-            chosen = position == state["index"]
-            fragments.append(("class:picker.pointer", "  ❯ " if chosen else "    "))
-            padded_label = option.label.ljust(max_label_width)
-            fragments.append(("class:picker.selected" if chosen else "", padded_label))
-            if option.hint:
-                fragments.append(("class:picker.hint", f"   {option.hint}"))
-            fragments.append(("", "\n"))
-        fragments.append(("class:picker.footer", FOOTER))
-        return FormattedText(fragments)
+    def render(width: int) -> FormattedText:
+        return FormattedText(options_frame(title, options, index=state["index"], width=width))
 
     bindings = _abandon_bindings()
 
@@ -225,15 +266,9 @@ def confirm(
     refusing to accept `y` is worse than either option on its own. Enter takes the
     default; anything unrecognised is ignored rather than aborting.
     """
-    suffix = "[Y/n]" if default else "[y/N]"
 
-    def render() -> FormattedText:
-        return FormattedText(
-            [
-                ("class:picker.title", f"  {title} "),
-                ("class:picker.hint", suffix),
-            ]
-        )
+    def render(width: int) -> FormattedText:
+        return FormattedText(confirm_frame(title, default=default, width=width))
 
     bindings = _abandon_bindings()
 
@@ -265,6 +300,11 @@ def prompt_text(
     output: Output | None = None,
 ) -> str:
     """Free text, with the line editing a terminal user already expects.
+
+    Its key set is `TEXT_KEYS` — empty, because it adds none and has nothing to choose
+    between — so the one corner renderer draws nothing for it, which is what a text
+    prompt has always drawn (docs/CONVENTIONS.md §2). Unlike the two frames above it
+    has no frame of its own to place a corner in: it is a `PromptSession`.
 
     Everything `prompt_toolkit` provides as standard works here — Option+Arrow to
     move by word, Ctrl-A and Ctrl-E, Option+Backspace to delete a word — precisely
