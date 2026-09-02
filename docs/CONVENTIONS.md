@@ -221,14 +221,15 @@ lane settings
   editor               cursor
   preparation          4 paths in, 2 out
   commands             1 step
+  branch prefixes      6 prefixes
   ← Back to the menu
 
   ↑↓ move · enter choose
 ```
 
-`preparation` and `commands` are rows four and five and **not settings**: they are
-destinations, so they are nouns (§4), and their value cells say what is there the way the
-others say what they are set to. Both cover every project on one screen rather than a
+`preparation`, `commands` and `branch prefixes` are rows four, five and six and **not
+settings**: they are destinations, so they are nouns (§4), and their value cells say what
+is there the way the others say what they are set to. Both cover every project on one screen rather than a
 project list and then a page each — the lanes table already draws rows from several
 projects in one table with a dimmed `Cell.lead`, so a third level of nesting is
 unnecessary. Back labels stay scoped as ADR 0002 requires: `← Back to the menu` here,
@@ -246,6 +247,18 @@ lane in hand so it can say which paths are already in it.
 discovered and carries a directory and a guard to edit, none of which is a checkbox — so it
 keeps the list you act on one row of, with `change`/`forget` exactly as the lanes table
 offers `enter`/`close`.
+
+**`branch prefixes` takes that same shape rather than inventing a third one.** A prefix is
+typed rather than discovered, and it is one string rather than an in-or-out answer, so it
+is not a checkbox either: its own list, `change`/`forget` on the row under the cursor, and
+`add a prefix` appended the way `← Back` is. Its second column is the branch the prefix
+would make (`feature/<lane>`), dimmed — the row's own name says what it is called, and the
+example says what choosing it does. **Its rows are never sorted**: the order is what the
+branch prompt shows, and putting the one you reach for most at the top is the only thing
+ordering it can be for — which is also why `change` renames in place rather than dropping
+the row to the bottom. It never says `nothing yet`, because there is always at least one
+(AGENTS.md, *The branch prefixes*); forgetting the last one puts the six back and **says
+so**, since six rows silently reappearing reads as the forget having failed.
 
 Choosing a row asks that **one** question (with today's validation — a projects root
 with no repositories is still refused, a lanes root inside the projects root still
@@ -428,6 +441,21 @@ One term per concept. The list, and the survivor where two forms were found:
 | The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
 | A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
 | A branch that came into being with or during the lane | the lane **created** it | own, new, made |
+| The `feature`, `bugfix`, `spike` part in front of a branch name | a **prefix** (screen: **branch prefixes**) | namespace, category, type, kind (reserved for what a lane is *for*, `KIND_QUESTION`), scope |
+| The prefixes lane offers before anybody customises them | the **seed** (the **six** lane ships with) | default (used in the source for `DEFAULT_PREFIXES`, and already taken by *default branch*), built-in, factory, preset |
+
+**prefix** is the whole term, and the screen is plural where the concept is singular:
+one row is a prefix, and *branch prefixes* is the menu of them. **The word never stands
+alone in a heading** — `lane settings · branch prefixes`, not `lane settings · prefixes` —
+because a bare `prefix` in this application could as easily be `Cell.lead`, which is also a
+dim thing in front of a name.
+
+**seed** is worth its own row because *default* is already spoken for twice over: the
+**default branch** is a git fact lane asks `origin/HEAD` about, and `Config.with_defaults`
+fills in a value per setting. The prefixes have neither shape — they are one list that is
+either customised or not — so calling the untouched list the seed keeps all three
+tellable apart. `DEFAULT_PREFIXES` stays the source's name for it, the way `unset` stays
+the source's word for *unanswered*.
 
 **adopted** and **created** are worth a row each even though nothing on screen says
 either word: they are how AGENTS.md's *"branch deletion applies to the lane's own

@@ -118,17 +118,19 @@ asks **what the lane is for**, and the two answers lead different ways:
 4. It fetches `origin` and works out the default branch.
 5. **How the lane should start:**
 
-   - **branch** — pick the name right there. You get `feature/`, `bugfix/`,
-     `hotfix/`, `chore/`, `refactor/`, `docs/`, the bare lane name, or *other…* to
-     type your own. Hand-typed names are cleaned up (`EMİN/deneme  şube!!` →
-     `EMIN/deneme-sube`) and validated with `git check-ref-format`; if git rejects
-     it, lane asks again rather than giving up.
+   - **branch** — pick the name right there. You get one entry per configured
+     prefix — `feature/`, `bugfix/`, `hotfix/`, `chore/`, `refactor/`, `docs/` until
+     you change them in **settings → branch prefixes** — plus the bare lane name, or
+     *other…* to type your own. Hand-typed names are cleaned up
+     (`EMİN/deneme  şube!!` → `EMIN/deneme-sube`) and validated with
+     `git check-ref-format`; if git rejects it, lane asks again rather than giving up.
    - **detached** — sits at `origin/<default branch>` with no branch. Create one
      yourself whenever you're ready.
 
-   Branch naming is **per lane, on purpose**. It describes the task, not your
-   machine, so this lane can be `bugfix/…` while the next is `feature/…`. There's no
-   global setting for it.
+   **Which** prefix a lane gets is per lane, on purpose. It describes the task, not
+   your machine, so this lane can be `bugfix/…` while the next is `feature/…`, and
+   nothing remembers or guesses it for you. What you *can* set is the list you pick
+   from — see below.
 
 ### An existing branch
 
@@ -411,6 +413,45 @@ you accept, and the next lane you enter in that project acts on the answers.
 **settings → commands** is the other half: the `run` steps, which are typed rather than
 discovered and have a directory and a guard to edit. `Enter` on one offers `change` and
 `forget`, and `add a command` is where a new one comes from.
+
+## Branch prefixes
+
+**settings → branch prefixes** is the list the branch prompt offers when you open a lane:
+
+```
+lane settings · branch prefixes
+  /Users/you/.config/lane/branch_prefixes.toml
+
+  prefix           example
+❯ feature          feature/<lane>
+  bugfix           bugfix/<lane>
+  hotfix           hotfix/<lane>
+  chore            chore/<lane>
+  refactor         refactor/<lane>
+  docs             docs/<lane>
+  add a prefix
+  ← Back to settings
+
+  ↑↓ move · enter choose
+```
+
+Same shape as the commands screen: `Enter` on a row offers `change` and `forget`, and
+`add a prefix` is where a new one comes from. If your team's branches are `spike/` and
+`poc/`, put them here once instead of typing them into *other…* every time.
+
+The order is the order the branch prompt shows, so put the one you reach for most at the
+top — `change` renames a prefix in place rather than moving it. What you type is cleaned
+up and checked with `git check-ref-format` the same way a whole branch name is, so a
+prefix that couldn't make a usable branch is refused here rather than at the branch
+prompt later.
+
+Two things it deliberately doesn't do. **It never renames anything that already exists** —
+forgetting `hotfix` leaves every `hotfix/…` branch and every open lane exactly as it was;
+this is a menu, not a naming policy. And **it can't be emptied**: forget the last one and
+the six lane ships with come back, and lane says so.
+
+Untouched, there's no file at all and you get those six — so if you've never opened this
+screen, nothing about opening a lane has changed.
 
 ### About secrets
 
@@ -747,6 +788,20 @@ Projects are named, not pathed, so moving your whole projects folder keeps every
 fresh lanes folder. Delete the file and you've reset every answer without touching your
 three settings. If it's unreadable lane says so and simply asks again — nothing else
 breaks.
+
+### The branch prefixes
+
+`~/.config/lane/branch_prefixes.toml`, same modes, a separate file for the same reason:
+an unbounded list isn't one of the three settings, and `config.toml` gets rewritten on a
+version bump carrying over only the keys it knows about.
+
+```toml
+version = "0.0.3"          # managed by lane
+prefix = ["feature", "bugfix", "spike", "poc"]
+```
+
+No file, or an empty list, means the six lane ships with. Delete it to get them back
+without touching anything else.
 
 ### Environment overrides
 

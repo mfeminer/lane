@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from lane.actions import doctor, settings
+from lane.actions import doctor, open_lane, settings
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
 from lane.lanes import LaneStore
+from lane.prefixes import DEFAULT_PREFIXES, BranchPrefixStore
 from lane.prepare import Candidate, Step, Verb, apply
 from lane.prepare.sheet import Sheet, answers_from
 from lane.state import StateStore
@@ -926,3 +927,215 @@ def _never(source: Path, target: Path) -> bool:
     """Stand in for a machine whose two roots are on different volumes."""
     del source, target
     return False
+
+
+# -- settings · branch prefixes ----------------------------------------------------
+
+
+def test_settings_has_a_branch_prefixes_row_listing_the_six_it_ships_with(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """A destination rather than a setting, so it is a noun (§4) — and with nothing
+    customised it shows exactly what `open` has always offered."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB1")
+    ui = FakeUi(["branch prefixes", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    rows = [told.text for told in ui.told if told.kind == "row"]
+    assert any("branch prefixes" in row and "6 prefixes" in row for row in rows)
+    for prefix in DEFAULT_PREFIXES:
+        assert any(row.startswith(prefix) for row in rows), f"{prefix} is not on the screen"
+    assert any("add a prefix" in row for row in rows), "the way to add the first one"
+
+
+def test_a_prefix_can_be_added_and_is_written_to_the_file(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The first write is the seed plus the new one: adding `spike` must not be a way
+    to lose the six, and the file is what is offered from then on."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB2")
+    ui = FakeUi(["branch prefixes", "add a prefix", "spike", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert context.prefix_store().path.exists(), "it round-trips through the file"
+    assert BranchPrefixStore(config_dir).load() == (*DEFAULT_PREFIXES, "spike")
+    assert ui.said("spike"), "§9: every action ends by saying what happened"
+
+
+def test_a_prefix_is_validated_the_way_a_whole_branch_name_is(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """`_choose_branch` sanitizes what was typed and then lets git judge it. A prefix
+    that cannot combine with a lane name into a ref git accepts is not worth storing —
+    it would sit on the menu until somebody chose it and got the error there, which is
+    the wrong screen to find out on.
+    """
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB3")
+    ui = FakeUi(["branch prefixes", "add a prefix", "  şube fix!!  ", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == (*DEFAULT_PREFIXES, "sube-fix")
+    assert ui.said("sube-fix"), "and it says what it is actually storing"
+
+
+def test_a_prefix_git_will_not_take_is_refused_rather_than_stored(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB4")
+    ui = FakeUi(["branch prefixes", "add a prefix", "///", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
+    assert any(told.kind == "error" for told in ui.told)
+
+
+def test_changing_a_prefix_keeps_its_place_in_the_menu(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """Order is what the branch prompt shows, so a rename is a rename rather than a
+    forget-and-add that would drop the row to the bottom."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB5")
+    BranchPrefixStore(config_dir).save(("feature", "bugfix", "chore"))
+    ui = FakeUi(["branch prefixes", "bugfix", "change", "fix", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == ("feature", "fix", "chore")
+
+
+def test_forgetting_a_prefix_takes_it_off_the_menu_and_leaves_the_rest(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB6")
+    BranchPrefixStore(config_dir).save(("feature", "bugfix", "chore"))
+    ui = FakeUi(["branch prefixes", "bugfix", "forget", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
+    assert ui.said("bugfix")
+
+
+def test_forgetting_a_prefix_leaves_a_lane_already_on_it_exactly_as_it_was(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The setting is the *menu*, not a naming policy applied to what already exists.
+
+    A branch is a git ref that has been pushed, reviewed and built on; a prefix leaving
+    the menu says nothing about it. There is deliberately nothing to renaming here — the
+    two are not connected, and this is the test that keeps them unconnected.
+    """
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB7")
+    build_repo(projects_root / "_build", default_branch="main")[1].rename(projects_root / "thing")
+
+    opening = FakeUi(["thing", "new work", "Broken export", "branch", "hotfix/broken-export"])
+    open_lane.run(
+        _context(opening, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir)
+    )
+
+    forgetting = FakeUi(["branch prefixes", "hotfix", "forget", "back", "back"])
+    settings.run(
+        _context(
+            forgetting, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+        )
+    )
+
+    lane_path = lanes_root / "thing" / "broken-export"
+    assert CliGitBackend().status(lane_path, "main").branch == "hotfix/broken-export"
+    assert [lane.name for lane in LaneStore(lanes_root).list_lanes()] == ["broken-export"]
+    assert "hotfix" not in BranchPrefixStore(config_dir).load(), "gone from the menu, though"
+
+
+def test_forgetting_the_last_prefix_says_the_six_are_back_rather_than_letting_them_reappear(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """A menu with nothing on it is not an answer anybody chose, so an empty list means
+    the seed (`lane/prefixes.py`). The screen has to say so: six rows reappearing on the
+    next repaint, unexplained, reads as the forget having failed."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB8")
+    BranchPrefixStore(config_dir).save(("spike",))
+    ui = FakeUi(["branch prefixes", "spike", "forget", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
+    assert ui.said("the six")
+
+
+def test_a_prefix_that_is_already_offered_is_not_added_a_second_time(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """Two identical rows are two identical entries at the branch prompt, where picking
+    either does the same thing — a menu that has stopped being a choice."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB9")
+    ui = FakeUi(["branch prefixes", "add a prefix", "feature", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
+    assert ui.said("already")
+
+
+def test_changing_a_prefix_to_a_name_already_on_the_menu_is_refused(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The same rule as adding one, reached from the other door. Renaming `chore` to
+    `feature` would merge two rows into one and silently drop `chore`."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB10")
+    BranchPrefixStore(config_dir).save(("feature", "chore"))
+    ui = FakeUi(["branch prefixes", "chore", "change", "feature", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
+    assert ui.said("already")
+
+
+def test_leaving_a_prefix_as_it_was_is_a_quiet_no_op(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """`change` offers the current name as the default, so pressing Enter on it is the
+    commonest way to back out of a rename. Telling somebody their own prefix is `already
+    offered` for accepting the default they were shown is an accusation, not a report."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgB11")
+    BranchPrefixStore(config_dir).save(("feature", "chore"))
+    ui = FakeUi(["branch prefixes", "chore", "change", "chore", "back", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    settings.run(context)
+
+    assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
+    assert not ui.said("already"), "accepting the default is not an attempt to duplicate"

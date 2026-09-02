@@ -37,6 +37,7 @@ from lane.config import (
     home,
 )
 from lane.context import Context
+from lane.naming import sanitize_branch
 from lane.prepare import Candidate, Step, Verb, apply
 from lane.prepare.sheet import Sheet, answers_from
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
@@ -55,6 +56,7 @@ _LABELS = {
     "editor": "editor",
     "preparation": "preparation",
     "commands": "commands",
+    "branch prefixes": "branch prefixes",
 }
 
 PREPARATION = "preparation"
@@ -72,14 +74,32 @@ command is typed rather than discovered, and it carries a directory and a guard 
 A row of its own rather than a second level under `preparation`, so that `preparation`
 can be the shared screen and nothing else."""
 
+PREFIXES = "branch prefixes"
+"""The menu `open` offers when a lane names its branch — a destination, so a noun (§4).
+
+Not a sixth *setting*: `config.py` is explicit that three settings is a closed list, and
+this is an unbounded list of strings with no per-value default and no environment
+override. It lives in `branch_prefixes.toml`, beside `prepare.toml`, for the reason that
+file is beside the config (`lane/prefixes.py`).
+
+Which prefix a lane takes is still decided per lane, at the prompt. This row is the menu
+that choice is made from, which is a different thing."""
+
 PREPARE_BACK = "← Back to settings"
 """Scoped deliberately, as ADR 0002 requires — one step back, not out of settings."""
 
 ADD_COMMAND = "\x00add\x00"
+ADD_PREFIX = "\x00add-prefix\x00"
 
 COMMAND_COLUMNS = (
     Column("command"),
     Column("where", drop=1),
+)
+
+PREFIX_COLUMNS = (
+    Column("prefix"),
+    # What it actually makes, which is the thing being chosen at the branch prompt.
+    Column("example", drop=1),
 )
 
 
@@ -142,6 +162,9 @@ def _run_list(context: Context) -> None:
         if key == COMMANDS:
             _run_commands(context)
             continue
+        if key == PREFIXES:
+            _run_branch_prefixes(context)
+            continue
         if key == "projects_root":
             projects_root = _ask_projects_root(context, current.projects_root)
             if projects_root is None:
@@ -193,6 +216,7 @@ def _rows(context: Context, current: Config) -> list[Row[str]]:
         row("editor", current.editor or DEFAULT_EDITOR),
         row(PREPARATION, _prepared_phrase(context)),
         row(COMMANDS, _commands_phrase(context)),
+        row(PREFIXES, _prefixes_phrase(context)),
     ]
 
 
@@ -219,6 +243,17 @@ def _commands_phrase(context: Context) -> str:
     if not commands:
         return "nothing yet"
     return f"{len(commands)} step" + ("" if len(commands) == 1 else "s")
+
+
+def _prefixes_phrase(context: Context) -> str:
+    """How many there are, the way `commands` says how many steps there are.
+
+    Never "nothing yet": the store always answers with at least one, so there is always
+    something to say — and saying "nothing yet" about a screen that offers six would be
+    the one wrong answer.
+    """
+    count = len(context.prefix_store().load())
+    return f"{count} prefix" + ("" if count == 1 else "es")
 
 
 def _text(path: Path | None) -> str:
@@ -612,3 +647,136 @@ def _env_note(context: Context) -> bool:
         variable in context.overridden.values()
         for variable in (ENV_PROJECTS_ROOT, ENV_LANES_ROOT, ENV_EDITOR)
     )
+
+
+# -- branch prefixes: the menu the per-lane choice is made from -------------------
+
+
+def _run_branch_prefixes(context: Context) -> None:
+    """The list you act on a row of — `commands`' shape, for the same reasons.
+
+    A prefix is typed rather than discovered, and it is one string rather than an
+    in-or-out answer, so it is not a checkbox and does not belong on the preparation
+    checklist. `change`/`forget` on the row under the cursor, exactly as the lanes table
+    offers `enter`/`close`.
+    """
+    ui = context.ui
+    store = context.prefix_store()
+
+    ui.heading("lane settings · branch prefixes")
+    ui.detail(f"  {store.path}")
+    ui.blank()
+
+    cursor = 0
+    while True:
+        rows = _prefix_rows(store.load())
+
+        def _rows_now(rows: list[Row[str]] = rows) -> list[Row[str]]:
+            return rows
+
+        try:
+            chosen, cursor = ui.browse(
+                "branch prefixes", PREFIX_COLUMNS, _rows_now, back=PREPARE_BACK, cursor=cursor
+            )
+        except Abandoned:
+            return
+
+        if chosen == ADD_PREFIX:
+            _add_prefix(context)
+            continue
+        _act_on_prefix(context, chosen)
+
+
+def _prefix_rows(prefixes: Sequence[str]) -> list[Row[str]]:
+    """In the order they are offered at the branch prompt — never rearranged here.
+
+    Not sorted: the order *is* what the branch prompt shows, and putting the one you
+    reach for most at the top is the only thing ordering can be for.
+    """
+    rows: list[Row[str]] = [
+        Row(
+            value=prefix,
+            cells=(Cell(prefix), Cell(f"{prefix}/<lane>", tone="dim")),
+        )
+        for prefix in prefixes
+    ]
+    # An action row, like the visible way back: a screen you can only ever add the
+    # first prefix from cannot answer with a line of prose (§12).
+    rows.append(Row(value=ADD_PREFIX, cells=(Cell("add a prefix"), Cell(""))))
+    return rows
+
+
+def _act_on_prefix(context: Context, prefix: str) -> None:
+    """Two verbs for the row under the cursor, exactly as `commands` offers two."""
+    try:
+        verb = context.ui.choose(
+            prefix,
+            [
+                Choice("change", "change", "rename it on the menu"),
+                Choice("forget", "forget", "and stop offering it"),
+            ],
+        )
+    except Abandoned:
+        return
+
+    store = context.prefix_store()
+    current = list(store.load())
+    if verb == "forget":
+        kept = [one for one in current if one != prefix]
+        store.save(kept)
+        context.ui.ok(f"Forgot {prefix}.")
+        if not kept:
+            # An empty file means the seed, so the six are about to reappear on the next
+            # repaint — unexplained, that reads as the forget having failed.
+            context.ui.warn("That was the last one, so the six lane ships with are back.")
+        return
+
+    # Its own name is not a name it collides with: `change` shows the current one as the
+    # default, so pressing Enter on it is the commonest way to back out of a rename, and
+    # calling that a duplicate is an accusation rather than a report.
+    others = [one for one in current if one != prefix]
+    changed = _usable_prefix(context, context.ui.text("Branch prefix", default=prefix), others)
+    if changed is None or changed == prefix:
+        return
+    # In place rather than forget-and-add: the order *is* what the branch prompt shows,
+    # so a rename must not drop the row to the bottom of it.
+    current[current.index(prefix)] = changed
+    store.save(current)
+    context.ui.ok(f"{changed}/ — offered when a lane names its branch.")
+
+
+def _add_prefix(context: Context) -> None:
+    store = context.prefix_store()
+    prefix = _usable_prefix(context, context.ui.text("Branch prefix"), store.load())
+    if prefix is None:
+        return
+    # The seed plus the new one, not the new one alone: adding `spike` is not a way to
+    # lose the six, and once anything is written the file *is* the menu.
+    store.save([*store.load(), prefix])
+    context.ui.ok(f"{prefix}/ — offered when a lane names its branch.")
+
+
+def _usable_prefix(context: Context, typed: str, offered: Sequence[str]) -> str | None:
+    """Validated exactly the way `_choose_branch` validates a whole branch name.
+
+    Sanitize what was typed, then let git judge the ref it would make. A prefix that
+    cannot combine with a lane name into something git accepts is not worth storing: it
+    would sit on the menu until somebody chose it and got the error there, which is the
+    wrong screen to find out on.
+
+    One rule this adds that a whole branch name has no use for: it must not already be
+    offered. Two identical rows are two identical entries at the branch prompt, where
+    picking either does the same thing — a menu that has stopped being a choice.
+    """
+    prefix = sanitize_branch(typed).strip("/")
+    if not prefix:
+        context.ui.error("That is not a usable branch prefix.")
+        return None
+    if not context.git.check_ref_format(f"{prefix}/lane"):
+        # git owns this judgement; lane does not second-guess it.
+        context.ui.error(f"git rejects a branch starting {prefix}/")
+        return None
+    if prefix in offered:
+        context.ui.warn(f"{prefix}/ is already offered.")
+        return None
+    return prefix
