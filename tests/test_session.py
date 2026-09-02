@@ -314,7 +314,7 @@ def test_a_whole_working_day_menu_open_menu_close_menu_quit(
             "lanes",
             "fix-the-csv-export",  # the row under the cursor
             "close",  # what to do with it
-            True,  # confirm the close
+            [],  # the close screen, accepted as it opened
             # The listing has nothing left to show, so it lands back at the menu.
             "quit",
         ]
@@ -500,7 +500,7 @@ def test_a_whole_working_day_with_a_lane_that_needs_preparing(
             "lanes",
             "fix-the-csv-export",
             "close",
-            True,
+            [],
             "quit",
         ]
     )

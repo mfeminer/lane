@@ -726,7 +726,7 @@ def test_choosing_a_row_then_enter_launches_the_editor_and_returns_to_the_menu(
 def test_the_second_lane_can_be_selected_by_position(projects_root: Path, lanes_root: Path) -> None:
     """A script drives "select the second lane, close it" without naming it."""
     _two_lanes(projects_root, lanes_root)
-    ui = FakeUi([1, "close", True, "back"])
+    ui = FakeUi([1, "close", [], "back"])
 
     list_lanes.run(
         _context(
@@ -748,7 +748,7 @@ def test_closing_leaves_you_in_the_listing_one_row_shorter(
     """Closing several lanes in a row is a real batch; going back to the menu
     between each is what made the old flow tiring."""
     _two_lanes(projects_root, lanes_root)
-    ui = FakeUi(["clean-lane", "close", True, "back"])
+    ui = FakeUi(["clean-lane", "close", [], "back"])
 
     list_lanes.run(
         _context(
@@ -762,7 +762,8 @@ def test_closing_leaves_you_in_the_listing_one_row_shorter(
     assert not (lanes_root / "thing" / "clean-lane").exists()
     assert (lanes_root / "thing" / "busy-lane").exists(), "only the chosen lane closed"
 
-    titles = [told.text for told in ui.told if told.kind == "table"]
+    # The close's own screen is a table too, so the listing's are picked out by name.
+    titles = [told.text for told in ui.told if told.kind == "table" and "open lane" in told.text]
     assert titles == ["2 open lanes in thing", "1 open lane in thing"]
 
 
@@ -778,7 +779,7 @@ def test_closing_the_last_lane_leaves_the_listing_with_nothing_to_show(
     )
     store.write_meta("thing", "only", LaneMeta(description="only", base="main", repo=str(repo)))
 
-    ui = FakeUi(["only", "close", True])
+    ui = FakeUi(["only", "close", []])
     list_lanes.run(
         _context(
             ui,
@@ -827,7 +828,7 @@ def test_backing_out_of_a_close_returns_to_the_table_too(
     )
 
     assert (lanes_root / "thing" / "clean-lane").exists(), "backing out changed nothing"
-    titles = [told.text for told in ui.told if told.kind == "table"]
+    titles = [told.text for told in ui.told if told.kind == "table" and "open lane" in told.text]
     assert len(titles) == 2, "the table came back rather than the menu"
     assert ui.unanswered() == 0
 
