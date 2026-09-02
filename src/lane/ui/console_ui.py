@@ -28,11 +28,13 @@ from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
 from lane.ui.seam import (
     BACK_LABEL,
+    FINISH,
     Abandoned,
     Answers,
     Choice,
     Column,
     Fill,
+    Finish,
     Node,
     Quit,
     Row,
@@ -120,13 +122,14 @@ class ConsoleUi:
         answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
+        finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
         input: Input | None = None,
         output: Output | None = None,
     ) -> Answers[T]:
         """Hand off to the checklist widget. No rows to supply: it draws its own —
-        `← Back` on every level that has one to go back to, `apply` and `discard` on
-        all of them."""
+        `← Back` on every level that has one to go back to, and the two `finish` names
+        on all of them."""
         return check_list(
             title,
             columns,
@@ -134,6 +137,7 @@ class ConsoleUi:
             answers=answers,
             summary=summary,
             fill=fill,
+            finish=finish,
             on_render=on_render,
             input=input,
             output=output,

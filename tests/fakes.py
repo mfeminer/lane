@@ -14,11 +14,13 @@ from lane.environment import EditorLaunch
 from lane.github.client import DependentLookup, Dependents, PrLookup, not_applicable
 from lane.ui.seam import (
     BACK_LABEL,
+    FINISH,
     Abandoned,
     Answers,
     Choice,
     Column,
     Fill,
+    Finish,
     Node,
     Quit,
     Row,
@@ -216,6 +218,7 @@ class FakeUi:
         answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
+        finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
     ) -> Answers[T]:
         """Records the whole screen, then answers it with one scripted keystroke run.
