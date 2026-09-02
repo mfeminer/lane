@@ -229,8 +229,9 @@ class FakeUi:
 
             FakeUi([["apps/web/node_modules", 2]])
 
-        `[]` is the untouched screen: `apply` pressed with nothing answered, which
-        answers **nothing** rather than answering everything *out*. A row is named by its
+        `[]` is the untouched screen: the accept row pressed with nothing answered, which
+        answers **nothing** rather than answering everything *out*. That row is `apply`
+        here and `close` on the close screen — whatever `finish` calls it. A row is named by its
         value, its position, or any of its cell texts, exactly as in `browse` — **at any
         depth**, because a folder is a screen you go into and a test should not have to
         spell out the walk to reach it. Naming a folder answers every leaf beneath it,

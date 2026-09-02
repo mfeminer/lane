@@ -149,10 +149,11 @@ caller decides (`Finish`), and the tree's rows get theirs from `Row.detail`.
 def tail_detail(label: str, finish: Finish = FINISH) -> str:
     """What the row under the cursor will do, in the panel's words.
 
-    Looked up by what the row **is** rather than by its label, because two of the three
-    labels are the caller's — `discard` is the row that has to have this, being the only
-    one on screen that throws work away, and a row whose label is a single verb cannot
-    say by itself how much that verb covers.
+    Looked up by label, which says what the row **is** because `Finish` refuses to be
+    built out of two that read alike. Two of the three are the caller's — the reject row
+    is the one that has to have a panel line, being the only one on screen that throws
+    work away, and a row whose label is a single verb cannot say by itself how much that
+    verb covers.
     """
     if label == BACK_LABEL:
         return BACK_DETAIL
@@ -621,7 +622,9 @@ def check[T](
     input: Input | None = None,
     output: Output | None = None,
 ) -> Answers[T]:
-    """Every leaf that was answered when `apply` was chosen. `discard` raises `Abandoned`.
+    """Every leaf that was answered when the accept row was chosen; the reject row raises
+    `Abandoned`. Which two rows those are is `finish`'s to say — `apply` and `discard`
+    where the caller does not name them, `close` and `leave open` on the close screen.
 
     The answers are the widget's own, unlike the table's `rows`: in-or-out is the whole
     of what this screen records, so there is nothing about what an answer *means*

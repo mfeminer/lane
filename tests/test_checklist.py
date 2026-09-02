@@ -946,3 +946,30 @@ def test_enter_on_the_callers_reject_row_abandons(keys: PipeInput) -> None:
             output=SizedOutput(120, 40),
             finish=CLOSING,
         )
+
+
+@pytest.mark.parametrize(
+    ("accept", "reject"),
+    [
+        pytest.param("close", "close", id="the way on and the way out read alike"),
+        pytest.param(BACK_LABEL, "leave open", id="the way on reads as the back row"),
+        pytest.param("close", BACK_LABEL, id="the way out reads as the back row"),
+    ],
+)
+def test_a_level_cannot_end_with_two_rows_that_read_alike(accept: str, reject: str) -> None:
+    """Which trailing row `Enter` acted on was decided by comparing its label, so two
+    that read alike left one of them unreachable — a screen with no way to accept it,
+    or none to leave it. Refused where it is built, because a `Finish` is made once at
+    import and a screen that cannot be finished is not a thing to find out at runtime.
+    """
+    with pytest.raises(ValueError):
+        Finish(accept=accept, reject=reject)
+
+
+@pytest.mark.parametrize(("accept", "reject"), [("", "leave open"), ("close", "")])
+def test_a_row_that_ends_a_level_has_a_word_on_it(accept: str, reject: str) -> None:
+    """A blank label is the same screen as a colliding one: a row nobody can read is a
+    row nobody can choose, so it is refused in the same place and for the same reason.
+    """
+    with pytest.raises(ValueError):
+        Finish(accept=accept, reject=reject)
