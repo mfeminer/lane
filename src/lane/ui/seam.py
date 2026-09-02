@@ -46,6 +46,51 @@ BACK_LABEL = "← Back"
 
 
 @dataclass(frozen=True, slots=True)
+class Finish:
+    """The two rows a `check` level ends with: the way on, and the way out.
+
+    Rows rather than keys, exactly as `BACK_LABEL` is — that part is the widget's and
+    is not negotiable. The **words** are the caller's, because what accepting a screen
+    does is: a checklist of ignored paths applies answers, and the close screen closes a
+    lane. `apply`/`discard` said in one vocabulary what the other one cannot mean.
+
+    The two details are the caller's for the same reason. A row whose label is a single
+    verb cannot say by itself how much that verb covers, which is why the panel line
+    exists at all, and the answer differs per screen just as the verb does.
+    """
+
+    accept: str = "apply"
+    reject: str = "discard"
+    accept_detail: str = (
+        "Records every answer given so far. Anything still unanswered is asked again."
+    )
+    reject_detail: str = "Records nothing at all — every answer on this screen is thrown away."
+
+    def __post_init__(self) -> None:
+        """Three rows end a level, and the widget tells them apart by what they say.
+
+        So two that read alike are not a cosmetic problem: whichever is matched first
+        answers for both, and the other becomes a row the user can put the cursor on and
+        press `Enter` on to no effect — a screen with no way to accept it, or none to
+        leave it. A blank label is the same screen by a different route. Refused here,
+        where a `Finish` is built once at import, rather than found on a screen someone
+        is standing in.
+        """
+        labels = (self.accept, self.reject, BACK_LABEL)
+        if not all(labels):
+            raise ValueError("a row that ends a level needs a word on it")
+        if len(set(labels)) != len(labels):
+            raise ValueError(
+                f"the rows that end a level must read differently: "
+                f"{self.accept!r}, {self.reject!r} and {BACK_LABEL!r}"
+            )
+
+
+FINISH = Finish()
+"""What a screen that says nothing else ends with — the checklist's own two words."""
+
+
+@dataclass(frozen=True, slots=True)
 class Choice[T]:
     """One option in a picker: what the user sees, and what the action gets back."""
 
@@ -211,6 +256,7 @@ class Ui(Protocol):
         answers: Answers[T] | None = None,
         summary: Summary[T] | None = None,
         fill: Fill | None = None,
+        finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
     ) -> Answers[T]:
         """Every leaf that was answered, and which way, when `apply` was chosen.
@@ -243,6 +289,11 @@ class Ui(Protocol):
         them wherever there is a level to go back to, and moves the cursor without
         discarding anything. `discard` raises `Abandoned`. `Ctrl-C` quits lane, as
         everywhere else.
+
+        `finish` is what those two rows are **called**, and what their panel lines say.
+        The shape is the widget's and never varies; the words belong to the screen,
+        because a decision taken over a set of paths and one taken over what closing a
+        lane does are accepted for different reasons (`Finish`).
         """
         ...
 

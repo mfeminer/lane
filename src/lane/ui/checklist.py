@@ -77,7 +77,17 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 
 from lane.ui.picker import ESCAPE_TIMEOUT
-from lane.ui.seam import BACK_LABEL, Abandoned, Answers, Column, Fill, Node, Quit
+from lane.ui.seam import (
+    BACK_LABEL,
+    FINISH,
+    Abandoned,
+    Answers,
+    Column,
+    Fill,
+    Finish,
+    Node,
+    Quit,
+)
 from lane.ui.table import (
     CURSOR_WIDTH,
     GAP,
@@ -92,7 +102,7 @@ from lane.ui.table import (
     window,
 )
 
-APPLY, DISCARD = "apply", "discard"
+APPLY, DISCARD = FINISH.accept, FINISH.reject
 """The two rows every level ends with, and what `Enter` on each of them does.
 
 Rows rather than keys, exactly as `← Back` is: the vocabulary is closed (AGENTS.md,
@@ -116,7 +126,7 @@ press on a **file** ended up leaving the level it was pressed in. The footer sto
 """
 
 
-def tail_rows(nested: bool) -> tuple[str, ...]:
+def tail_rows(nested: bool, finish: Finish = FINISH) -> tuple[str, ...]:
     """The rows below the tree, in the order they are drawn.
 
     `← Back` first where there is a level to go back to, because it belongs with the
@@ -124,21 +134,30 @@ def tail_rows(nested: bool) -> tuple[str, ...]:
     and discard are reachable at every depth" is a single fact rather than one repeated
     in `paint`, in `Walk` and in the key bindings.
     """
-    return ((BACK_LABEL,) if nested else ()) + (APPLY, DISCARD)
+    return ((BACK_LABEL,) if nested else ()) + (finish.accept, finish.reject)
 
 
-TAIL_DETAIL = {
-    APPLY: "Records every answer given so far. Anything still unanswered is asked again.",
-    DISCARD: "Records nothing at all — every answer on this screen is thrown away.",
-    BACK_LABEL: "Goes up one level. Every answer given so far is kept.",
-}
-"""What each of the three does, for the panel under the cursor.
+BACK_DETAIL = "Goes up one level. Every answer given so far is kept."
+"""What `← Back` does, for the panel under the cursor.
 
-The tree's own rows get theirs from the caller (`Row.detail`); these three are the
-widget's, so their words are too. `discard` is the one that has to be there — it is the
-only row on the screen that throws work away, and a row whose label is a single verb
-cannot say by itself how much that verb covers.
+The widget's own words, because the row is the widget's: it moves the cursor a level
+and nothing else, whatever the screen is a screen of. The other two say something the
+caller decides (`Finish`), and the tree's rows get theirs from `Row.detail`.
 """
+
+
+def tail_detail(label: str, finish: Finish = FINISH) -> str:
+    """What the row under the cursor will do, in the panel's words.
+
+    Looked up by label, which says what the row **is** because `Finish` refuses to be
+    built out of two that read alike. Two of the three are the caller's — the reject row
+    is the one that has to have a panel line, being the only one on screen that throws
+    work away, and a row whose label is a single verb cannot say by itself how much that
+    verb covers.
+    """
+    if label == BACK_LABEL:
+        return BACK_DETAIL
+    return finish.accept_detail if label == finish.accept else finish.reject_detail
 
 
 def hints(action: str = NOTHING) -> tuple[str, ...]:
@@ -288,6 +307,7 @@ def paint[T](
     summary: str = "",
     total: int | None = None,
     nested: bool = False,
+    finish: Finish = FINISH,
 ) -> Painted:
     """Draw one frame of one level. Pure, which is what makes the layout rules testable.
 
@@ -298,14 +318,14 @@ def paint[T](
     it, so a level cannot be asked to work it out from what it can see.
     """
     rows = [node.row for node in nodes]
-    tail = tail_rows(nested)
+    tail = tail_rows(nested, finish)
     shown_rows = len(rows) + len(tail)
     cursor = max(0, min(cursor, shown_rows - 1)) if shown_rows else 0
     on_tail = cursor >= len(rows)
 
     wanted: tuple[str, ...] = ()
     if on_tail:
-        wanted = (TAIL_DETAIL[tail[cursor - len(rows)]],)
+        wanted = (tail_detail(tail[cursor - len(rows)], finish),)
     elif rows:
         wanted = rows[cursor].detail[:MAX_DETAIL_LINES]
     room, detail = vertical(height, wanted, extra=SUMMARY_LINES)
@@ -418,8 +438,9 @@ class Walk[T]:
     place in, which is the cost the whole drill-down is supposed to avoid.
     """
 
-    def __init__(self, rows: Callable[[], Sequence[Node[T]]]) -> None:
+    def __init__(self, rows: Callable[[], Sequence[Node[T]]], finish: Finish = FINISH) -> None:
         self._rows = rows
+        self.finish = finish
         self._descent: list[int] = []
         self._parked: list[tuple[int, int]] = []
         self.index = 0
@@ -453,12 +474,12 @@ class Walk[T]:
     def rows_here(self) -> int:
         """Rows on this screen, the trailing ones included."""
         nodes, _ = self.level()
-        return len(nodes) + len(tail_rows(self.nested))
+        return len(nodes) + len(tail_rows(self.nested, self.finish))
 
     def tail_row(self) -> str:
         """Which of the trailing rows the cursor is on, or `""` when it is on the tree."""
         nodes, _ = self.level()
-        tail = tail_rows(self.nested)
+        tail = tail_rows(self.nested, self.finish)
         position = self.index - len(nodes)
         return tail[position] if 0 <= position < len(tail) else ""
 
@@ -580,7 +601,7 @@ def bindings_for[T](
         match walk.tail_row():
             case label if label == BACK_LABEL:
                 walk.leave()
-            case label if label == APPLY:
+            case label if label == walk.finish.accept:
                 exit_with(dict(answered))
             case _:
                 exit_with(None)
@@ -596,11 +617,14 @@ def check[T](
     answers: Answers[T] | None = None,
     summary: Callable[[Answers[T]], str] | None = None,
     fill: Fill | None = None,
+    finish: Finish = FINISH,
     on_render: Callable[[str], None] | None = None,
     input: Input | None = None,
     output: Output | None = None,
 ) -> Answers[T]:
-    """Every leaf that was answered when `apply` was chosen. `discard` raises `Abandoned`.
+    """Every leaf that was answered when the accept row was chosen; the reject row raises
+    `Abandoned`. Which two rows those are is `finish`'s to say — `apply` and `discard`
+    where the caller does not name them, `close` and `leave open` on the close screen.
 
     The answers are the widget's own, unlike the table's `rows`: in-or-out is the whole
     of what this screen records, so there is nothing about what an answer *means*
@@ -612,7 +636,7 @@ def check[T](
     which only the action knows, beside the widget's *how many*.
     """
     ticked: dict[T, bool] = dict(answers or {})
-    walk: Walk[T] = Walk(rows)
+    walk: Walk[T] = Walk(rows, finish)
 
     def render() -> FormattedText:
         nodes, here = walk.level()
@@ -631,6 +655,7 @@ def check[T](
             summary=summary(settled) if summary is not None else "",
             total=len(leaves_of(list(rows()))),
             nested=walk.nested,
+            finish=finish,
         )
         walk.top = painted.top
         if on_render is not None:

@@ -30,11 +30,18 @@ from lane.github.client import (
 )
 from lane.lanes import LaneMeta, LaneStore
 from lane.state import StateStore
-from lane.ui.seam import Abandoned
 from tests.conftest import Origin, build_repo, git
 from tests.fakes import FakeEnvironment, FakeUi, StubGitHubClient
 
 GITHUB_URL = "git@github.com:acme/thing.git"
+
+CLOSE: list[object] = []
+"""The close screen, accepted with nothing toggled.
+
+`FakeUi.check` takes *what to answer*, in order, the way the keys would arrive — so
+an empty run is `close` pressed straight away, and every row keeps the answer it
+opened with: the rescue in, every branch deletion out.
+"""
 
 
 def _context(
@@ -129,7 +136,7 @@ def test_uncommitted_files_are_reported_and_block(
     lane = _open_branch_lane(repo, store)
     (lane / "scratch.txt").write_text("unsaved\n")
 
-    ui = FakeUi([False])  # decline the close
+    ui = FakeUi([FakeUi.ABANDON])  # leave it open
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -146,7 +153,7 @@ def test_unpushed_commits_are_reported_as_never_pushed(
     lane = _open_branch_lane(repo, store)
     _commit(lane, "work.txt", "some work")
 
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -164,7 +171,7 @@ def test_unpushed_commits_are_reported_against_the_upstream_when_there_is_one(
     git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
     _commit(lane, "later.txt", "not pushed")
 
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -178,7 +185,7 @@ def test_a_clean_merged_lane_reports_no_issues(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store)
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -208,7 +215,7 @@ def test_a_merged_pull_request_counts_as_clean_even_though_git_disagrees(
     assert not CliGitBackend().status(lane, "main").merged
 
     merged_pr = found(PullRequest(number=42, state="MERGED", url="https://github.com/a/b/pull/42"))
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged_pr)), store, "mylane")
 
     assert ui.said("Lane is clear"), "a MERGED PR must make this a clean close"
@@ -247,7 +254,7 @@ def test_a_lane_whose_remote_branch_was_deleted_on_merge_is_not_called_never_pus
             number=42, state="MERGED", url="https://github.com/a/b/pull/42", head_oid=landed
         )
     )
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
 
     assert not ui.said("never pushed"), "it was pushed — that is where PR #42 came from"
@@ -275,7 +282,7 @@ def test_commits_made_after_the_merge_still_block(
     _commit(lane, "afterthought.txt", "a fix-up nobody has seen")
 
     merged = found(PullRequest(number=42, state="MERGED", url="u42", head_oid=landed))
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
 
     assert ui.said("1 commit(s) made after PR #42 merged")
@@ -303,7 +310,7 @@ def test_a_branch_amended_after_its_merge_is_refused_rather_than_guessed_at(
 
     # The pull request merged from a commit this branch no longer has.
     merged = found(PullRequest(number=42, state="MERGED", url="u42", head_oid="0" * 40))
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "mylane")
 
     assert ui.said("Cannot tell what PR #42 carried")
@@ -323,7 +330,7 @@ def test_an_open_pull_request_blocks_and_shows_its_url(
     git(["push", "--quiet", "--set-upstream", "origin", "feature/x"], cwd=lane)
 
     open_pr = found(PullRequest(number=7, state="OPEN", url="https://github.com/a/b/pull/7"))
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(open_pr)), store, "mylane")
 
     assert ui.said("still open")
@@ -356,7 +363,7 @@ def test_an_open_follow_up_blocks_even_though_an_earlier_one_merged(
         ),
         PullRequest(number=42, state="OPEN", url="https://github.com/a/b/pull/42"),
     )
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(history)), store, "mylane")
 
     assert ui.said("PR #42 is still open")
@@ -380,7 +387,7 @@ def test_every_branch_the_lane_used_is_deleted_not_only_the_last_one(
     lane = _open_branch_lane(repo, store, branch="feature/first")
     git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -412,7 +419,7 @@ def test_an_unmerged_branch_the_lane_used_is_not_force_deleted_without_permissio
     _, repo, store = lane_setup
     _lane_with_an_unmerged_second_branch(repo, store)
 
-    ui = FakeUi([True, False])  # close it; but do not force the unmerged one
+    ui = FakeUi([CLOSE])  # close it, leaving the unmerged branch's row out
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -430,13 +437,40 @@ def test_an_unmerged_branch_the_lane_used_is_deleted_once_permission_is_given(
     _, repo, store = lane_setup
     _lane_with_an_unmerged_second_branch(repo, store)
 
-    ui = FakeUi([True, True])
+    ui = FakeUi([["delete branch feature/second"]])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
 
     assert not CliGitBackend().branch_exists(repo, "feature/second")
     assert ui.said("Branch deleted: feature/second")
+
+
+def test_two_unmerged_branches_can_be_answered_one_way_each(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A row each, because the answers are not the same answer.
+
+    One question covering every branch the lane wandered through could only say *all
+    of them* or *none of them* — and a lane that moved around twice usually means one
+    of them and not the other. The summary above has always listed them individually;
+    now they can be answered that way too.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    for branch, file in (("feature/second", "kept.txt"), ("feature/third", "dropped.txt")):
+        git(["switch", "--quiet", "-c", branch], cwd=lane)
+        _commit(lane, file, f"work on {branch}")
+    git(["switch", "--quiet", "feature/first"], cwd=lane)
+
+    ui = FakeUi([["delete branch feature/third"]])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    backend = CliGitBackend()
+    assert backend.branch_exists(repo, "feature/second"), "left out, so it stays"
+    assert not backend.branch_exists(repo, "feature/third"), "taken in, so it goes"
 
 
 def test_a_pull_request_based_on_this_branch_blocks_the_close(
@@ -460,7 +494,7 @@ def test_a_pull_request_based_on_this_branch_blocks_the_close(
             (PullRequest(number=99, state="OPEN", url="https://github.com/a/b/pull/99"),)
         ),
     )
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, github), store, "mylane")
 
     assert ui.said("PR #99 is based on this branch")
@@ -504,7 +538,7 @@ def test_a_closed_pull_request_blocks_and_shows_its_url(
     _commit(lane, "abandoned.txt", "abandoned work")
 
     closed = found(PullRequest(number=9, state="CLOSED", url="https://github.com/a/b/pull/9"))
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(closed)), store, "mylane")
 
     assert ui.said("closed without being merged")
@@ -518,7 +552,7 @@ def test_no_pull_request_blocks_without_a_url(
     lane = _open_branch_lane(repo, store)
     _commit(lane, "orphan.txt", "no pr for this")
 
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -570,7 +604,7 @@ def test_a_lane_with_a_non_github_remote_still_closes(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store)
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     github = StubGitHubClient(NotApplicable("not-github"))
     _close(_context(ui, projects_root, lanes_root, github), store, "mylane")
 
@@ -588,7 +622,7 @@ def test_a_detached_lane_with_unpushed_commits_is_offered_a_wip_branch_that_surv
     stranded = _commit(lane, "precious.txt", "would be stranded")
 
     # confirm close, then confirm the rescue
-    ui = FakeUi([True, True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "rescueme")
 
     assert ui.said("unreachable")
@@ -605,7 +639,7 @@ def test_declining_the_rescue_still_closes(
     lane = _open_detached_lane(repo, store, "norescue")
     _commit(lane, "meh.txt", "do not care")
 
-    ui = FakeUi([True, False])
+    ui = FakeUi([[0]])  # take the rescue row back out
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "norescue")
 
     assert not lane.exists()
@@ -618,11 +652,143 @@ def test_a_clean_detached_lane_is_not_offered_a_rescue(
     _, repo, store = lane_setup
     lane = _open_detached_lane(repo, store, "cleandet")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "cleandet")
 
     assert not lane.exists()
     assert not ui.said("unreachable")
+
+
+# -- one screen, not a chain of confirmations ------------------------------------
+
+
+def test_the_close_is_one_screen_rather_than_a_chain_of_confirmations(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Everywhere else in lane you stand in a screen and act on it. Closing was the
+    last place still asking a run of yes/no questions whose defaults disagreed with
+    each other — three declining, one accepting, inside what reads as one flow.
+
+    `[]` is the screen accepted with nothing toggled: `close`, and whatever the rows
+    already said.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store)
+
+    ui = FakeUi([[]])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    assert ui.checklists == 1, "one screen"
+    assert not lane.exists()
+
+
+class Recording(FakeUi):
+    """Keeps the rows the close screen opened with, and the answer each opened on."""
+
+    def __init__(self, answers: Sequence[object] = ()) -> None:
+        super().__init__(answers)
+        self.rows: list[str] = []
+        self.started: dict[str, bool] = {}
+
+    def check(self, title, columns, rows, **kwargs):  # type: ignore[no-untyped-def]
+        drawn = list(rows())
+        self.rows = [node.row.cells[0].text for node in drawn]
+        opening = kwargs.get("answers") or {}
+        self.started = {node.row.cells[0].text: opening[node.row.value] for node in drawn}
+        return super().check(title, columns, rows, **kwargs)
+
+
+def test_a_lane_with_nothing_optional_to_decide_gets_the_same_screen_and_no_rows(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Zero optional rows is not a special case with a shortcut of its own.
+
+    The screen still opens, with `close` and `leave open` and nothing above them —
+    one shape everywhere, rather than a bare confirmation for the easy lane and a
+    screen for the awkward one.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "nothing", "feature/nothing")
+    _commit(lane, "w.txt", "work")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/nothing"], cwd=lane)
+    origin.advance("squashed")
+    CliGitBackend().fetch_prune(repo)
+
+    merged = found(PullRequest(number=9, state="MERGED", url="u"))
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "nothing")
+
+    assert ui.checklists == 1, "the same screen, not a fallback"
+    assert ui.rows == [], "nothing is at risk, so there is nothing to decide"
+    assert not lane.exists()
+    assert not CliGitBackend().branch_exists(repo, "feature/nothing"), "and the branch still goes"
+
+
+def test_the_rescue_row_is_there_only_for_stranded_commits_and_starts_in(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """The one row that opens *in*: it is the only one that keeps something."""
+    _, repo, store = lane_setup
+    lane = _open_detached_lane(repo, store, "stranded")
+    _commit(lane, "precious.txt", "would be stranded")
+
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "stranded")
+
+    assert ui.rows == ["park those commits on wip/stranded"]
+    assert ui.started == {"park those commits on wip/stranded": True}
+    assert CliGitBackend().branch_exists(repo, "wip/stranded")
+
+
+def test_a_detached_lane_with_nothing_stranded_is_offered_no_rescue_row(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    _, repo, store = lane_setup
+    _open_detached_lane(repo, store, "nothingtolose")
+
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "nothingtolose")
+
+    assert ui.rows == []
+
+
+def test_the_branch_row_is_there_only_where_deleting_it_could_lose_work_and_starts_out(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """git's refusal to `-d` a branch holding unique work is the safety net, and this
+    row is what overrides it. Where the work demonstrably landed there is nothing to
+    override and so no row — which is exactly today's "no second question"."""
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "holds", "feature/holds")
+    _commit(lane, "work.txt", "nowhere else")
+
+    ui = Recording([CLOSE])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "holds"
+    )
+
+    assert ui.rows == ["delete branch feature/holds"]
+    assert ui.started == {"delete branch feature/holds": False}
+
+
+def test_a_merged_branch_the_lane_used_earlier_gets_no_row_either(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """It is deleted with the rest of them, and `-d` will not object, so a row asking
+    about it would be a question with one answer."""
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
+
+    ui = Recording([CLOSE])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    assert ui.rows == [], "neither branch holds anything the other does not"
+    assert not CliGitBackend().branch_exists(repo, "feature/first")
 
 
 # -- I21, I23, I24: everything asked before anything is removed ------------------
@@ -634,7 +800,7 @@ def test_the_summary_spells_out_what_is_about_to_be_removed(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store)
 
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
     )
@@ -644,24 +810,26 @@ def test_the_summary_spells_out_what_is_about_to_be_removed(
     assert ui.said("feature/x")
 
 
-def test_abandoning_the_confirmation_changes_nothing(
+def test_leaving_the_lane_open_changes_nothing(
     lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
 ) -> None:
+    """`leave open` is this screen's `discard`, and it is the whole safety story: every
+    decision is taken before the first removal, so the way out cannot leave half a
+    close behind. Worktree, branch and metadata are all exactly where they were."""
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store)
     (lane / "keep.txt").write_text("precious\n")
 
     ui = FakeUi([FakeUi.ABANDON])
-    with pytest.raises(Abandoned):
-        _close(
-            _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
-            store,
-            "mylane",
-        )
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
 
     assert lane.is_dir()
     assert (lane / "keep.txt").exists()
     assert store.metadata_file("thing", "mylane").exists()
+    assert CliGitBackend().branch_exists(repo, "feature/x")
+    assert ui.said("Left open")
 
 
 def test_permission_to_force_delete_is_asked_before_the_worktree_is_gone(
@@ -675,19 +843,20 @@ def test_permission_to_force_delete_is_asked_before_the_worktree_is_gone(
     asked_while_present: list[bool] = []
 
     class Watching(FakeUi):
-        def confirm(self, title, *, default=False):  # type: ignore[no-untyped-def]
-            if "delete it anyway" in title.lower():
+        def check(self, title, columns, rows, **kwargs):  # type: ignore[no-untyped-def]
+            drawn = [cell.text for node in rows() for cell in node.row.cells]
+            if any("delete branch" in text for text in drawn):
                 asked_while_present.append(lane.exists())
-            return super().confirm(title, default=default)
+            return super().check(title, columns, rows, **kwargs)
 
-    ui = Watching([True, False])
+    ui = Watching([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
         store,
         "unmerged",
     )
 
-    assert asked_while_present == [True], "asked before the worktree was removed"
+    assert asked_while_present == [True], "decided before the worktree was removed"
     assert not lane.exists()
     assert CliGitBackend().branch_exists(repo, "feature/unmerged"), "declining keeps the branch"
 
@@ -699,7 +868,7 @@ def test_agreeing_to_force_delete_removes_the_branch(
     lane = _open_branch_lane(repo, store, "gone", "feature/gone")
     _commit(lane, "work.txt", "unmerged work")
 
-    ui = FakeUi([True, True])
+    ui = FakeUi([["delete branch feature/gone"]])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "gone"
     )
@@ -718,7 +887,7 @@ def test_a_merged_branch_is_deleted_without_being_asked(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store, "merged", "feature/merged")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "merged"
     )
@@ -735,7 +904,7 @@ def test_a_wip_branch_created_by_the_rescue_is_never_deleted(
     lane = _open_detached_lane(repo, store, "keepwip")
     _commit(lane, "x.txt", "stranded")
 
-    ui = FakeUi([True, True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "keepwip")
 
     assert CliGitBackend().branch_exists(repo, "wip/keepwip")
@@ -747,7 +916,7 @@ def test_closing_tidies_up_the_metadata_and_empty_directories(
     _, repo, store = lane_setup
     _open_branch_lane(repo, store, "only", "feature/only")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "only"
     )
@@ -765,7 +934,7 @@ def test_closing_a_dirty_lane_after_confirmation_discards_it(
     lane = _open_branch_lane(repo, store, "dirty", "feature/dirty")
     (lane / "scratch.txt").write_text("goodbye\n")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "dirty"
     )
@@ -781,7 +950,7 @@ def test_closing_a_freshly_opened_lane_does_not_claim_its_work_reached_the_base(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store, "untouched", "chore/untouched")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
         store,
@@ -803,7 +972,7 @@ def test_closing_a_lane_whose_commits_reached_the_base_says_so(
     git(["push", "--quiet", "origin", "feature/did-work:main"], cwd=lane)
     CliGitBackend().fetch_prune(repo)
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
         store,
@@ -837,7 +1006,7 @@ def test_a_squash_merged_lane_has_its_local_branch_deleted(
     )
 
     merged_pr = found(PullRequest(number=7, state="MERGED", url="https://github.com/a/b/pull/7"))
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged_pr)), store, "squashed")
 
     assert not lane.exists()
@@ -851,7 +1020,7 @@ def test_the_summary_warns_that_the_branch_will_be_deleted(
     _, repo, store = lane_setup
     _open_branch_lane(repo, store, "warned", "feature/warned")
 
-    ui = FakeUi([False])
+    ui = FakeUi([FakeUi.ABANDON])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "warned"
     )
@@ -873,9 +1042,9 @@ def test_a_merged_lane_does_not_ask_twice_about_its_branch(
     CliGitBackend().fetch_prune(repo)
 
     merged_pr = found(PullRequest(number=8, state="MERGED", url="u"))
-    # Only two answers scripted: pick the lane, confirm the close. A third question
-    # would exhaust the script and fail.
-    ui = FakeUi([True])
+    # One screen, and no row on it about the branch: the work landed, so `-d` refusing
+    # is the squash case and forcing is correct rather than something to ask about.
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged_pr)), store, "noask")
 
     assert not CliGitBackend().branch_exists(repo, "feature/noask")
@@ -889,7 +1058,7 @@ def test_an_unmerged_branch_is_still_only_deleted_with_permission(
     lane = _open_branch_lane(repo, store, "risky", "feature/risky")
     _commit(lane, "work.txt", "unpushed work")
 
-    ui = FakeUi([True, False])
+    ui = FakeUi([CLOSE])  # its row starts out, and nothing takes it in
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "risky"
     )
@@ -905,7 +1074,7 @@ def test_a_detached_lane_says_nothing_about_deleting_a_branch(
     _, repo, store = lane_setup
     _open_detached_lane(repo, store, "nobranch")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "nobranch")
 
     assert not ui.said("will be deleted")
@@ -927,7 +1096,7 @@ def test_removing_the_worktree_and_the_branch_announce_themselves(
     _, repo, store = lane_setup
     _open_branch_lane(repo, store, "slow", "feature/slow")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "slow"
     )
@@ -944,7 +1113,7 @@ def test_the_removal_is_announced_after_the_last_question(
     _, repo, store = lane_setup
     _open_branch_lane(repo, store, "ordered", "feature/ordered")
 
-    ui = FakeUi([True])
+    ui = FakeUi([CLOSE])
     _close(
         _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "ordered"
     )
@@ -965,7 +1134,7 @@ def test_parking_the_rescue_branch_announces_itself(
     lane = _open_detached_lane(repo, store, "parked")
     _commit(lane, "precious.txt", "would be stranded")
 
-    ui = FakeUi([True, True])
+    ui = FakeUi([CLOSE])
     _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "parked")
 
     steps = _steps(ui)
@@ -1002,7 +1171,7 @@ def test_ctrl_c_during_the_removal_does_not_leave_it_half_done(
     _, repo, store = lane_setup
     lane = _open_branch_lane(repo, store, "stopme", "feature/stopme")
 
-    ui = InterruptingUi([True], at="removing the worktree")
+    ui = InterruptingUi([CLOSE], at="removing the worktree")
     with pytest.raises(KeyboardInterrupt):
         _close(
             _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
@@ -1025,7 +1194,7 @@ def test_ctrl_c_during_the_removal_says_it_landed(
     _, repo, store = lane_setup
     _open_branch_lane(repo, store, "tellme", "feature/tellme")
 
-    ui = InterruptingUi([True], at="removing the worktree")
+    ui = InterruptingUi([CLOSE], at="removing the worktree")
     with pytest.raises(KeyboardInterrupt):
         _close(
             _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())),
@@ -1054,9 +1223,9 @@ def test_the_removal_finishes_and_then_lane_exits_rather_than_returning_to_the_m
     lane = _open_branch_lane(repo, store, "stopme", "feature/stopme")
 
     ui = InterruptingUi(
-        # menu → lanes → the row → close it → confirm. Nothing after: the session ends
-        # of its own accord, and a leftover answer would prove it had not.
-        ["lanes", "stopme", "close", True],
+        # menu → lanes → the row → close it → the close screen. Nothing after: the
+        # session ends of its own accord, and a leftover answer would prove it had not.
+        ["lanes", "stopme", "close", CLOSE],
         at="removing the worktree",
     )
     context = _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest()))
@@ -1090,7 +1259,7 @@ def test_the_rescue_is_covered_by_the_same_deferral(
     lane = _open_detached_lane(repo, store, "stopwip")
     stranded = _commit(lane, "precious.txt", "would be stranded")
 
-    ui = InterruptingUi([True, True], at="parking")
+    ui = InterruptingUi([CLOSE], at="parking")
     with pytest.raises(KeyboardInterrupt):
         _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "stopwip")
 

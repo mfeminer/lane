@@ -67,10 +67,24 @@ known was judged insufficient.
   question with one answer.
 
 **The checklist has both kinds of row**, and it is the reference for a screen that needs
-a way forward as well as a way back: `← Back` where there is a level above, then `apply`
-and `discard`, on every level. Accepting and abandoning are rows there for exactly the
-reason going back always has been — a screen whose way forward is a keystroke you have to
-know is the same fault as one whose way back is.
+a way forward as well as a way back: `← Back` where there is a level above, then the two
+that end every level, on every level. Accepting and abandoning are rows there for exactly
+the reason going back always has been — a screen whose way forward is a keystroke you have
+to know is the same fault as one whose way back is.
+
+**The words on those two rows belong to the screen, and the shape does not.** `apply` and
+`discard` are what a screen of ignored paths does; the close screen ends with `close` and
+`leave open`, because what it accepts is a close and one word doing both jobs is how a
+word stops meaning either (§14). A caller supplies the two labels and the panel line under
+each (`seam.Finish`) — never a key, never a third row, never a level without them.
+
+**The close screen is the second screen to take this shape, and it replaced a chain of
+confirmations.** Up to four `y`/`n` questions in a row, whose defaults disagreed with one
+another — three declining and one accepting — inside what read as a single flow. Its rows
+are now exactly the decisions that apply, with no fixed count, and a lane with none of
+them still gets the same screen with only `close` and `leave open` on it. **One shape,
+always**: a bare confirmation for the easy lane and a screen for the awkward one would be
+two ways of saying the same thing, which is the fault §14 exists to stop, one layer up.
 
 ## 3. Key bindings
 
@@ -82,10 +96,11 @@ AGENTS.md's "Going back is visible" section. **A new screen introduces no key th
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
-**One screen adds one key, and it is `Space` on the checklist** (`ui/checklist.py`,
-reached through `Ui.check`). It is the screen where every row carries its own answer —
-which ignored paths come into a lane — and it spends the vocabulary budget deliberately
-rather than by accident:
+**One widget adds one key, and it is `Space` on the checklist** (`ui/checklist.py`,
+reached through `Ui.check`). It is the widget where every row carries its own answer —
+which ignored paths come into a lane, and what closing a lane does — and it spends the
+vocabulary budget deliberately rather than by accident. **The second screen to use it
+added no key of its own**, which is the test the budget was being spent against:
 
 - `Space` answers the row under the cursor. It is the universal multi-select convention,
   it is what makes a dozen answers a dozen keystrokes, and the alternative — `Enter`
@@ -293,12 +308,18 @@ instead of all-at-once.
 - **A default is shown in brackets, immediately after the question**: `[y/N]` /
   `[Y/n]` for a yes/no default, `[<current value>]` for a text default. One bracket
   convention, wherever a prompt has a default.
-- **A confirmation is a complete question a user could answer out loud**: `"Close
-  it?"`, not `"Confirm?"` or `"Proceed?"`. When the action is destructive, the
-  warnings printed immediately above it (already the pattern in the close flow) are
-  what signals that — a confirmation's own wording does not need to say
+- **A confirmation is a complete question a user could answer out loud**: `"Enter
+  that lane instead?"`, not `"Confirm?"` or `"Proceed?"`. When the action is
+  destructive, the warnings printed immediately above it (already the pattern in the
+  close flow) are what signals that — a confirmation's own wording does not need to say
   "permanently" or "cannot be undone"; the findings above it already said what's at
   stake.
+- **The same rule reaches a row on a screen, and that is where it bit.** The close's
+  rows say what closing does — `delete branch feature/x` — and the `!` line above says
+  it is not merged. They used to read `Delete it anyway?`, and "anyway" was the wording
+  answering a question the warning had already asked: a second telling, in the one place
+  this rule says not to put one. A row is a verb phrase for the same reason a
+  confirmation is a whole question — say what will happen, once.
 
 ## 9. Reporting outcomes
 
@@ -434,6 +455,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | A path nobody has answered yet, on screen or in the store | **unanswered** (adjective: a row is *not yet answered*) | unset (used in the source for the third state, not on screen), unknown, pending, undecided, skipped (that is `out`, and the two are the whole point) |
 | Ending the checklist and recording what was decided | **apply** | accept, save, done, confirm, ok |
 | Ending the checklist and recording nothing | **discard** | cancel, abandon (used in the source for `Abandoned`, not on screen), abort, reset |
+| Ending the close screen and doing what its rows say | **close** | apply (the checklist's word for a different thing), confirm, proceed, yes, remove |
+| Ending the close screen and touching nothing | **leave open** | discard, cancel, keep, no, abort |
 | Leaving lane altogether with Ctrl-C | **quit** — the same word the menu's own entry uses, because it is the same door | exit, kill, interrupt (reserved for one that landed while lane was *working*) |
 | Ignored paths under one directory, shown as one row you can go into | a **folder** (of paths) | group (used in the source for the type, not on screen), bundle, batch, directory (git's word for the thing on disk, not for the row) |
 | A folder row whose paths are not all answered the same way | **mixed** (`◐`) | partial, some, indeterminate, half |

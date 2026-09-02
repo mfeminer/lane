@@ -1,9 +1,15 @@
-"""Close a lane: check, confirm everything, then remove.
+"""Close a lane: check, decide everything on one screen, then remove.
 
 The shape of this action is the important part. It runs its checks, reports what it
-found, asks **every** question it needs — including permission to force-delete an
-unmerged branch and whether to rescue stranded commits — and only then touches
-disk. Backing out at any prompt changes nothing, so there is no rollback logic.
+found, and puts **every** decision it needs on one screen — whether to rescue
+stranded commits, and which branches may be force-deleted — before it touches disk.
+Leaving that screen open changes nothing, so there is no rollback logic.
+
+It is a screen rather than a run of yes/no questions, and that was the last place in
+lane still shaped the other way. Four confirmations in a row, whose defaults
+disagreed with one another — three declining and one accepting — read as one flow
+and answered as four; and a single question covering every unmerged branch the lane
+visited could not say *keep this one, drop that one*. A row each says it.
 
 The pull request check exists because git's ancestry check reports a false negative
 for a squashed or rebased merge: the lane's commits never literally appear in the
@@ -31,6 +37,7 @@ from lane.github.client import (
     PullRequest,
 )
 from lane.lanes import Lane
+from lane.ui.seam import Abandoned, Cell, Column, Finish, Node, Row
 
 
 @dataclass
@@ -62,14 +69,52 @@ class _Decisions:
 
     proceed: bool = False
     rescue_branch: str | None = None
-    force_delete_branch: bool = False
     delete_branch: bool = False
 
     also_delete: tuple[str, ...] = ()
     """The lane's other branches — the ones it moved through before this one."""
 
-    force_delete_others: bool = False
-    """Permission to force-delete those of them that hold unique work."""
+    may_force: frozenset[str] = frozenset()
+    """The branches the user allowed git's unmerged refusal to be overridden for.
+
+    A set rather than a flag per group, because the screen answers **one branch per
+    row**: two branches a lane used and abandoned are two decisions, and a boolean
+    covering both could only say *all of them* or *none*. The lane's own branch is in
+    here without being asked when the work demonstrably landed — forcing is then
+    correct rather than dangerous, and the summary already said the branch would go.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class _Rescue:
+    """Park the commits stranded on a detached HEAD on a branch of their own."""
+
+    branch: str
+
+
+@dataclass(frozen=True, slots=True)
+class _Delete:
+    """Delete one branch git would otherwise refuse to remove, because it is unmerged."""
+
+    branch: str
+
+
+type _Ask = _Rescue | _Delete
+"""One row of the close screen: a thing closing can additionally do, in or out."""
+
+
+DECISIONS = (Column("what closing does"),)
+"""One column. Each row is a whole thing lane will or will not do, said in a phrase."""
+
+FINISH = Finish(
+    accept="close",
+    reject="leave open",
+    accept_detail="Closes the lane, doing exactly what is ticked above.",
+    reject_detail="Leaves the lane exactly as it is — worktree, branches and metadata.",
+)
+"""The two rows this screen ends with, in its own vocabulary rather than the
+checklist's `apply`/`discard`: what is being accepted here is a close, not a set of
+answers to file away."""
 
 
 def close(context: Context, lane: Lane) -> None:
@@ -352,9 +397,10 @@ def _ask(
     base: str,
     findings: _Findings,
 ) -> _Decisions:
-    """Every question, in one pass, before anything is removed."""
+    """Every decision, on one screen, before anything is removed."""
     ui = context.ui
     decisions = _Decisions()
+    permitted: set[str] = set()
 
     # Whether the local branch goes too, decided before anything is said, so the
     # summary can state it rather than leaving the user to discover it afterwards.
@@ -399,66 +445,104 @@ def _ask(
     if status.dirty_count > 0:
         ui.warn(f"  Closing now discards {status.dirty_count} uncommitted file(s) for good.")
 
+    if status.detached and status.unpushed_count > 0:
+        # Commits on a detached HEAD become unreachable once the worktree is gone, so
+        # this is a fact about the removal and belongs with the rest of them.
+        ui.warn(
+            f"  {status.unpushed_count} commit(s) sit on a detached HEAD and become "
+            "unreachable once this lane closes."
+        )
+
     ui.blank()
     if findings.blocking:
         count = findings.blocking
         ui.warn(f"{count} issue{'s' if count != 1 else ''} holding this lane open.")
-        decisions.proceed = ui.confirm("Close it anyway?")
     else:
         ui.ok("Lane is clear.")
-        decisions.proceed = ui.confirm("Close it?")
 
-    if not decisions.proceed:
-        return decisions
+    # One screen, and its rows are exactly the decisions that apply — no fixed count,
+    # no question about something that cannot happen. The wording says what closing
+    # does and nothing about how bad it would be: the `!` lines above already said
+    # that, which is the whole of docs/CONVENTIONS.md §8.
+    rows: list[Node[_Ask]] = []
+    starting: dict[_Ask, bool] = {}
 
-    # Commits on a detached HEAD become unreachable once the worktree is gone, so
-    # the offer to park them must come before the removal, not after.
     if status.detached and status.unpushed_count > 0:
-        ui.blank()
-        ui.warn(
-            f"{status.unpushed_count} commit(s) sit on a detached HEAD and become "
-            "unreachable once this lane closes."
+        rescue = _Rescue(f"wip/{lane.name}")
+        rows.append(
+            Node(
+                row=Row(
+                    value=rescue,
+                    cells=(Cell(f"park those commits on {rescue.branch}"),),
+                    detail=("Left out, they go with the worktree and nothing can reach them.",),
+                )
+            )
         )
-        rescue = f"wip/{lane.name}"
-        if ui.confirm(f"Park them on a branch called '{rescue}'?", default=True):
-            decisions.rescue_branch = rescue
+        # The one row that starts **in**: it is the only one that keeps something.
+        starting[rescue] = True
 
-    # A lane's branch goes with the lane — leaving it behind is how a repository
-    # fills up with dead branches after every successful close.
-    #
-    # Permission to force-delete is asked here rather than after the worktree is
-    # gone, so that declining leaves everything as it was.
-    if deletes_branch:
+    # A lane's branch goes with the lane — leaving it behind is how a repository fills
+    # up with dead branches after every successful close. Where the work demonstrably
+    # landed there is nothing at risk and so nothing to ask: `-d` may still refuse,
+    # because a squash merge leaves the commits nowhere in the base, and forcing is
+    # then correct rather than dangerous.
+    if deletes_branch and status.branch is not None:
         decisions.delete_branch = True
         if nothing_would_be_lost:
-            # `-d` may still refuse — a squash or rebase merge leaves the commits
-            # nowhere in the base, which is the whole reason the pull request was
-            # consulted. Forcing is then correct rather than dangerous, and needs no
-            # second question: the summary already said the branch would go.
-            decisions.force_delete_branch = True
+            permitted.add(status.branch)
         else:
-            ui.blank()
-            decisions.force_delete_branch = ui.confirm(
-                f"Branch '{status.branch}' is not merged. Delete it anyway?"
-            )
+            rows.append(_deletion(status.branch, "It holds commits that are nowhere else."))
+            starting[_Delete(status.branch)] = False
 
-    # The same permission, for the branches this lane used before the one it is on.
-    # One question for all of them: they share a reason and a fate, and a prompt per
-    # branch would turn closing a lane that moved around into an interrogation.
-    if unmerged_others:
-        ui.blank()
-        decisions.force_delete_others = ui.confirm(_unmerged_others_question(unmerged_others))
+    # The same decision, for the branches this lane used before the one it is on — one
+    # row each. They share a reason but not a fate: a single question covering all of
+    # them cannot say *keep this one, drop that one*, and the summary above has already
+    # listed them individually.
+    for other in unmerged_others:
+        rows.append(_deletion(other, "This lane used it earlier, and it holds unique work."))
+        starting[_Delete(other)] = False
+
+    try:
+        answered = ui.check(
+            f"Closing {lane.slug}",
+            DECISIONS,
+            lambda: rows,
+            answers=starting,
+            finish=FINISH,
+        )
+    except Abandoned:
+        # `leave open` is this screen's `discard`. Nothing has been touched, which is
+        # true of every level of it, so there is nothing to undo — only to say.
+        return decisions
+
+    decisions.proceed = True
+    for asked, answer in answered.items():
+        if not answer:
+            continue
+        match asked:
+            case _Rescue(branch=branch):
+                decisions.rescue_branch = branch
+            case _Delete(branch=branch):
+                permitted.add(branch)
+    decisions.may_force = frozenset(permitted)
 
     return decisions
 
 
-def _unmerged_others_question(unmerged: tuple[str, ...]) -> str:
-    """Worded like the current branch's question, because it is the same question."""
-    if len(unmerged) == 1:
-        return f"Branch '{unmerged[0]}' is not merged. Delete it anyway?"
-    return (
-        f"{len(unmerged)} branches this lane used are not merged "
-        f"({', '.join(unmerged)}). Delete them anyway?"
+def _deletion(branch: str, why: str) -> Node[_Ask]:
+    """One branch git will refuse to delete, and the row that overrides that refusal.
+
+    Worded as what closing does — `delete branch x` — rather than as *delete it
+    anyway*: "anyway" answers a question the `!` line above already asked and
+    answered, and a row is not the place to say a second time that something is
+    risky (docs/CONVENTIONS.md §8).
+    """
+    return Node(
+        row=Row(
+            value=_Delete(branch),
+            cells=(Cell(f"delete branch {branch}", tone="warn"),),
+            detail=(why, "Left out, it stays, and lane says how to remove it later."),
+        )
     )
 
 
@@ -552,10 +636,14 @@ def _remove_everything(
 
     # A detached lane has no branch of its own to delete, and a wip/ branch created by
     # the rescue above is never deleted — that would defeat its purpose.
+    #
+    # Every branch is deleted the same way, and the only thing that differs is whether
+    # the user allowed git's refusal to be overridden for **that** branch. A merged one
+    # is not in the set and does not need to be: `-d` succeeds on its own.
     if decisions.delete_branch and status.branch is not None:
-        _delete_branch(context, repo, status.branch, may_force=decisions.force_delete_branch)
+        _delete_branch(context, repo, status.branch, may_force=status.branch in decisions.may_force)
     for other in decisions.also_delete:
-        _delete_branch(context, repo, other, may_force=decisions.force_delete_others)
+        _delete_branch(context, repo, other, may_force=other in decisions.may_force)
 
 
 def _delete_branch(context: Context, repo: Path, branch: str, *, may_force: bool) -> None:

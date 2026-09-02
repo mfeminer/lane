@@ -35,7 +35,7 @@ from lane.ui.checklist import (
     paint,
     tail_rows,
 )
-from lane.ui.seam import BACK_LABEL, Abandoned, Answers, Cell, Column, Node, Quit, Row
+from lane.ui.seam import BACK_LABEL, Abandoned, Answers, Cell, Column, Finish, Node, Quit, Row
 
 COLUMNS = (
     Column("path"),
@@ -877,3 +877,99 @@ def test_space_takes_a_leaf_in_then_out_and_never_back_to_unset(keys: PipeInput)
         assert _check(third, SPACE * 3 + APPLY_ROW) == {path: True}
     with create_pipe_input() as fourth:
         assert _check(fourth, SPACE * 4 + APPLY_ROW) == {path: False}
+
+
+# -- the caller's own words for the two rows that end a level --------------------
+
+
+CLOSING = Finish(
+    accept="close",
+    reject="leave open",
+    accept_detail="Closes the lane, doing exactly what is ticked above.",
+    reject_detail="Leaves the lane exactly as it is. Nothing is touched.",
+)
+"""What the close screen ends with — `apply`/`discard` in a different vocabulary."""
+
+
+def test_the_caller_names_the_two_rows_that_end_a_level() -> None:
+    """`apply` and `discard` are the checklist's words for *what a screen of ignored
+    paths does*, and a screen of decisions about closing a lane does something else.
+
+    The rows are still the same two — the way on and the way out — so they stay rows
+    rather than becoming keys; only the words are the caller's, exactly as `← Back`'s
+    label already is a constant the seam owns rather than one the widget invents.
+    """
+
+    def drawn(cursor: int) -> list[str]:
+        return paint(
+            "Closing thing/mylane",
+            COLUMNS,
+            _rows(),
+            answers={},
+            cursor=cursor,
+            top=0,
+            width=120,
+            height=40,
+            finish=CLOSING,
+        ).lines
+
+    lines = drawn(0)
+    assert any(line.strip() == "close" for line in lines)
+    assert any(line.strip() == "leave open" for line in lines)
+    assert not any(line.strip() in {"apply", "discard"} for line in lines)
+
+    # The panel is the caller's too: one verb cannot say how much it covers.
+    assert "doing exactly what is ticked" in "\n".join(drawn(len(_rows())))
+    assert "Nothing is touched" in "\n".join(drawn(len(_rows()) + 1))
+
+
+def test_enter_on_the_callers_accept_row_returns_the_answers(keys: PipeInput) -> None:
+    keys.send_text(SPACE + APPLY_ROW)
+    assert check(
+        "Closing thing/mylane",
+        COLUMNS,
+        _rows,
+        input=keys,
+        output=SizedOutput(120, 40),
+        finish=CLOSING,
+    ) == {"apps/web/node_modules": True}
+
+
+def test_enter_on_the_callers_reject_row_abandons(keys: PipeInput) -> None:
+    keys.send_text(DISCARD_ROW)
+    with pytest.raises(Abandoned):
+        check(
+            "Closing thing/mylane",
+            COLUMNS,
+            _rows,
+            input=keys,
+            output=SizedOutput(120, 40),
+            finish=CLOSING,
+        )
+
+
+@pytest.mark.parametrize(
+    ("accept", "reject"),
+    [
+        pytest.param("close", "close", id="the way on and the way out read alike"),
+        pytest.param(BACK_LABEL, "leave open", id="the way on reads as the back row"),
+        pytest.param("close", BACK_LABEL, id="the way out reads as the back row"),
+    ],
+)
+def test_a_level_cannot_end_with_two_rows_that_read_alike(accept: str, reject: str) -> None:
+    """Which trailing row `Enter` acted on was decided by comparing its label, so two
+    that read alike left one of them unreachable — a screen with no way to accept it,
+    or none to leave it. Refused where it is built, because a `Finish` is made once at
+    import and a screen that cannot be finished is not a thing to find out at runtime.
+    """
+    with pytest.raises(ValueError):
+        Finish(accept=accept, reject=reject)
+
+
+@pytest.mark.parametrize(("accept", "reject"), [("", "leave open"), ("close", "")])
+def test_a_row_that_ends_a_level_has_a_word_on_it(accept: str, reject: str) -> None:
+    """A blank label is the same screen as a colliding one: a row nobody can read is a
+    row nobody can choose, so it is refused in the same place and for the same reason.
+    """
+    with pytest.raises(ValueError):
+        Finish(accept=accept, reject=reject)
