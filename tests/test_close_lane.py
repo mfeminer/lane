@@ -446,6 +446,33 @@ def test_an_unmerged_branch_the_lane_used_is_deleted_once_permission_is_given(
     assert ui.said("Branch deleted: feature/second")
 
 
+def test_two_unmerged_branches_can_be_answered_one_way_each(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """A row each, because the answers are not the same answer.
+
+    One question covering every branch the lane wandered through could only say *all
+    of them* or *none of them* — and a lane that moved around twice usually means one
+    of them and not the other. The summary above has always listed them individually;
+    now they can be answered that way too.
+    """
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    for branch, file in (("feature/second", "kept.txt"), ("feature/third", "dropped.txt")):
+        git(["switch", "--quiet", "-c", branch], cwd=lane)
+        _commit(lane, file, f"work on {branch}")
+    git(["switch", "--quiet", "feature/first"], cwd=lane)
+
+    ui = FakeUi([["delete branch feature/third"]])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    backend = CliGitBackend()
+    assert backend.branch_exists(repo, "feature/second"), "left out, so it stays"
+    assert not backend.branch_exists(repo, "feature/third"), "taken in, so it goes"
+
+
 def test_a_pull_request_based_on_this_branch_blocks_the_close(
     lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
 ) -> None:
@@ -655,6 +682,113 @@ def test_the_close_is_one_screen_rather_than_a_chain_of_confirmations(
 
     assert ui.checklists == 1, "one screen"
     assert not lane.exists()
+
+
+class Recording(FakeUi):
+    """Keeps the rows the close screen opened with, and the answer each opened on."""
+
+    def __init__(self, answers: Sequence[object] = ()) -> None:
+        super().__init__(answers)
+        self.rows: list[str] = []
+        self.started: dict[str, bool] = {}
+
+    def check(self, title, columns, rows, **kwargs):  # type: ignore[no-untyped-def]
+        drawn = list(rows())
+        self.rows = [node.row.cells[0].text for node in drawn]
+        opening = kwargs.get("answers") or {}
+        self.started = {node.row.cells[0].text: opening[node.row.value] for node in drawn}
+        return super().check(title, columns, rows, **kwargs)
+
+
+def test_a_lane_with_nothing_optional_to_decide_gets_the_same_screen_and_no_rows(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """Zero optional rows is not a special case with a shortcut of its own.
+
+    The screen still opens, with `close` and `leave open` and nothing above them —
+    one shape everywhere, rather than a bare confirmation for the easy lane and a
+    screen for the awkward one.
+    """
+    origin, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "nothing", "feature/nothing")
+    _commit(lane, "w.txt", "work")
+    git(["push", "--quiet", "--set-upstream", "origin", "feature/nothing"], cwd=lane)
+    origin.advance("squashed")
+    CliGitBackend().fetch_prune(repo)
+
+    merged = found(PullRequest(number=9, state="MERGED", url="u"))
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient(merged)), store, "nothing")
+
+    assert ui.checklists == 1, "the same screen, not a fallback"
+    assert ui.rows == [], "nothing is at risk, so there is nothing to decide"
+    assert not lane.exists()
+    assert not CliGitBackend().branch_exists(repo, "feature/nothing"), "and the branch still goes"
+
+
+def test_the_rescue_row_is_there_only_for_stranded_commits_and_starts_in(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """The one row that opens *in*: it is the only one that keeps something."""
+    _, repo, store = lane_setup
+    lane = _open_detached_lane(repo, store, "stranded")
+    _commit(lane, "precious.txt", "would be stranded")
+
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "stranded")
+
+    assert ui.rows == ["park those commits on wip/stranded"]
+    assert ui.started == {"park those commits on wip/stranded": True}
+    assert CliGitBackend().branch_exists(repo, "wip/stranded")
+
+
+def test_a_detached_lane_with_nothing_stranded_is_offered_no_rescue_row(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    _, repo, store = lane_setup
+    _open_detached_lane(repo, store, "nothingtolose")
+
+    ui = Recording([CLOSE])
+    _close(_context(ui, projects_root, lanes_root, StubGitHubClient()), store, "nothingtolose")
+
+    assert ui.rows == []
+
+
+def test_the_branch_row_is_there_only_where_deleting_it_could_lose_work_and_starts_out(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """git's refusal to `-d` a branch holding unique work is the safety net, and this
+    row is what overrides it. Where the work demonstrably landed there is nothing to
+    override and so no row — which is exactly today's "no second question"."""
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, "holds", "feature/holds")
+    _commit(lane, "work.txt", "nowhere else")
+
+    ui = Recording([CLOSE])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "holds"
+    )
+
+    assert ui.rows == ["delete branch feature/holds"]
+    assert ui.started == {"delete branch feature/holds": False}
+
+
+def test_a_merged_branch_the_lane_used_earlier_gets_no_row_either(
+    lane_setup: tuple[Origin, Path, LaneStore], projects_root: Path, lanes_root: Path
+) -> None:
+    """It is deleted with the rest of them, and `-d` will not object, so a row asking
+    about it would be a question with one answer."""
+    _, repo, store = lane_setup
+    lane = _open_branch_lane(repo, store, branch="feature/first")
+    git(["switch", "--quiet", "-c", "feature/second"], cwd=lane)
+
+    ui = Recording([CLOSE])
+    _close(
+        _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest())), store, "mylane"
+    )
+
+    assert ui.rows == [], "neither branch holds anything the other does not"
+    assert not CliGitBackend().branch_exists(repo, "feature/first")
 
 
 # -- I21, I23, I24: everything asked before anything is removed ------------------
