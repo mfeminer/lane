@@ -1054,3 +1054,26 @@ def test_the_descent_is_recorded_in_the_levels_own_rows_not_the_filtered_ones() 
 
     assert title == "apps/ · 3 ignored paths"
     assert [node.row.value for node in nodes] == ["apps/api/.env", "apps/web/ · 2 ignored paths"]
+
+
+def test_the_second_caller_of_check_filters_and_says_so_in_the_same_corner() -> None:
+    """The close screen is a checklist too, with its own words for the two rows that end
+    it — so the filter and the corner have to be right there as well, and they are the
+    same ones because they come from the same two functions rather than per screen."""
+    lines = paint(
+        "Closing thing/mylane",
+        COLUMNS,
+        _rows(),
+        answers={},
+        cursor=0,
+        top=0,
+        width=120,
+        height=40,
+        finish=CLOSING,
+        text="zzz",
+    ).lines
+    body = "\n".join(lines)
+
+    assert "No matches for 'zzz'." in body
+    assert "close" in body and "leave open" in body, "the rows that end the screen survive"
+    assert lines[-1].endswith("type to filter")
