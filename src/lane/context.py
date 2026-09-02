@@ -16,6 +16,7 @@ from lane.environment import Environment
 from lane.git.backend import GitBackend
 from lane.github.client import GitHubClient
 from lane.lanes import LaneStore
+from lane.prefixes import BranchPrefixStore
 from lane.prepare.store import PrepareStore
 from lane.state import StateStore
 from lane.ui.seam import Ui
@@ -41,6 +42,15 @@ class Context:
         that redirected one and forgot the other would write into the real home.
         """
         return PrepareStore(self.config_store.path.parent)
+
+    def prefix_store(self) -> BranchPrefixStore:
+        """The branch prefixes, a second sibling of the config file.
+
+        Derived from `config_store` for the same reason `prepare_store` is: it lives
+        beside `config.toml` by definition, so a field of its own could only ever
+        disagree with it.
+        """
+        return BranchPrefixStore(self.config_store.path.parent)
 
     def lane_store(self) -> LaneStore:
         root = self.config.lanes_root

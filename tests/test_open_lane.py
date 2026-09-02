@@ -147,6 +147,58 @@ def test_branch_mode_offers_every_prefix_plus_bare_and_free_text(
     assert any("other" in label for label in seen), "a free-text option"
 
 
+def test_branch_mode_offers_the_prefixes_that_were_configured(
+    project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
+) -> None:
+    """The *menu* is configurable; the choice among it is still made per lane.
+
+    A team whose branches are `spike/` and `poc/` had to reach for `other…` every time,
+    which is a free-text prompt standing in for a list lane could have offered.
+    """
+    seen: list[str] = []
+
+    class Recording(FakeUi):
+        def choose(self, title, options, **kwargs):  # type: ignore[no-untyped-def]
+            if title == "Branch name":
+                seen.extend(o.label for o in options)
+            return super().choose(title, options, **kwargs)
+
+    ui = Recording(["thing", "new work", "Add audit log", "branch", "spike/add-audit-log"])
+    context = make_context(ui, projects_root, lanes_root)
+    context.prefix_store().save(("spike", "poc"))
+
+    open_lane.run(context)
+
+    assert "spike/add-audit-log" in seen
+    assert "poc/add-audit-log" in seen
+    assert "docs/add-audit-log" not in seen, "a prefix that was forgotten is not offered"
+    assert "add-audit-log" in seen, "the bare lane name is not a prefix and stays"
+    assert any("other" in label for label in seen), "nor is the free-text option"
+
+
+def test_the_free_text_option_starts_from_the_first_prefix_that_is_offered(
+    project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
+) -> None:
+    """`other…` is a way to type something the menu does not have, so its default has
+    to be something the menu *would* have — offering `feature/` to somebody who has
+    just forgotten `feature` is the one wrong answer."""
+    offered: list[str] = []
+
+    class Recording(FakeUi):
+        def text(self, title, *, default="", **kwargs):  # type: ignore[no-untyped-def]
+            if title == "Branch name":
+                offered.append(default)
+            return super().text(title, default=default, **kwargs)
+
+    ui = Recording(["thing", "new work", "Add audit log", "branch", "other…", "spike/typed"])
+    context = make_context(ui, projects_root, lanes_root)
+    context.prefix_store().save(("spike", "poc"))
+
+    open_lane.run(context)
+
+    assert offered == ["spike/add-audit-log"]
+
+
 def test_detached_mode_sits_at_origin_base_with_no_branch(
     project: tuple[Origin, Path], projects_root: Path, lanes_root: Path
 ) -> None:

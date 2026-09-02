@@ -34,8 +34,6 @@ from lane.paths import same_directory
 from lane.projects import Project
 from lane.ui.seam import Cell, Choice, Column, Row
 
-BRANCH_PREFIXES = ("feature", "bugfix", "hotfix", "chore", "refactor", "docs")
-
 KIND_QUESTION = "What is this lane for?"
 NAME_QUESTION = "Lane name"
 
@@ -376,11 +374,18 @@ def _choose_branch(context: Context, lane_name: str) -> str | None:
     """Branch naming is per lane, deliberately not a global setting.
 
     One lane can be `bugfix/…` while the next is `feature/…`: the prefix describes
-    the task, not the machine.
+    the task, not the machine. **That is about the choice, and it is untouched.**
+
+    What the choice is made *from* is a setting, and lives in `branch_prefixes.toml`
+    (settings · branch prefixes). A team whose branches are `spike/` and `poc/` had to
+    reach for `other…` every time — a free-text prompt standing in for a list lane could
+    perfectly well have offered. The store always answers with at least one prefix, the
+    six lane ships with when nothing has been customised.
     """
     ui = context.ui
+    prefixes = context.prefix_store().load()
     options: list[Choice[str]] = [
-        Choice(f"{prefix}/{lane_name}", f"{prefix}/{lane_name}") for prefix in BRANCH_PREFIXES
+        Choice(f"{prefix}/{lane_name}", f"{prefix}/{lane_name}") for prefix in prefixes
     ]
     options.append(Choice(lane_name, _BARE, "no prefix"))
     options.append(Choice("other…", _OTHER, "type a branch name"))
@@ -390,7 +395,9 @@ def _choose_branch(context: Context, lane_name: str) -> str | None:
         if chosen == _BARE:
             candidate = lane_name
         elif chosen == _OTHER:
-            candidate = ui.text("Branch name", default=f"feature/{lane_name}")
+            # Something the menu itself would have offered — offering `feature/` to
+            # somebody who has just forgotten `feature` is the one wrong default.
+            candidate = ui.text("Branch name", default=f"{prefixes[0]}/{lane_name}")
         else:
             candidate = chosen
 
