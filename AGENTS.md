@@ -661,6 +661,12 @@ These must never regress. Each is one line of behaviour and one line of why.
   rescue.
 - **Branch naming is decided per lane, not globally** — one lane can be `bugfix/…`
   while the next is `feature/…`; it is a property of the task, not of the machine.
+  **This is about the choice, not about the menu it is made from.** Which prefixes are
+  offered *is* a setting (`branch_prefixes.toml`, settings · branch prefixes), because a
+  team whose branches are `spike/` and `poc/` otherwise reached for `other…` every time —
+  a free-text prompt standing in for a list lane could perfectly well have offered. Do not
+  read this invariant as forbidding that, and do not let anything default, remember or
+  infer the prefix *for* a lane.
 - **Lane and branch names are always plain ASCII** — task descriptions are typed
   in whatever language the user thinks in; paths and refs must not be.
 - **The config upgrade notice stays one short line** — what a release changed is
@@ -818,6 +824,31 @@ staying one short line is an invariant and a second file having something to say
 serve it. An unreadable file means **nothing is remembered** — never a crash, never a
 rewrite; the screen asking again is itself the signal, and doctor names the file.
 
+**The branch prefixes** — `${XDG_CONFIG_HOME:-~/.config}/lane/branch_prefixes.toml`,
+mode 0600 in the same 0700 directory, a flat `prefix = [...]` array of strings.
+Deliberately **not** a fourth key in `config.toml`, for `prepare.toml`'s reason and one
+more of its own: `ConfigStore.save()` rebuilds the file from the three settings it knows
+about, so anything else is dropped by the first version bump — and `config.py` is explicit
+that three settings is a closed list, which an unbounded, editable list of strings with no
+per-value default, no environment override and no validation of its own does not join. It
+is a flat array rather than records because a prefix is one string with no fields; a
+`[[prefix]]` table per entry would be ceremony around a single value.
+
+**A missing or empty file means the six lane ships with** (`prefixes.DEFAULT_PREFIXES`),
+so nobody who never opens the screen sees anything change and there is no first-run write
+to get wrong. Empty is the same answer as absent because a menu with nothing on it is not
+something anybody chose, and forgetting the last prefix is how you would arrive at one —
+so the screen **says** the six are back rather than letting them reappear unexplained.
+Once anything is written, the file *is* the menu: the seed is never merged back in, or
+forgetting one of the six could never stick. It **never announces itself**, and an
+unreadable file means the seed rather than a crash or a rewrite — the six being on screen
+again is itself the signal.
+
+**Removing a prefix reaches nothing that already exists.** A branch is a ref that has
+been pushed, reviewed and built on; a prefix leaving the menu says nothing about it. There
+is deliberately no code connecting the two, and `test_forgetting_a_prefix_leaves_a_lane_
+already_on_it_exactly_as_it_was` is what keeps it that way.
+
 **Project identity is the project name** — the same identifier `Lane.project` uses and
 that `<lanes_root>/<project>` is built from. A recorded path would be a string comparison
 of paths, which is exactly what the `samefile` invariant exists to prevent, and it would
@@ -840,9 +871,12 @@ description, base branch, created timestamp, repo path, starting commit — live
 
 - **new work** — take a one-line task description, derive the lane name from it,
   fetch origin, resolve the default branch, then ask for the mode. Branch mode
-  offers `feature/`, `bugfix/`, `hotfix/`, `chore/`, `refactor/`, `docs/`, the bare
-  lane name, and a free-text option. Detached mode sits at `origin/<default>` with
-  no branch.
+  offers **each configured prefix** — `feature/`, `bugfix/`, `hotfix/`, `chore/`,
+  `refactor/`, `docs/` until somebody changes them — plus the bare lane name and a
+  free-text option. The bare name and `other…` are not prefixes and are always there;
+  `other…` starts from the **first** configured prefix, because offering `feature/` to
+  somebody who has just forgotten `feature` is the one wrong default. Detached mode sits
+  at `origin/<default>` with no branch.
 - **existing branch** — fetch with `--prune`, then pick from every local and
   `origin` branch, merged one row per name. **Detached is not offered here**: an
   existing branch is the opposite of detached.
@@ -1007,6 +1041,11 @@ than two.
   with `change`/`forget` and `add a command`. A command is typed rather than discovered and
   carries a directory and a guard to edit, none of which is a checkbox — folding it into a
   screen of discovered paths would be the resemblance this change exists to remove.
+  **`branch prefixes` is a sixth row of exactly that shape** — its own list, `change`/
+  `forget` on the row under the cursor, `add a prefix` appended the way `← Back` is — and
+  it is a destination rather than a setting, so a noun (`docs/CONVENTIONS.md` §4). It
+  belongs to neither of the other two: it is about naming a branch rather than about what
+  comes into a lane, and it lives in its own file, not in `prepare.toml`.
 - **Copy-on-write is `clonefile(2)` via `ctypes`, not a subprocess to `cp -c`.** Measured:
   a 64 MB tree in 0.3 ms, and across volumes it fails with `EXDEV` having done nothing.
   `cp -Rc` takes 9 ms and, across volumes, **silently** falls back to a real copy —
@@ -1295,6 +1334,18 @@ All of it arrived at test-first:
   is what makes it one rule
 - the branch table surviving 40 columns with `state` intact, and an adopted lane's
   panel drawing its branch once rather than twice
+- the branch prompt offering the **configured** prefixes and not the ones that were
+  forgotten, with the bare name and `other…` surviving either way, and `other…`'s default
+  following the first configured prefix rather than a hard-coded `feature/`
+- an absent and an empty `branch_prefixes.toml` both meaning the six, and an unreadable
+  one meaning them too rather than raising
+- adding, changing and forgetting a prefix each round-tripping through the file — the add
+  writing the seed *plus* the new one, the change keeping its place in the order, and the
+  forget of the last one saying the six are back
+- a prefix validated the way a whole branch name is, so `  şube fix!!  ` stores as
+  `sube-fix` and one git will not take is refused rather than left on the menu
+- forgetting a prefix leaving a lane already on it exactly as it was — its branch, its
+  metadata and its row in the listing untouched
 
 ## Where things stand
 
