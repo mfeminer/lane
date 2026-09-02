@@ -96,9 +96,17 @@ def _browse(
     )
 
 
-def _lines(*, cursor: int = 0, width: int = 120, height: int = 40) -> list[str]:
+def _lines(*, cursor: int = 0, width: int = 120, height: int = 40, text: str = "") -> list[str]:
     return paint(
-        "2 open lanes", COLUMNS, _rows(), BACK, cursor=cursor, top=0, width=width, height=height
+        "2 open lanes",
+        COLUMNS,
+        _rows(),
+        BACK,
+        cursor=cursor,
+        top=0,
+        width=width,
+        height=height,
+        text=text,
     ).lines
 
 
@@ -163,11 +171,13 @@ def test_option_left_does_not_abandon(keys: PipeInput) -> None:
 
 
 def test_an_unrecognised_key_is_ignored_and_the_table_stays_up(keys: PipeInput) -> None:
-    assert _browse(keys, "cqz3\r") == ("improve", 0)
+    """Ctrl-L is the shape of key this still covers: printable keys now filter, and a
+    filter that matches nothing still leaves the visible way back."""
+    assert _browse(keys, "\x0c\r") == ("improve", 0)
 
 
 def test_an_unrecognised_key_does_not_disturb_the_cursor(keys: PipeInput) -> None:
-    assert _browse(keys, "\x1b[Bc\r") == ("local", 1)
+    assert _browse(keys, "\x1b[B\x0c\r") == ("local", 1)
 
 
 # -- what is drawn ----------------------------------------------------------------
@@ -466,12 +476,24 @@ def test_the_table_binds_exactly_the_pickers_keys_and_nothing_else() -> None:
     A screen whose rows each carry a two-state answer is `checklist.py`, a widget of its
     own, and `Space` is bound *there*. That is what keeps this set the picker's exactly.
     """
-    state = {"index": 0, "top": 0, "rows": 0, "opening": 1}
+    state = {"index": 0, "top": 0, "opening": 1}
     bound = {
         key for binding in bindings_for(state, _rows, _ignore).bindings for key in binding.keys
     }
 
-    assert bound == {Keys.Up, Keys.Down, Keys.Home, Keys.End, Keys.ControlM, Keys.ControlC}
+    assert bound == {
+        Keys.Up,
+        Keys.Down,
+        Keys.Home,
+        Keys.End,
+        Keys.ControlM,
+        Keys.ControlC,
+        # Typing filters, and Backspace takes a character back — on the picker, on this
+        # table and on the checklist alike, from the one `filtering.bind`. Still the
+        # picker's set exactly, which is what this test is for.
+        Keys.Any,
+        Keys.ControlH,
+    }
 
 
 def test_space_is_treated_as_any_other_unknown_key(keys: PipeInput) -> None:
@@ -500,3 +522,77 @@ def test_the_tables_footer_is_the_shared_corner_hint() -> None:
     from lane.ui.picker import KEYS
 
     assert _lines()[-1] == footer.line(KEYS, 120)
+
+
+# -- type to filter ---------------------------------------------------------------
+
+
+def test_typing_narrows_the_table_to_the_rows_that_match(keys: PipeInput) -> None:
+    """A row is matched on the text it draws, cells and lead alike — no second
+    "searchable text" field beside them. The index handed back is the row's place in
+    the **unfiltered** list, because that is what an action puts a cursor back on."""
+    assert _browse(keys, "artifact\r") == ("local", 1)
+
+
+def test_the_filter_is_named_under_the_title_rather_than_being_a_mode(keys: PipeInput) -> None:
+    """Never a hidden mode the user has to remember they are in."""
+    del keys
+    body = "\n".join(_lines(text="artifact"))
+
+    assert "1 of 2 · filter: artifact" in body
+    assert "improve-lint-and-format-performance" not in body
+
+
+def test_a_filter_matching_nothing_is_one_line_with_the_way_back_still_under_it() -> None:
+    """docs/CONVENTIONS.md §12: one line, no table, no header, no cursor — and the
+    action row survives, because a screen with no way out is not an empty state."""
+    lines = _lines(text="zzz")
+    body = "\n".join(lines)
+
+    assert "No matches for 'zzz'." in body
+    assert not any("Acme.Widgets/" in line for line in lines), "no data rows"
+    assert not any("state" in line and "pr" in line for line in lines), "and no header"
+    assert BACK in body
+
+
+def test_a_filter_matching_nothing_still_leaves_by_the_visible_way_back(
+    keys: PipeInput,
+) -> None:
+    with pytest.raises(Abandoned):
+        _browse(keys, "zzz\r")
+
+
+def test_the_cursor_stays_on_the_row_it_was_on_while_that_row_still_matches(
+    keys: PipeInput,
+) -> None:
+    """Typing narrows the list under a cursor that has not moved, so `Enter` still
+    chooses the row the user was already looking at."""
+    assert _browse(keys, "\x1b[B" + "Acme" + "\r") == ("local", 1)
+
+
+def test_the_cursor_lands_on_the_first_match_when_its_row_is_filtered_away(
+    keys: PipeInput,
+) -> None:
+    assert _browse(keys, "\x1b[B" + "improve" + "\r") == ("improve", 0)
+
+
+# -- the corner hint, at the widths §13 promises -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("width", "corner"),
+    [
+        (120, "↑↓ move · enter choose · type to filter"),
+        (44, "↑↓ move · enter choose · type to filter"),
+        (40, "enter choose · type to filter"),
+        (30, "enter · type"),
+    ],
+)
+def test_the_corner_sits_bottom_right_and_sheds_what_it_can_spare(width: int, corner: str) -> None:
+    """§3a and §13: bottom-right, and it gives up the arrows before it gives up saying
+    what each key does, and those before the keys themselves."""
+    line = _lines(width=width)[-1]
+
+    assert line.endswith(corner)
+    assert line.startswith(" "), "pushed into the corner rather than left-aligned"
+    assert len(line) <= width

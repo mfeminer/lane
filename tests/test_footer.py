@@ -47,3 +47,16 @@ def test_the_scroll_position_rides_with_the_hint_and_is_given_up_before_it() -> 
         "↑↓ move · enter choose · 1–19 of 40"
     )
     assert line(keys, width=30, shown=" · 1–19 of 40").endswith("↑↓ move · enter choose")
+
+
+def test_the_corner_says_typing_filters_wherever_filtering_applies() -> None:
+    """One more clause in the same tiered line — never a second hint line — and it is
+    on all three list-shaped prompts, because filtering is on all three. `text` and
+    `confirm` are not lists and say nothing, here as everywhere."""
+    from lane.ui.checklist import keys_for
+    from lane.ui.picker import KEYS, TEXT_KEYS
+
+    assert [key.key for key in KEYS] == ["enter", "type"]
+    assert [key.key for key in keys_for("open")] == ["space", "enter", "type"]
+    assert [key.key for key in keys_for()] == ["space", "type"], "a leaf, where enter does nothing"
+    assert TEXT_KEYS == ()

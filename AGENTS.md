@@ -93,12 +93,37 @@ whole mechanism, and it is why almost nothing needs binding:
 | `y` / `n` | answer a yes/no question |
 | `Ctrl-C` | quit lane |
 | `Space` | answer the row under the cursor — **the checklist widget only** |
+| any printable key | narrow the list to what matches — **the three list screens** |
+| `Backspace` | take the last character of that back |
 
-**That table is the whole vocabulary**, and the last row is the only key any screen has
-ever been allowed to add. It belongs to `ui/checklist.py` — every screen whose rows carry
-their own answer, which is now two of them: which ignored paths come into a lane, and
-what closing a lane does. **The second one added no key**, and that is the test the first
-one was spending its budget against. It was taken deliberately rather than slipped in:
+**That table is the whole vocabulary**, and the last three rows are the only additions any
+screen has ever been allowed to make. Each was taken deliberately rather than slipped in.
+
+**Typing filters, on `choose`, `browse` and `check` alike** (`ui/filtering.py`), and it is
+one implementation used by all three for the same reason the picker, the table and the
+checklist already share as much as they do — three screens that merely resemble each other
+drift. It needed no new key, and that is the test it had to pass:
+
+- **Nothing printable was bound in any of the three.** `y`/`n` exist only in `confirm`,
+  `Space` only in `check`. So a letter cannot collide with anything already there, which
+  is exactly the argument `Space` had to make below before it was allowed to exist.
+- **`Space` is not a filter character anywhere**, including the two screens where it is
+  unbound. It already means *answer this row* on one of the three, and a key meaning one
+  thing on one list screen and another on the next is what the closed vocabulary exists to
+  prevent. A filter is therefore one word, which is what a filter over paths, lane names
+  and branch names is anyway.
+- **`Backspace` takes a character back and there is no key that clears the filter.**
+  Backspacing to empty is the text editing `Ui.text` already relies on, reused rather than
+  invented.
+- **It is never a mode.** What was typed is on screen, immediately under the title —
+  `<n> of <total> · filter: <text>` — and where it matches nothing the screen says
+  `No matches for '<filter>'.` in one line rather than freezing with an empty frame
+  (docs/CONVENTIONS.md §12). The corner says `type to filter` on all three.
+
+**`Space`** belongs to `ui/checklist.py` — every screen whose rows carry their own answer,
+which is now two of them: which ignored paths come into a lane, and what closing a lane
+does. **The second one added no key**, and that is the test the first one was spending its
+budget against. It was taken deliberately rather than slipped in:
 
 - `Space` toggling a multi-select is not this tool's invention — it is what every other
   multi-select in a terminal does — and it is what makes a dozen answers cost a dozen
@@ -718,6 +743,15 @@ These must never regress. Each is one line of behaviour and one line of why.
   accepting a screen filed a refusal for every row the user had not got to. `Space` never
   returns a row to unanswered: the first press answers it, and every press after it
   changes the answer.
+- **Typing narrows a list on every list-shaped prompt, and by one implementation** —
+  `ui/filtering.py`, called by `choose`, `browse` and `check`. A row is matched on the
+  text it already draws; neither `Row` nor `Cell` grows a second "searchable text" field,
+  because a field beside the cells is one more thing that can fall out of step with them.
+  The cursor stays on the row it was on where that row still matches and lands on the
+  first match otherwise, so narrowing never moves the answer out from under `Enter`. A
+  screen's own action rows — the visible way back, `apply`, `discard` — are never filtered
+  away, because an action row survives an empty list (docs/CONVENTIONS.md §12) and going
+  back must not become a key you have to know.
 - **Every screen's corner hint comes from one renderer** — `ui/footer.py`, given the keys
   that screen actually has. Four widgets each building their own footer string is how four
   answers to the same question came about, and a key added to a screen would then be a key

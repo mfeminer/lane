@@ -51,13 +51,14 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 from prompt_toolkit.styles import Style
 
+from lane.ui import filtering
 from lane.ui.footer import Key, tiers
 from lane.ui.footer import line as footer_line
 from lane.ui.seam import Abandoned, Choice, Quit
 
 _ABANDON = object()
 
-KEYS = (Key("enter", "choose"),)
+KEYS = (Key("enter", "choose"), filtering.KEY)
 """The whole key vocabulary of a choice prompt. The table below the seam shows the
 same corner, because it binds the same keys and nothing more."""
 
@@ -166,18 +167,30 @@ def options_frame[T](
     *,
     index: int,
     width: int,
+    text: str = "",
+    tail: int = 0,
 ) -> list[tuple[str, str]]:
     """One frame of a choice prompt. Pure, which is what makes the layout testable.
 
     The table and the checklist have had a pure `paint` since they were written; this
     is the picker's, and it exists for the same reason — so the corner it draws can be
     checked against `footer.line` rather than taken on trust.
+
+    `text` is the filter as typed. It is drawn immediately under the title, so it can
+    never be a mode the user has to remember they are in, and where it matches nothing
+    it says so in one line rather than leaving an empty frame (§12).
     """
+    kept = shown(options, text, tail)
     fragments: list[tuple[str, str]] = []
     if title:
-        fragments += [("class:picker.title", title), ("", "\n\n")]
-    max_label_width = max(len(o.label) for o in options) if options else 0
-    for position, option in enumerate(options):
+        fragments += [("class:picker.title", title), ("", "\n")]
+    said = filtering.status(matched=len(kept) - tail, total=len(options) - tail, text=text)
+    if said:
+        fragments += [("class:picker.hint", f"  {said}"), ("", "\n")]
+    fragments.append(("", "\n"))
+    max_label_width = max((len(options[at].label) for at in kept), default=0)
+    for position, at in enumerate(kept):
+        option = options[at]
         chosen = position == index
         fragments.append(("class:picker.pointer", "  ❯ " if chosen else "    "))
         padded_label = option.label.ljust(max_label_width)
@@ -187,6 +200,21 @@ def options_frame[T](
         fragments.append(("", "\n"))
     fragments.append(("class:picker.footer", f"\n{footer_line(KEYS, width)}\n"))
     return fragments
+
+
+def shown[T](options: Sequence[Choice[T]], text: str, tail: int = 0) -> list[int]:
+    """Which options a filter leaves, by position.
+
+    A `Choice` is matched on its label, which is the whole of what it draws that
+    identifies it. The last `tail` entries are the screen's own — the visible way back
+    the seam appends — and a filter never hides them: an action row survives an empty
+    list (docs/CONVENTIONS.md §12), and going back would otherwise become a key you
+    have to know.
+    """
+    end = len(options) - tail
+    return filtering.matching([option.label for option in options[:end]], text) + list(
+        range(end, len(options))
+    )
 
 
 def confirm_frame(title: str, *, default: bool, width: int) -> list[tuple[str, str]]:
@@ -203,6 +231,7 @@ def pick[T](
     title: str,
     options: Sequence[Choice[T]],
     *,
+    tail: int = 0,
     input: Input | None = None,
     output: Output | None = None,
 ) -> T:
@@ -210,6 +239,9 @@ def pick[T](
 
     A lone candidate is returned without drawing anything: asking a question with
     one possible answer wastes the user's time.
+
+    `tail` is how many trailing entries are the screen's own rows rather than answers —
+    the visible way back `ConsoleUi.choose` appends — which a typed filter never hides.
     """
     if not options:
         raise Abandoned
@@ -217,21 +249,32 @@ def pick[T](
         return options[0].value
 
     state = {"index": 0}
+    typed = filtering.Filter()
+
+    def kept() -> list[int]:
+        return shown(options, typed.text, tail)
 
     def render(width: int) -> FormattedText:
-        return FormattedText(options_frame(title, options, index=state["index"], width=width))
+        return FormattedText(
+            options_frame(
+                title, options, index=state["index"], width=width, text=typed.text, tail=tail
+            )
+        )
 
     bindings = _abandon_bindings()
+
+    def count() -> int:
+        return max(1, len(kept()))
 
     @bindings.add("up")
     def _up(event: KeyPressEvent) -> None:
         del event
-        state["index"] = (state["index"] - 1) % len(options)
+        state["index"] = (state["index"] - 1) % count()
 
     @bindings.add("down")
     def _down(event: KeyPressEvent) -> None:
         del event
-        state["index"] = (state["index"] + 1) % len(options)
+        state["index"] = (state["index"] + 1) % count()
 
     @bindings.add("home")
     def _first(event: KeyPressEvent) -> None:
@@ -241,11 +284,25 @@ def pick[T](
     @bindings.add("end")
     def _last(event: KeyPressEvent) -> None:
         del event
-        state["index"] = len(options) - 1
+        state["index"] = count() - 1
 
     @bindings.add("enter")
     def _accept(event: KeyPressEvent) -> None:
-        event.app.exit(result=options[state["index"]].value)
+        matches = kept()
+        if not matches:
+            # Nothing to choose: the prompt stays up, as it does for any key it cannot
+            # act on. Backspace brings the list back.
+            return
+        event.app.exit(result=options[matches[state["index"]]].value)
+
+    def chosen() -> int | None:
+        matches = kept()
+        return matches[state["index"]] if state["index"] < len(matches) else None
+
+    def moved(was: int | None) -> None:
+        state["index"] = filtering.follow(was, kept())
+
+    filtering.bind(bindings, typed, chosen=chosen, moved=moved)
 
     result = _run(bindings, render, erase=True, input_=input, output=output)
     if result is _ABANDON:

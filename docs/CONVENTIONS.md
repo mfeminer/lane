@@ -96,6 +96,34 @@ AGENTS.md's "Going back is visible" section. **A new screen introduces no key th
 have.** If a screen seems to need one, that is a decision for the maintainer
 (AGENTS.md says so explicitly), not a convenience to slip in.
 
+**Typing filters, on all three list-shaped prompts, and it is a deliberate addition
+rather than a thing that showed up** (`ui/filtering.py`, reached through `Ui.choose`,
+`Ui.browse` and `Ui.check`). It passes exactly the test `Space` had to pass: nothing
+printable was bound in any of the three, `y`/`n` living only in `confirm` and `Space`
+only in `check`, so a letter cannot collide with anything already there. One
+implementation for all three, for the same reason those three widgets already share
+their layout.
+
+- **`Space` is not a filter character anywhere**, including the two screens where it is
+  unbound. It already answers a row on one of the three, and a key that means one thing
+  on one list screen and another on the next is what the closed vocabulary exists to
+  prevent. A filter is one word — which is what a filter over paths, lane names and
+  branch names is anyway.
+- **`Backspace` takes the last character back, and no key clears the filter.**
+  Backspacing to empty is the text editing `Ui.text` already relies on, reused rather
+  than invented.
+- **It is never a hidden mode.** What was typed is on screen, immediately under the
+  title: `<n> of <total> · filter: <text>`. Where it matches nothing, that line is the
+  empty state instead (§12), and the corner says `type to filter` (§3a).
+- **A screen's own action rows are never filtered away** — the visible way back, and the
+  checklist's `apply`/`discard`. §12 already says an action row survives an empty list,
+  and a filter that could hide the way back would make going back a key you have to know.
+  In `choose` the way back is the row `ConsoleUi.choose` appends, so the picker is told
+  how many trailing entries are the screen's own (`pick`'s `tail`). Where a caller passes
+  `back=None` its own list holds its exit — the menu's `quit`, the listing's `← Back to
+  the menu` — and those filter like any other entry; `Backspace` and `Ctrl-C` are both
+  still there, and this was judged the smaller inconsistency of the two available.
+
 **One widget adds one key, and it is `Space` on the checklist** (`ui/checklist.py`,
 reached through `Ui.check`). It is the widget where every row carries its own answer —
 which ignored paths come into a lane, and what closing a lane does — and it spends the
@@ -409,6 +437,10 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   is to let you add the first item cannot answer with a line of prose. *Why: previously
   unstated, and the two readings differ exactly where it matters — on the screen you reach
   when there is nothing there yet.*
+- **A filter that matches nothing is one of these**, not a frozen table with nothing in
+  it: `No matches for '<filter>'.`, drawn where the filter's own `<n> of <total>` line
+  would be, with no header and no rows under it and the screen's action rows still there
+  (§3). The line names the filter because backspacing it is what undoes it.
 
 ## 13. Width and truncation
 
@@ -489,6 +521,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
 | A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
 | A branch that came into being with or during the lane | the lane **created** it | own, new, made |
+| Narrowing a list to what matches what you typed | **filter** (verb: *filter*; the text is *the filter*) | search, find, query, fuzzy — and *hint*, which already names the description after a menu entry (`Choice.hint`) |
+| The dim line in the bottom-right of a screen naming what its keys do | the **corner hint**, rendered by `ui/footer.py` (`footer` in the source, `class:table.footer`) | status line, legend, help bar |
 | The `feature`, `bugfix`, `spike` part in front of a branch name | a **prefix** (screen: **branch prefixes**) | namespace, category, type, kind (reserved for what a lane is *for*, `KIND_QUESTION`), scope |
 | The prefixes lane offers before anybody customises them | the **seed** (the **six** lane ships with) | default (used in the source for `DEFAULT_PREFIXES`, and already taken by *default branch*), built-in, factory, preset |
 

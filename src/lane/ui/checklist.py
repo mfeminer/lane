@@ -76,6 +76,7 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.output import Output
 
+from lane.ui import filtering
 from lane.ui.footer import Key
 from lane.ui.footer import line as footer_line
 from lane.ui.picker import ESCAPE_TIMEOUT
@@ -180,8 +181,8 @@ def keys_for(action: str = NOTHING) -> tuple[Key, ...]:
     """
     answering = (Key("space", "answer"),)
     if not action:
-        return answering
-    return (*answering, Key("enter", action))
+        return (*answering, filtering.KEY)
+    return (*answering, Key("enter", action), filtering.KEY)
 
 
 TICK = "✓ "
@@ -301,6 +302,7 @@ def paint[T](
     total: int | None = None,
     nested: bool = False,
     finish: Finish = FINISH,
+    text: str = "",
 ) -> Painted:
     """Draw one frame of one level. Pure, which is what makes the layout rules testable.
 
@@ -310,6 +312,13 @@ def paint[T](
     many leaves the whole tree holds — the count means the same thing on every screen of
     it, so a level cannot be asked to work it out from what it can see.
     """
+    if total is None:
+        total = len(leaves_of(list(nodes)))
+    everything = len(nodes)
+    nodes = [
+        nodes[at]
+        for at in filtering.matching([filtering.row_text(node.row) for node in nodes], text)
+    ]
     rows = [node.row for node in nodes]
     tail = tail_rows(nested, finish)
     shown_rows = len(rows) + len(tail)
@@ -321,13 +330,17 @@ def paint[T](
         wanted = (tail_detail(tail[cursor - len(rows)], finish),)
     elif rows:
         wanted = rows[cursor].detail[:MAX_DETAIL_LINES]
-    room, detail = vertical(height, wanted, extra=SUMMARY_LINES)
+    said = filtering.status(matched=len(rows), total=everything, text=text)
+    room, detail = vertical(height, wanted, extra=SUMMARY_LINES + (1 if said else 0))
     top = window(shown_rows, cursor, top, room)
 
     prefix = CURSOR_WIDTH + MARK_WIDTH
     kept, measured, leads, short = fit(columns, rows, width, prefix)
 
-    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n\n")]
+    fragments: list[tuple[str, str]] = [("class:table.title", f"  {title}"), ("", "\n")]
+    if said:
+        fragments += [("class:table.panel", f"  {clip(said, width - 2)}"), ("", "\n")]
+    fragments.append(("", "\n"))
 
     if kept and rows:
         header = " " * prefix + "".join(
@@ -364,7 +377,7 @@ def paint[T](
         fragments.append(("", "\n"))
 
     inside = sum(1 for answer in answers.values() if answer)
-    counted = tally(inside, len(leaves_of(nodes)) if total is None else total)
+    counted = tally(inside, total)
     if summary:
         counted = f"{counted} · {summary}"
     fragments.append(("class:table.panel", f"  {clip(counted, width - 2)}"))
@@ -415,13 +428,21 @@ class Walk[T]:
     place in, which is the cost the whole drill-down is supposed to avoid.
     """
 
-    def __init__(self, rows: Callable[[], Sequence[Node[T]]], finish: Finish = FINISH) -> None:
+    def __init__(
+        self,
+        rows: Callable[[], Sequence[Node[T]]],
+        finish: Finish = FINISH,
+        typed: filtering.Filter | None = None,
+    ) -> None:
         self._rows = rows
         self.finish = finish
         self._descent: list[int] = []
         self._parked: list[tuple[int, int]] = []
         self.index = 0
         self.top = 0
+        self.typed = typed if typed is not None else filtering.Filter()
+        """What has been typed on the level currently on screen. A level is a screen,
+        so going into a folder or back out of one starts a fresh one."""
 
     @property
     def nested(self) -> bool:
@@ -448,32 +469,46 @@ class Walk[T]:
         self._descent = walked
         return nodes, title
 
+    def visible(self) -> list[int]:
+        """Where each row the filter kept sits in this level's own list.
+
+        The descent is recorded in the level's own indexes rather than in what a filter
+        happened to be showing, so a folder is still the folder you opened however you
+        found it.
+        """
+        nodes, _ = self.level()
+        return filtering.matching([filtering.row_text(node.row) for node in nodes], self.typed.text)
+
     def rows_here(self) -> int:
         """Rows on this screen, the trailing ones included."""
-        nodes, _ = self.level()
-        return len(nodes) + len(tail_rows(self.nested, self.finish))
+        return len(self.visible()) + len(tail_rows(self.nested, self.finish))
 
     def tail_row(self) -> str:
         """Which of the trailing rows the cursor is on, or `""` when it is on the tree."""
-        nodes, _ = self.level()
         tail = tail_rows(self.nested, self.finish)
-        position = self.index - len(nodes)
+        position = self.index - len(self.visible())
         return tail[position] if 0 <= position < len(tail) else ""
 
     def node(self) -> Node[T] | None:
         """The node under the cursor, or None on one of the trailing rows."""
         nodes, _ = self.level()
-        return nodes[self.index] if self.index < len(nodes) else None
+        visible = self.visible()
+        return nodes[visible[self.index]] if self.index < len(visible) else None
 
     def enter(self) -> bool:
         """Go into the folder under the cursor, parking this level as it stands."""
         node = self.node()
         if node is None or not node.children:
             return False
+        # Read where the cursor is standing *before* touching the descent: `level()`
+        # rebinds `_descent` as it self-heals, so an append whose argument still had to
+        # be worked out would land on the list that was just replaced.
+        at = self.visible()[self.index]
         self._parked.append((self.index, self.top))
-        self._descent.append(self.index)
+        self._descent.append(at)
         self.index = 0
         self.top = 0
+        self.typed.text = ""
         return True
 
     def leave(self) -> bool:
@@ -482,6 +517,7 @@ class Walk[T]:
             return False
         self._descent.pop()
         self.index, self.top = self._parked.pop()
+        self.typed.text = ""
         return True
 
     def clamp(self) -> None:
@@ -565,6 +601,15 @@ def bindings_for[T](
         for value in leaves:
             answered[value] = not inside
 
+    def chosen() -> int | None:
+        visible = walk.visible()
+        return visible[walk.index] if walk.index < len(visible) else None
+
+    def moved(was: int | None) -> None:
+        walk.index = filtering.follow(was, walk.visible())
+
+    filtering.bind(bindings, walk.typed, chosen=chosen, moved=moved)
+
     @bindings.add("enter")
     def _chosen(event: KeyPressEvent) -> None:
         del event
@@ -633,6 +678,7 @@ def check[T](
             total=len(leaves_of(list(rows()))),
             nested=walk.nested,
             finish=finish,
+            text=walk.typed.text,
         )
         walk.top = painted.top
         if on_render is not None:

@@ -26,6 +26,8 @@ reason).
 
 from __future__ import annotations
 
+import pytest
+
 from lane.ui.seam import Cell, Column, Row
 from lane.ui.splash import closing, opening, plain
 from lane.ui.table import paint
@@ -102,6 +104,16 @@ def test_the_lanes_table_at_44_columns_abbreviates_state_before_losing_pr() -> N
     assert "●1 ↑1" in body, "state abbreviates to its short form"
     assert "● 1 uncommitted · ↑ 1 unpushed" not in body, "the long form is gone, not cut mid-word"
     assert "1 un" not in body, "no fragment of a word split mid-character survives"
+
+
+@pytest.mark.parametrize("width", [100, 68, 44])
+def test_the_corner_hint_is_pinned_to_the_bottom_right_at_every_probed_width(width: int) -> None:
+    """§3a: one renderer, bottom-right, dim — pinned here at the same widths the columns
+    are, so a footer drifting back to the left margin shows up as a failure."""
+    corner = _text(width).splitlines()[-1]
+
+    assert corner.endswith("type to filter")
+    assert len(corner) == width - 2, "right-aligned with the same margin the rows keep"
 
 
 # -- The splash ------------------------------------------------------------------
