@@ -71,13 +71,15 @@ The lanes table didn't add a key either — there's no `c` for close. That's why
 `Enter` on a row offers you its verbs instead of a legend telling you which letters
 do what.
 
-**One screen adds one key**, and it's the preparation screen below: `Space` answers the
-row under the cursor. That's the universal multi-select keystroke rather than an invention
-of this tool, and it's what turns a dozen answers into a dozen keystrokes. `Enter` there
-still means what it means everywhere else — act on the row you're standing on — so
-finishing the screen is a **row** (`apply`), exactly as going back always has been. Its
-footer names whichever of those `Enter` will do, and names nothing at all when you're on a
-file, because there `Enter` does nothing.
+**One kind of screen adds one key**: `Space` answers the row under the cursor. That's the
+universal multi-select keystroke rather than an invention of this tool, and it's what
+turns a dozen answers into a dozen keystrokes. `Enter` there still means what it means
+everywhere else — act on the row you're standing on — so finishing the screen is a **row**,
+exactly as going back always has been. Its footer names whichever of those `Enter` will
+do, and names nothing at all when you're on a file, because there `Enter` does nothing.
+
+Two screens work that way — the preparation screen below, and the one that closes a lane —
+and the second one added **no** key at all.
 
 **Ctrl-C quits lane**, wherever you are — the same door `quit` uses, and it prints the
 same goodbye. It is not a way back: going back is always something you can *see*, so you
@@ -542,9 +544,8 @@ runs three checks:
 2. **Unpushed commits**
 3. **Whether the work reached `origin/<default branch>`**
 
-It shows you everything it found, spells out exactly what's about to be removed,
-and asks for every decision it needs — *including* permission to force-delete an
-unmerged branch — **before touching anything**.
+It shows you everything it found, spells out exactly what's about to be removed, and
+then puts every decision it needs on **one screen** — **before touching anything**.
 
 ```
 Closing demo/broken-pagination
@@ -560,10 +561,39 @@ About to remove
   Branch   : bugfix/broken-pagination
 
 ✓ Lane is clear.
-  Close it? [y/N]
+
+  Closing demo/broken-pagination
+
+❯   close
+    leave open
+
+  Closes the lane, doing exactly what is ticked above.
+
+  nothing in yet
+  ↑↓ move · space answer · enter close
 ```
 
-Back out at any point and nothing changes.
+That lane has nothing left to decide, so the screen is just the two rows every close
+ends with. A lane that *does* — commits that would be stranded, a branch git would
+refuse to delete — gets a row for each of those above them, answered with `Space`:
+
+```
+  Closing demo/broken-pagination
+
+    what closing does
+❯ ✗ delete branch bugfix/broken-pagination
+  ✗ delete branch bugfix/first-attempt
+    close
+    leave open
+
+  It holds commits that are nowhere else.
+  Left out, it stays, and lane says how to remove it later.
+
+  nothing in yet
+  ↑↓ move · space answer
+```
+
+`leave open` and nothing changes.
 
 ### The pull request check
 
@@ -623,8 +653,8 @@ isn't permission to delete somebody's base.
 ### The local branches go with the lane
 
 Closing a lane deletes its local branch too — otherwise your repository fills up
-with dead branches, one per lane you ever closed. The summary says so before you
-confirm:
+with dead branches, one per lane you ever closed. The summary says so before the
+screen appears:
 
 ```
 About to remove
@@ -644,34 +674,42 @@ About to remove
 ```
 
 lane finds them from the worktree's own history, so you don't have to remember. Any
-that still hold unique work are marked, and one question covers them.
+that still hold unique work are marked, and each gets **its own row** on the close
+screen — so you can drop one and keep the other, which one question covering all of
+them could never say.
 
 When the work demonstrably landed — git says so, or the pull request is `MERGED` —
-the branch is deleted without a second question. That includes the squash-merge
-case, where `git branch -d` refuses because the commits exist nowhere in the base;
-lane has the pull request as evidence, so it deletes anyway.
+the branch is deleted with **no row at all**. That includes the squash-merge case,
+where `git branch -d` refuses because the commits exist nowhere in the base; lane has
+the pull request as evidence, so there is nothing to ask about.
 
-When there's **no** evidence it landed, deleting could lose work, so lane asks:
+When there's **no** evidence it landed, deleting could lose work, so it gets a row —
+which starts **out**:
 
 ```
 !   Branch   : feature/risky — will be deleted, and it is not merged
-    Branch 'feature/risky' is not merged. Delete it anyway? [y/N]
+
+    what closing does
+❯ ✗ delete branch feature/risky
 ```
 
-Decline and the branch is kept, with the exact command to remove it later.
+Leave it out and the branch is kept, with the exact command to remove it later. The row
+says what closing does rather than *delete it anyway*: the `!` line above already said
+what's at stake, and saying it twice is how a warning stops being read.
 
 **A branch your lane adopted rather than created is treated the same way**, and
 that's deliberate: only the *local* branch is deleted and the one on `origin` is
 never touched, so a branch you picked up from the remote is a `git fetch` away from
 being back. Where nothing demonstrably landed — a purely local branch you took over,
-say — you get the same question above before anything goes.
+say — you get the same row above before anything goes.
 
 ### What protects your work
 
 - A lane on a **detached HEAD with unpushed commits** is offered a `wip/<lane>`
-  branch before removal, so nothing becomes unreachable. That branch is never
+  branch before removal, so nothing becomes unreachable. It is the one row that starts
+  **in** — take it out and the commits go with the worktree. That branch is never
   deleted afterwards — that would defeat the point.
-- **Every question comes before anything is removed**, so declining leaves
+- **Every decision comes before anything is removed**, so `leave open` leaves
   everything as it was.
 - Only the lane's **own** branch is ever deleted, and only in branch mode — never
   the base branch, never a detached lane (it has none), never a `wip/` branch.

@@ -541,7 +541,7 @@ def _deletion(branch: str, why: str) -> Node[_Ask]:
         row=Row(
             value=_Delete(branch),
             cells=(Cell(f"delete branch {branch}", tone="warn"),),
-            detail=(f"{why} Left out, it stays, and lane says how to remove it later.",),
+            detail=(why, "Left out, it stays, and lane says how to remove it later."),
         )
     )
 

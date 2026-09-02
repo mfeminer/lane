@@ -92,11 +92,13 @@ whole mechanism, and it is why almost nothing needs binding:
 | `Enter` | choose, or accept what you typed |
 | `y` / `n` | answer a yes/no question |
 | `Ctrl-C` | quit lane |
-| `Space` | answer the row under the cursor — **the checklist only** |
+| `Space` | answer the row under the cursor — **the checklist widget only** |
 
 **That table is the whole vocabulary**, and the last row is the only key any screen has
-ever been allowed to add. It belongs to `ui/checklist.py`, the screen where every row
-carries its own answer, and it was taken deliberately rather than slipped in:
+ever been allowed to add. It belongs to `ui/checklist.py` — every screen whose rows carry
+their own answer, which is now two of them: which ignored paths come into a lane, and
+what closing a lane does. **The second one added no key**, and that is the test the first
+one was spending its budget against. It was taken deliberately rather than slipped in:
 
 - `Space` toggling a multi-select is not this tool's invention — it is what every other
   multi-select in a terminal does — and it is what makes a dozen answers cost a dozen
@@ -478,15 +480,19 @@ and the progress indication for a long step ("Fetching origin…") is telling. S
 **There are three screen shapes and they answer different kinds of question.** `choose`
 asks one question. `browse` is a screen the user stands in and acts on one row of.
 **`check` is a screen where every row carries its own answer** — which ignored
-paths come into a lane — so it is a decision over a *set* rather than a question with an
-answer, and it returns every **leaf** that was answered, and which way, when `apply` was
-chosen. It takes the same columns `browse` does and a `rows` callable returning a **tree**
+paths come into a lane, and what closing a lane does — so it is a decision over a *set*
+rather than a question with an answer, and it returns every **leaf** that was answered,
+and which way, when the screen was accepted. It takes the same columns `browse` does and a `rows` callable returning a **tree**
 of them, one level per screen, plus what arrives already answered and an optional `summary`
 for the running count. A leaf has three answers — in, out, and *not yet answered*, which is
 an **absent key** rather than a value; a folder stands for everything under it and so has
-five, adding *partly unanswered* (`?`) to the mix (`◐`). Every level ends with `apply` and
-`discard` rows, and every level inside a folder has a `← Back` above them; the root has no
-`← Back`, because there is nothing above it.
+five, adding *partly unanswered* (`?`) to the mix (`◐`). Every level ends with two rows — the way on and the
+way out — and every level inside a folder has a `← Back` above them; the root has no
+`← Back`, because there is nothing above it. **What those two rows are called is the
+caller's** (`Finish`): `apply`/`discard` for a screen of ignored paths, `close`/`leave
+open` for the close, because what accepting a screen *does* differs, and one vocabulary
+describing two things is how a word stops meaning either. The shape never varies — rows,
+on every level, never a key.
 
 **`browse` is a screen the user stands in, not a question they are asked** — that
 is the whole difference between it and `choose`. It takes columns and a *callable*
@@ -694,6 +700,10 @@ These must never regress. Each is one line of behaviour and one line of why.
   reachable only from the root is what the accept used to be, and on a tree whose paths
   all sit under folders that was a screen with no way to finish. `← Back` moves the cursor
   up a level and keeps every answer given; it is not a second `discard`.
+- **What those two rows are called belongs to the caller, and their shape does not** —
+  the close screen ends with `close` and `leave open`, because what it accepts is a close
+  and `apply` would be one word doing two jobs. A caller supplies the labels and the
+  panel line under each; it never supplies a key, a third row, or a level without them.
 - **A checklist leaf has three answers, not two: in, out, and not yet answered** — and a
   leaf left unanswered has **no step written for it**, so it is offered again next time.
   Two states could not tell "kept out on purpose" from "nobody has asked", which meant
@@ -768,11 +778,12 @@ These must never regress. Each is one line of behaviour and one line of why.
   about — which is the same protection every other branch gets, for the same reason.
 - **Closing a lane deletes its local branch** — leaving it behind is how a
   repository fills with dead branches, one per lane ever closed. The summary states
-  it before the user confirms. Where the work demonstrably landed (git's ancestry
-  check, or a `MERGED` pull request) it goes without a second question — including
+  it before the user acts. Where the work demonstrably landed (git's ancestry
+  check, or a `MERGED` pull request) it goes with **no row at all** — including
   the squash case, where `git branch -d` refuses and forcing is correct rather than
-  dangerous. Where there is no such evidence, permission is asked, and declining
-  keeps the branch and prints the command to remove it later.
+  dangerous. Where there is no such evidence the close screen carries a row for that
+  branch, starting **out**; leaving it out keeps the branch and prints the command to
+  remove it later.
 - **All of them, not just the one the lane is standing on.** A lane is one task and a
   task can move through several branches; lane is absent while it does, so they are
   recorded nowhere but the worktree's own HEAD reflog — read from both sides of every
@@ -781,8 +792,10 @@ These must never regress. Each is one line of behaviour and one line of why.
   **before the worktree is removed**, because `git worktree remove` takes that reflog
   with it; and every name is filtered back through git, because reflog entries outlive
   the branches they name and a detached spell leaves a bare commit id behind. Those
-  holding unique work are marked in the summary and covered by **one** question — a
-  prompt per branch would turn closing a lane that moved around into an interrogation.
+  holding unique work are marked in the summary and get **a row each** on the close
+  screen. One question covering all of them was the shape before, and it could only
+  answer *all* or *none* — a lane that moved around twice usually wants one of them and
+  not the other. A row costs no round trip, which is what a prompt per branch did.
 
 ## Behaviour to preserve
 
@@ -1024,12 +1037,20 @@ this* — as the narrowest things on the line. See *The lanes screen* above.
 
 **Closing a lane** — fetch, then three checks: uncommitted or untracked files,
 unpushed commits, and whether the work reached `origin/<default>` (including the
-pull request check). Everything the close needs to know is asked **before anything
-is removed, in one pass**: outstanding findings are listed and confirmed; a lane on
-a detached HEAD with unpushed commits is offered a `wip/<lane>` branch; and if the
-lane's branch is not merged, permission to force-delete it is asked for here
-rather than after the worktree is gone. Only then does it execute: park the rescue
-branch if asked, remove the worktree, prune, delete the branch. **Every one of
+pull request check). Everything the close needs to know is decided **before anything
+is removed, on one screen**: the findings and the "About to remove" block are printed
+as facts, and then a `check` whose rows are exactly the decisions that apply — a
+`wip/<lane>` rescue when a detached lane has commits that would be stranded (starting
+**in**), one row per branch git would refuse to delete (each starting **out**), and
+`close` / `leave open` always. Only then does it execute: park the rescue branch if
+asked, remove the worktree, prune, delete the branches.
+
+**It is a screen rather than a chain of confirmations, and that was the last holdout.**
+Closing used to ask up to four yes/no questions in a row whose defaults disagreed with
+one another — three declining and one accepting — inside what reads as one flow. A lane
+with nothing optional to decide gets the **same** screen with only its two last rows: one
+shape everywhere beats a shortcut for the easy lane. `leave open` says so in a line and
+touches nothing, which is what declining always did. **Every one of
 those steps shows a spinner** — they run after the last question, with nothing on
 screen to explain the wait, and removing a worktree of a few thousand files is the
 longest thing a close does. **The whole phase defers Ctrl-C**, which is Zone 2 of
@@ -1215,8 +1236,13 @@ All of it arrived at test-first:
   `gh` call is made
 - closing a GitHub-backed lane refused with a usable message when `gh` is missing
   or logged out, while closing a lane with a non-GitHub remote still succeeds
+- the close screen carrying exactly the rows that apply — the rescue only where commits
+  would be stranded and starting *in*, a branch row only where `-d` could lose something
+  and starting *out*, none at all for a lane with nothing left to decide — and two
+  unmerged branches a lane used being answered one way each
+- `leave open` leaving the worktree, every branch and the metadata exactly as they were
 - every step of a close's removal phase announcing itself, in order, after the last
-  question
+  decision
 - Ctrl-C during that phase finishing it rather than stopping half-way — a real
   `SIGINT` to the test process, because that is what a terminal sends — being raised
   afterwards rather than discarded, and the session then **exiting** rather than
