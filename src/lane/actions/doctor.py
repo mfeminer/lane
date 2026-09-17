@@ -28,7 +28,7 @@ from lane import __version__, buildinfo
 from lane.actions import config as config_screen
 from lane.config import ENV_EDITOR, ENV_LANES_ROOT, ENV_PROJECTS_ROOT, inside_profile
 from lane.context import Context
-from lane.github.gh_client import INSTALL_REMEDY, LOGIN_REMEDY
+from lane.github.gh_client import LOGIN_REMEDY, install_remedy
 from lane.prepare import apply
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
 
@@ -119,7 +119,7 @@ def _git(context: Context) -> Check:
             name="git",
             lines=(
                 Line("error", "git is not installed — lane cannot do anything without it."),
-                Line("detail", "  Install Xcode command line tools, or: brew install git"),
+                Line("detail", f"  Install it with: {_git_remedy()}"),
             ),
             facts={"installed": False, "version": None},
         )
@@ -129,6 +129,14 @@ def _git(context: Context) -> Check:
         lines=(Line("ok", f"git: {version or 'installed'}"),),
         facts={"installed": True, "version": version},
     )
+
+
+def _git_remedy() -> str:
+    """Where git comes from on this machine. Same rule as `gh`'s: name something the
+    person reading it can actually run."""
+    if sys.platform == "win32":
+        return "winget install Git.Git"
+    return "xcode-select --install, or: brew install git"
 
 
 def _gh(context: Context) -> Check:
@@ -141,7 +149,7 @@ def _gh(context: Context) -> Check:
                     "warn",
                     "GitHub CLI is not installed — closing a GitHub-backed lane will be refused.",
                 ),
-                Line("detail", f"  Install it with: {INSTALL_REMEDY}"),
+                Line("detail", f"  Install it with: {install_remedy()}"),
                 Line(
                     "detail",
                     "  Everything else, including closing a non-GitHub lane, works without it.",

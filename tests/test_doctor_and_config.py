@@ -933,6 +933,45 @@ def test_doctor_offers_no_mac_advice_about_a_missing_editor_off_macos(
     assert not ui.said("open -a")
 
 
+def test_doctor_names_an_installer_the_machine_actually_has(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`brew install gh` is not a thing a Windows user can run, and a remedy nobody can
+    carry out is worse than none — see docs/CONVENTIONS.md §11."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=FakeEnvironment(tools={}),
+        )
+    )
+
+    assert not ui.said("brew install")
+    assert ui.said("winget install"), "the installer Windows ships with"
+
+
+def test_doctor_still_names_brew_on_macos(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=FakeEnvironment(tools={}),
+        )
+    )
+
+    assert ui.said("brew install gh")
+
+
 # -- doctor on what actually protects the config -----------------------------------
 
 

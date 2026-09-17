@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from lane.github.client import (
@@ -34,7 +35,20 @@ _LIMIT = 100
 and says nothing when it truncates, and silently dropping history is the fault this
 query exists to fix."""
 
-INSTALL_REMEDY = "brew install gh"
+
+def install_remedy() -> str:
+    """How to install `gh` on the machine this is running on.
+
+    A remedy nobody can carry out is worse than no remedy — `brew install gh` on a
+    Windows machine names a thing that is not there. Both of these are the package
+    manager lane itself is installed with on that platform, so somebody following the
+    advice has already got it. See docs/CONVENTIONS.md §11.
+    """
+    if sys.platform == "win32":
+        return "winget install GitHub.cli"
+    return "brew install gh"
+
+
 LOGIN_REMEDY = "gh auth login"
 
 _VALID_STATES: tuple[PrState, ...] = ("OPEN", "CLOSED", "MERGED")
@@ -123,7 +137,7 @@ class GhClient:
         except FileNotFoundError:
             return CannotTell(
                 reason="gh-missing",
-                remedy=INSTALL_REMEDY,
+                remedy=install_remedy(),
                 detail="the GitHub CLI is not installed",
             )
         except (OSError, subprocess.SubprocessError) as exc:

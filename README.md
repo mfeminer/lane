@@ -13,8 +13,11 @@ and the branch when you start, and clears both away once the work has landed.
 
 ## Install
 
-macOS on Apple silicon, with `git`, [`gh`](https://cli.github.com) (logged in) and an
-editor command on your PATH — `cursor`, `code`, `zed`, `idea`, `subl`.
+macOS on Apple silicon, or Windows on x86-64. Either way you need `git`,
+[`gh`](https://cli.github.com) (logged in) and an editor command on your PATH —
+`cursor`, `code`, `zed`, `idea`, `subl`.
+
+### macOS
 
 ```bash
 brew install mfeminer/tap/lane
@@ -42,8 +45,30 @@ If you installed that way before and have since moved to Homebrew, delete `~/bin
 whichever comes first on your `PATH` wins, and an old copy left there will quietly keep
 running instead of the one `brew upgrade` maintains.
 
-Then run `lane`, choose **config**, and answer three questions: where your projects
-sit, where lanes should be parked, and which editor to open.
+### Windows
+
+```powershell
+winget install mfeminer.lane
+```
+
+winget comes with Windows 10 and 11, so there is nothing to install before that line
+works — which is the whole reason it is the one package manager lane targets. `winget
+upgrade mfeminer.lane` is how it updates.
+
+**Without winget**, the binary is on the release. Download
+[`lane-windows-x86_64.exe`](https://github.com/mfeminer/lane/releases/latest/download/lane-windows-x86_64.exe),
+rename it to `lane.exe`, and put it in a folder that is on your `PATH`.
+
+**The first run will probably show "Windows protected your PC".** lane is not code-signed,
+so SmartScreen holds any download of it the first time — the same honesty as the macOS
+quarantine note above, and the same answer: **More info → Run anyway**. It is asked once
+per downloaded copy. The winget install does not usually raise it, because winget checks
+the hash the manifest pins instead.
+
+### Then
+
+Run `lane`, choose **config**, and answer three questions: where your projects sit,
+where lanes should be parked, and which editor to open.
 
 ## Use it
 
@@ -111,9 +136,10 @@ Preparing demo/broken-pagination
 ```
 
 `Space` answers the row under the cursor; a dozen paths is a dozen keystrokes, with no
-going into a row and back out again. `✓` means the path is copied in from your main clone,
-which on APFS is copy-on-write and costs almost nothing and almost no disk. `✗` means you
-have decided to leave it out. `○` means you have not said yet — and lane will ask again
+going into a row and back out again. `✓` means the path is copied in from your main clone
+— on macOS, where both folders share an APFS volume, that is a copy-on-write clone and
+costs almost nothing and almost no disk; on Windows it is a real copy, and **doctor tells
+you which one you are getting**. `✗` means you have decided to leave it out. `○` means you have not said yet — and lane will ask again
 next time rather than deciding for you.
 
 Below the paths are two more rows: **`apply`** records everything you have decided and
@@ -161,7 +187,7 @@ Exit codes: `0` done · `1` refused · `2` bad flags · `3` needs an answer, no 
 
 ## Configure
 
-`~/.config/lane/config.toml`, three settings:
+`~/.config/lane/config.toml` — `%APPDATA%\lane\config.toml` on Windows — three settings:
 
 ```toml
 projects_root = "/Users/you/Projects"   # one git repository per subfolder
