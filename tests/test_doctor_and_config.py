@@ -1,4 +1,4 @@
-"""Doctor and settings.
+"""Doctor and config.
 
 The listing moved to `test_listing.py` when it became a screen of its own.
 """
@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from lane.actions import doctor, open_lane, settings
+from lane.actions import config as config_action
+from lane.actions import doctor, open_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
@@ -150,10 +151,10 @@ def test_doctor_names_an_environment_override(projects_root: Path, lanes_root: P
     assert ui.said("LANE_EDITOR overrides editor")
 
 
-# -- E9, I28: settings -----------------------------------------------------------
+# -- E9, I28: config -----------------------------------------------------------
 
 
-def test_settings_saves_the_three_values(xdg: Path, projects_root: Path, lanes_root: Path) -> None:
+def test_config_saves_the_three_values(xdg: Path, projects_root: Path, lanes_root: Path) -> None:
     git(["init", "--quiet", str(projects_root / "a-project")])
     config_dir = xdg / "cfg"
     ui = FakeUi([str(projects_root), str(lanes_root), "zed"])
@@ -165,7 +166,7 @@ def test_settings_saves_the_three_values(xdg: Path, projects_root: Path, lanes_r
         environment=FakeEnvironment(tools={"git": "/g", "zed": "/z"}),
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     saved = ConfigStore(config_dir).load_file_only()
     assert saved.projects_root == projects_root
@@ -174,7 +175,7 @@ def test_settings_saves_the_three_values(xdg: Path, projects_root: Path, lanes_r
     assert ui.said("Saved to")
 
 
-def test_settings_refuses_a_projects_folder_with_no_repositories(
+def test_config_refuses_a_projects_folder_with_no_repositories(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """Everything depends on this being right, so it is checked before moving on."""
@@ -186,13 +187,13 @@ def test_settings_refuses_a_projects_folder_with_no_repositories(
     ui = FakeUi([str(empty), str(projects_root), str(lanes_root), "cursor"])
     context = _context(ui, projects_root=None, lanes_root=lanes_root, config_dir=xdg / "cfg2")
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("none of its")
     assert ConfigStore(xdg / "cfg2").load_file_only().projects_root == projects_root
 
 
-def test_settings_says_plainly_when_the_environment_is_winning(
+def test_config_says_plainly_when_the_environment_is_winning(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """Otherwise saving a value that does not take effect looks like a bug."""
@@ -201,14 +202,14 @@ def test_settings_says_plainly_when_the_environment_is_winning(
     context = _context(ui, projects_root=None, lanes_root=lanes_root, config_dir=xdg / "cfg3")
     context.overridden = {"editor": "LANE_EDITOR"}
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("environment is currently winning")
     assert ui.said("LANE_EDITOR overrides editor")
     assert ui.said("saved to the file")
 
 
-def test_settings_warns_when_lanes_would_sit_inside_the_projects_folder(
+def test_config_warns_when_lanes_would_sit_inside_the_projects_folder(
     xdg: Path, projects_root: Path
 ) -> None:
     git(["init", "--quiet", str(projects_root / "p")])
@@ -216,19 +217,19 @@ def test_settings_warns_when_lanes_would_sit_inside_the_projects_folder(
     ui = FakeUi([str(projects_root), str(inside), "cursor"])
     context = _context(ui, projects_root=None, lanes_root=inside, config_dir=xdg / "cfg4")
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("inside your projects folder")
 
 
-def test_settings_notes_an_editor_that_is_not_on_path(
+def test_config_notes_an_editor_that_is_not_on_path(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     git(["init", "--quiet", str(projects_root / "p")])
     ui = FakeUi([str(projects_root), str(lanes_root), "nonexistent-editor"])
     context = _context(ui, projects_root=None, lanes_root=lanes_root, config_dir=xdg / "cfg5")
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("is not on your PATH")
     # It is still saved: lanes open regardless, the editor just will not launch.
@@ -258,7 +259,7 @@ def test_the_lanes_default_is_offered_next_to_the_projects_folder(
     ui = Recording([str(projects_root), "", "cursor"])
     context = _context(ui, projects_root=None, lanes_root=lanes_root, config_dir=xdg / "cfgL")
 
-    settings.run(context)
+    config_action.run(context)
 
     assert offered == [str(projects_root.parent / "Lanes")]
     saved = ConfigStore(xdg / "cfgL").load_file_only()
@@ -270,7 +271,7 @@ def test_an_already_configured_lanes_folder_is_offered_instead(
 ) -> None:
     """A choice you have already made is never quietly replaced by a suggestion.
 
-    A config file already exists here, so this now goes through the settings list
+    A config file already exists here, so this now goes through the config list
     rather than the first-run sequence: pick the "lanes root" row, answer "" to keep
     the suggested default, and check what was actually suggested.
     """
@@ -292,7 +293,7 @@ def test_an_already_configured_lanes_folder_is_offered_instead(
     ui = Recording(["lanes root", "", "back"])
     context = _context(ui, projects_root=projects_root, lanes_root=chosen, config_dir=config_dir)
 
-    settings.run(context)
+    config_action.run(context)
 
     assert offered == [str(chosen)]
     assert ConfigStore(config_dir).load_file_only().lanes_root == chosen
@@ -306,12 +307,12 @@ def test_the_lanes_folder_can_still_be_changed_to_anything(
     ui = FakeUi([str(projects_root), str(elsewhere), "cursor"])
     context = _context(ui, projects_root=None, lanes_root=elsewhere, config_dir=xdg / "cfgN")
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ConfigStore(xdg / "cfgN").load_file_only().lanes_root == elsewhere
 
 
-# -- L8: settings redesigned as a list, acted on one setting at a time ----------
+# -- L8: config redesigned as a list, acted on one setting at a time ----------
 
 
 def test_a_fresh_run_with_no_config_file_gets_the_fixed_sequence_not_the_list(
@@ -325,7 +326,7 @@ def test_a_fresh_run_with_no_config_file_gets_the_fixed_sequence_not_the_list(
     ui = FakeUi([str(projects_root), str(lanes_root), "cursor"])
     context = _context(ui, projects_root=None, lanes_root=lanes_root, config_dir=config_dir)
 
-    settings.run(context)
+    config_action.run(context)
 
     # Three plain text questions, in order, and nothing that looks like a table.
     assert not any(told.kind == "table" for told in ui.told)
@@ -352,10 +353,10 @@ def test_an_existing_config_shows_the_list_instead_of_the_fixed_sequence(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     titles = [told.text for told in ui.told if told.kind == "table"]
-    assert titles == ["lane settings"]
+    assert titles == ["lane config"]
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("projects root" in row and str(projects_root) in row for row in rows)
     assert any("lanes root" in row and str(lanes_root) in row for row in rows)
@@ -382,7 +383,7 @@ def test_choosing_the_editor_row_asks_only_that_one_question_and_saves_it(
         environment=FakeEnvironment(tools={"git": "/g", "zed": "/z"}),
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ConfigStore(config_dir).load_file_only().editor == "zed"
     # The other two settings were untouched — only one question was asked.
@@ -390,7 +391,7 @@ def test_choosing_the_editor_row_asks_only_that_one_question_and_saves_it(
     assert ConfigStore(config_dir).load_file_only().lanes_root == lanes_root
     assert ui.unanswered() == 0
     titles = [told.text for told in ui.told if told.kind == "table"]
-    assert titles == ["lane settings", "lane settings"], "back to the updated list, not the menu"
+    assert titles == ["lane config", "lane config"], "back to the updated list, not the menu"
 
 
 def test_the_projects_root_question_reuses_todays_validation_from_the_list(
@@ -410,7 +411,7 @@ def test_the_projects_root_question_reuses_todays_validation_from_the_list(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("none of its")
     assert ConfigStore(config_dir).load_file_only().projects_root == projects_root
@@ -436,7 +437,7 @@ def test_after_each_setting_is_saved_the_context_is_reloaded(
         environment=FakeEnvironment(tools={"git": "/g", "zed": "/z"}),
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert context.config.editor == "zed", "the live context picked up the new value"
 
@@ -456,7 +457,7 @@ def test_an_environment_override_is_visible_in_the_list(
     )
     context.overridden = {"editor": "LANE_EDITOR"}
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("environment is currently winning")
     assert ui.said("LANE_EDITOR overrides editor")
@@ -464,11 +465,11 @@ def test_an_environment_override_is_visible_in_the_list(
     assert any("overridden by LANE_EDITOR" in row for row in rows)
 
 
-# -- preparation, from settings --------------------------------------------------
+# -- preparation, from config --------------------------------------------------
 
 
 def _configured(xdg: Path, projects_root: Path, lanes_root: Path, name: str) -> Path:
-    """A config already on disk, so settings shows its list rather than the first run."""
+    """A config already on disk, so config shows its list rather than the first run."""
     config_dir = xdg / name
     git(["init", "--quiet", str(projects_root / "p")])
     ConfigStore(config_dir).save(
@@ -477,7 +478,7 @@ def _configured(xdg: Path, projects_root: Path, lanes_root: Path, name: str) -> 
     return config_dir
 
 
-def test_settings_has_a_preparation_row_saying_how_much_is_in(
+def test_config_has_a_preparation_row_saying_how_much_is_in(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     config_dir = _configured(xdg, projects_root, lanes_root, "cfgP1")
@@ -492,16 +493,16 @@ def test_settings_has_a_preparation_row_saying_how_much_is_in(
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("preparation" in row and "1 path in, 1 out" in row for row in rows)
 
 
-def test_settings_tells_a_stored_skip_from_a_path_nobody_has_answered(
+def test_config_tells_a_stored_skip_from_a_path_nobody_has_answered(
     projects_root: Path,
 ) -> None:
-    """The gap the two-state screen left, and the one settings felt worst.
+    """The gap the two-state screen left, and the one config felt worst.
 
     Settings reviews *stored decisions*, so "kept out on purpose" is a normal thing for a
     row there to be — and it drew as a blank gutter, exactly like a path that had never
@@ -544,7 +545,7 @@ def test_settings_tells_a_stored_skip_from_a_path_nobody_has_answered(
     assert len({mark.strip() for mark in marks.values()}) == 3, marks
 
 
-def test_settings_opens_the_same_screen_entering_a_lane_does(
+def test_config_opens_the_same_screen_entering_a_lane_does(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """One component, two callers — asserted on the call rather than on resemblance,
@@ -556,7 +557,7 @@ def test_settings_opens_the_same_screen_entering_a_lane_does(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.checklists == 1, "the checklist, not a table of rows you go into"
 
@@ -580,7 +581,7 @@ def test_the_preparation_screen_shows_every_projects_paths_with_the_project_dimm
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     paths = [row for row in rows if "acme/" in row or "zeta/" in row]
@@ -607,7 +608,7 @@ def test_a_folder_whose_remembered_answers_disagree_stays_one_row(
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert [row.split(" | ")[0] for row in rows if "acme/" in row] == [
@@ -638,7 +639,7 @@ def test_answering_a_mixed_folder_brings_every_path_under_it_in(
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert {s.verb for s in context.prepare_store().load().for_project("acme")} == {Verb.CLONE}
 
@@ -655,12 +656,12 @@ def test_a_remembered_path_arrives_ticked_and_can_be_taken_back_out(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.SKIP]
 
 
-def test_a_path_left_out_can_be_brought_back_in_from_settings(
+def test_a_path_left_out_can_be_brought_back_in_from_config(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     config_dir = _configured(xdg, projects_root, lanes_root, "cfgP5")
@@ -670,7 +671,7 @@ def test_a_path_left_out_can_be_brought_back_in_from_settings(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="vendor"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.CLONE]
 
@@ -687,7 +688,7 @@ def test_the_running_total_says_per_lane_where_there_is_no_lane_in_hand(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     said = [told.text for told in ui.told if told.kind == "summary"]
     assert said and said[-1].endswith("in each lane"), said
@@ -703,7 +704,7 @@ def test_backing_out_of_the_preparation_screen_changes_nothing(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     assert [s.verb for s in context.prepare_store().load().for_project("acme")] == [Verb.CLONE]
 
@@ -720,16 +721,16 @@ def test_with_no_paths_at_all_the_screen_says_so_rather_than_drawing_a_frame(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.checklists == 0, "no checklist over nothing"
     assert ui.said("Nothing has been answered yet")
 
 
-# -- settings · commands ----------------------------------------------------------
+# -- config · commands ----------------------------------------------------------
 
 
-def test_settings_has_a_commands_row_and_lists_the_run_steps(
+def test_config_has_a_commands_row_and_lists_the_run_steps(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """A command is not a path: it is typed rather than discovered, and it has a
@@ -746,7 +747,7 @@ def test_settings_has_a_commands_row_and_lists_the_run_steps(
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("commands" in row and "1 step" in row for row in rows)
@@ -774,7 +775,7 @@ def test_a_command_step_can_be_added(xdg: Path, projects_root: Path, lanes_root:
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     step = context.prepare_store().load().for_project("p")[0]
     assert step.verb is Verb.RUN
@@ -800,7 +801,7 @@ def test_forgetting_a_command_leaves_the_paths_alone(
         )
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert [s.path for s in context.prepare_store().load().steps] == ["node_modules"]
 
@@ -816,7 +817,7 @@ def test_with_no_commands_at_all_the_screen_still_offers_add_a_command(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert any("add a command" in told.text for told in ui.told if told.kind == "row")
 
@@ -834,7 +835,7 @@ def test_bringing_a_path_in_warns_when_copy_on_write_is_not_possible(
     )
     context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="vendor"),))
 
-    settings.run(context)
+    config_action.run(context)
 
     assert ui.said("copy-on-write")
 
@@ -929,10 +930,10 @@ def _never(source: Path, target: Path) -> bool:
     return False
 
 
-# -- settings · branch prefixes ----------------------------------------------------
+# -- config · branch prefixes ----------------------------------------------------
 
 
-def test_settings_has_a_branch_prefixes_row_listing_the_six_it_ships_with(
+def test_config_has_a_branch_prefixes_row_listing_the_six_it_ships_with(
     xdg: Path, projects_root: Path, lanes_root: Path
 ) -> None:
     """A destination rather than a setting, so it is a noun (§4) — and with nothing
@@ -943,7 +944,7 @@ def test_settings_has_a_branch_prefixes_row_listing_the_six_it_ships_with(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     rows = [told.text for told in ui.told if told.kind == "row"]
     assert any("branch prefixes" in row and "6 prefixes" in row for row in rows)
@@ -963,7 +964,7 @@ def test_a_prefix_can_be_added_and_is_written_to_the_file(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert context.prefix_store().path.exists(), "it round-trips through the file"
     assert BranchPrefixStore(config_dir).load() == (*DEFAULT_PREFIXES, "spike")
@@ -984,7 +985,7 @@ def test_a_prefix_is_validated_the_way_a_whole_branch_name_is(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == (*DEFAULT_PREFIXES, "sube-fix")
     assert ui.said("sube-fix"), "and it says what it is actually storing"
@@ -999,7 +1000,7 @@ def test_a_prefix_git_will_not_take_is_refused_rather_than_stored(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
     assert any(told.kind == "error" for told in ui.told)
@@ -1017,7 +1018,7 @@ def test_changing_a_prefix_keeps_its_place_in_the_menu(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == ("feature", "fix", "chore")
 
@@ -1032,7 +1033,7 @@ def test_forgetting_a_prefix_takes_it_off_the_menu_and_leaves_the_rest(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
     assert ui.said("bugfix")
@@ -1056,7 +1057,7 @@ def test_forgetting_a_prefix_leaves_a_lane_already_on_it_exactly_as_it_was(
     )
 
     forgetting = FakeUi(["branch prefixes", "hotfix", "forget", "back", "back"])
-    settings.run(
+    config_action.run(
         _context(
             forgetting, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
         )
@@ -1081,7 +1082,7 @@ def test_forgetting_the_last_prefix_says_the_six_are_back_rather_than_letting_th
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
     assert ui.said("the six")
@@ -1098,7 +1099,7 @@ def test_a_prefix_that_is_already_offered_is_not_added_a_second_time(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == DEFAULT_PREFIXES
     assert ui.said("already")
@@ -1116,7 +1117,7 @@ def test_changing_a_prefix_to_a_name_already_on_the_menu_is_refused(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
     assert ui.said("already")
@@ -1135,7 +1136,50 @@ def test_leaving_a_prefix_as_it_was_is_a_quiet_no_op(
         ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
     )
 
-    settings.run(context)
+    config_action.run(context)
 
     assert BranchPrefixStore(config_dir).load() == ("feature", "chore")
     assert not ui.said("already"), "accepting the default is not an attempt to duplicate"
+
+
+# -- one word for the screen, everywhere it is named -------------------------------
+
+
+def test_every_screen_under_config_is_headed_config_and_goes_back_to_it(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """`settings` was a GUI-app word; `config` is what this class of tool uses.
+
+    The rename has to reach the sub-screens and the way back out of them too, or the
+    tool calls one place two things — the same fault §14 exists to prevent, and the
+    same one the `lanes`→`list` rename fixed. Every heading and the back label are
+    asserted together here because they are one decision, not four.
+    """
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgWord")
+    # Leaving each sub-screen by its **literal** label is what asserts the label: a
+    # screen still saying `← Back to settings` has no row of this name to answer.
+    ui = FakeUi(["branch prefixes", "← Back to config", "commands", "← Back to config", "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+
+    config_action.run(context)
+
+    assert ui.unanswered() == 0, "every screen was left by the label this test named"
+    headings = [told.text for told in ui.told if told.kind == "heading"]
+    assert headings == ["lane config", "lane config · branch prefixes", "lane config · commands"]
+    assert not any("settings" in told.text for told in ui.told), "the old word is gone"
+
+
+def test_doctor_points_at_config_rather_than_settings(
+    projects_root: Path, lanes_root: Path
+) -> None:
+    """Doctor is where an unconfigured lane is explained, so it is where the wrong
+    word would send somebody looking for a screen that no longer has that name."""
+    found = doctor.checks(
+        _context(FakeUi([]), projects_root=None, lanes_root=lanes_root, editor="")
+    )
+    said = " ".join(line.text for check in found for line in check.lines)
+
+    assert "in config" in said
+    assert "settings" not in said

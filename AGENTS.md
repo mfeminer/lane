@@ -73,9 +73,10 @@ same list, and both of the differences are deliberate:
 - `enter` and `close` are subcommands but **not** menu entries. They are the two verbs
   the listing offers for the row under the cursor, and that is still the better route
   by hand — see below. A script has no cursor, so it names the lane instead.
-- `settings` is a menu entry and **not** a subcommand, yet. Configuring lane from a
+- `config` is a menu entry and **not** a subcommand, yet. Configuring lane from a
   script is a real want and is its own piece of work; until then the absence is stated
-  rather than half-built.
+  rather than half-built. The entry is *named* for the subcommand it is about to get —
+  see below.
 
 What the two tables share is the action function. What they do not share is the list
 itself, and a new action is not automatically scriptable — that is a decision to take
@@ -93,7 +94,7 @@ There is no `where` action to print a lane's path for shell integration
 it as a shell-integration hook or a clipboard action — and note that `lane list
 --json` is not that: it reports where lanes are, it does not move anybody's shell.
 
-Actions: open a lane, list, settings, doctor.
+Actions: open a lane, list, config, doctor.
 
 There is no `changelog` action. It was one until the release notes became
 generated from the merged pull requests rather than written by hand: keeping the
@@ -113,6 +114,29 @@ as hiding an entry behind an unmet prerequisite, which stays forbidden. Their
 existence as *subcommands* is not a reversal of this: the reason they are not menu
 entries is that the listing answers "which lane" better than a picker does, and that
 reason has nothing to say about a caller with no screen at all.
+
+### The configuring screen's entry is `config`, and it was `settings`
+
+The same call as `lanes`→`list` below, taken before the subcommand arrives rather than
+after, so the two entry points never ship disagreeing about what to call one screen.
+
+- **`config` is what this class of tool calls it** — `git config`, `gh config`,
+  `npm config`. `settings` is a GUI-app word, and the subcommand has to be `config` for
+  the same reason the listing's had to be `list`.
+- **§4 does not decide this one.** Both words are nouns and both name a destination, so
+  the tension that made `list` awkward is absent here: this is §14 alone, one term per
+  concept.
+- **The menu entry renamed with it**, along with every heading (`lane config`,
+  `lane config · preparation`, `· commands`, `· branch prefixes`), the back label
+  (`← Back to config`) and the module (`actions/settings.py` → `actions/config.py`).
+  Renaming the subcommand's screen and not the menu's would be the drift this is
+  avoiding.
+- **`setting` did not rename.** The three flat values are settings, the list's first
+  column is still headed `setting`, and the subcommand reads
+  `lane config get <setting>`. The screen is `config`; the things on it are settings.
+- **Two modules are now called `config`.** `actions/config.py` is the screen;
+  `lane/config.py` is the store it edits. Each says so in its own docstring, because
+  that is the one place a reader will trip.
 
 ### The listing's entry is `list`, in both places
 
@@ -887,7 +911,7 @@ These must never regress. Each is one line of behaviour and one line of why.
   on `/`; a level of fewer than three rows is drawn in its parent rather than behind a
   keystroke that offers no choice.
 - **One component answers "which paths come into a lane", opened from both doors** —
-  entering a lane and settings · preparation call the same `Ui.check` over the same
+  entering a lane and config · preparation call the same `Ui.check` over the same
   `prepare.Sheet`. Two screens that merely resemble each other drift, and these two had:
   one toggled in place, the other made you enter the row, choose *change*, and pick a verb.
 - **A lane's branch never tracks anything but itself** — a branch lane *creates*
@@ -905,7 +929,7 @@ These must never regress. Each is one line of behaviour and one line of why.
 - **Branch naming is decided per lane, not globally** — one lane can be `bugfix/…`
   while the next is `feature/…`; it is a property of the task, not of the machine.
   **This is about the choice, not about the menu it is made from.** Which prefixes are
-  offered *is* a setting (`branch_prefixes.toml`, settings · branch prefixes), because a
+  offered *is* a setting (`branch_prefixes.toml`, config · branch prefixes), because a
   team whose branches are `spike/` and `poc/` otherwise reached for `other…` every time —
   a free-text prompt standing in for a list lane could perfectly well have offered. Do not
   read this invariant as forbidding that, and do not let anything default, remember or
@@ -1086,7 +1110,7 @@ config file mode 0600, TOML (`tomllib` to read, `tomli-w` to write). Migrating a
 config in the old shell-sourced format on first run is **required, not optional**.
 Three settings — `projects_root`, `lanes_root`, `editor` — plus a version stamp.
 `LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file; when
-one is active the settings action still edits the file but says plainly that the
+one is active the config action still edits the file but says plainly that the
 environment is currently winning. A config written by a different version is
 rewritten in place, carrying values over and keeping a backup, announcing itself
 in one short line.
@@ -1227,7 +1251,7 @@ than two.
   ever being offered. Do not reintroduce `link` as a hidden setting: it would be a third
   third verb wearing a different hat.
 - **`refresh` went with it.** A `clone` step could be marked "reapply on every enter",
-  settable only in settings — and settings' per-step editor is exactly what the checklist
+  settable only in config — and config's per-step editor is exactly what the checklist
   replaced, so it had nowhere left to be set. Removing it also made the overwrite rule
   unconditional, which is worth more than the feature was: see the invariant below.
 - **Discovery is git's own answer**, not a guess:
@@ -1243,11 +1267,11 @@ than two.
   worktree — and it is not offered at all. A tracked path never comes back, which is what
   stops lane writing over one.
 - **One screen, one component, two callers.** Entering a lane opens it when some path has
-  no answer yet, and not at all otherwise; settings · preparation opens it to review or
+  no answer yet, and not at all otherwise; config · preparation opens it to review or
   change anything. **Not two screens that resemble each other** — one `Ui.check`, one
   `prepare.Sheet` building the rows, opened from both places, because resemblance drifts
   and sameness cannot. It had already drifted: entering cycled a row in place while
-  settings made you press `Enter`, choose *change*, and pick a verb — three screens to move
+  config made you press `Enter`, choose *change*, and pick a verb — three screens to move
   one path, a dozen times over for a dozen paths.
 - **A path is in, out, or not yet answered — and only the first two are ever stored.**
   `✓` means the path comes into the lane and `✗` means it stays out; both are written down.
@@ -1260,7 +1284,7 @@ than two.
   under them disagree, or that one of them is still unanswered.
 - **Two states could not say this, and the cost was real in both directions.** Accepting a
   screen recorded `skip` for every row the user had not got to, so a path skipped past once
-  was never offered again; and in settings a stored `skip` and a path never asked about
+  was never offered again; and in config a stored `skip` and a path never asked about
   drew the same blank gutter, which is the same ambiguity seen from the other end.
 - **`Space` on a folder sets every leaf under it to one answer, and anything short of
   *all in* goes *in*.** All in becomes all out; everything else — all out, a mix, or
@@ -1306,7 +1330,7 @@ than two.
   states, so such a folder had to be opened out into its own rows instead — truthful, and
   the flat run of rows this shape exists to replace. Entering a lane now reaches `?` on its
   first screen, where every leaf starts unanswered; `◐` still arrives only from answers
-  already on disk, which is why settings is where it turns up.
+  already on disk, which is why config is where it turns up.
 - **A folder is presentation, never a step for its directory.** The directory is only
   partly ignored — that is why its files were listed one by one — so it holds tracked work
   too, and cloning it would overwrite that. Answering a folder stores one step per path.
@@ -1317,7 +1341,7 @@ than two.
 - **The answers live in `prepare.toml`, beside the config and never inside it.** See
   *Configuration* below.
 - **Settings holds the commands separately, and that is not drift.** `preparation` is the
-  shared checklist over paths; `commands` is a fifth settings row holding the `run` steps,
+  shared checklist over paths; `commands` is a fifth config row holding the `run` steps,
   with `change`/`forget` and `add a command`. A command is typed rather than discovered and
   carries a directory and a guard to edit, none of which is a checkbox — folding it into a
   screen of discovered paths would be the resemblance this change exists to remove.
@@ -1580,7 +1604,7 @@ All of it arrived at test-first:
 - applying with rows still unanswered writing steps only for the answered ones, and the
   untouched paths being offered again on the next visit
 - the screen not appearing at all when no path is unanswered, and the same component being
-  the one settings opens — counted, not eyeballed
+  the one config opens — counted, not eyeballed
 - a path answered *in* that is already in the lane keeping the lane's own copy, with the row saying
   `already there` and nothing being applied
 - a clone reproducing a tree, the copy being independent of it, and a failed swap leaving
@@ -1603,7 +1627,7 @@ All of it arrived at test-first:
   keystroke — writing one step per path and never touching the directory, which a tracked
   file in it proves — and a folder whose remembered answers disagree keeping that one row
   and drawing `◐` on it
-- settings, over a project with a stored `clone`, a stored `skip` and a path with no
+- config, over a project with a stored `clone`, a stored `skip` and a path with no
   stored answer at all, drawing three visibly different marks — which two states could not
 - nine ignored paths scattered under three packages opening on **one** row rather than
   nine, the level below it being the packages rather than their files, and one keystroke

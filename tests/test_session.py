@@ -74,7 +74,7 @@ def test_entering_and_closing_are_not_menu_entries(projects_root: Path, lanes_ro
     ui = Recording(["quit"])
     session.run(_context(ui, projects_root, lanes_root))
 
-    assert offered == ["open", "list", "settings", "doctor", "quit"]
+    assert offered == ["open", "list", "config", "doctor", "quit"]
 
 
 def test_the_menu_is_always_the_full_list_even_without_git(

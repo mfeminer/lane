@@ -427,7 +427,7 @@ def _choose_branch(context: Context, lane_name: str) -> str | None:
     the task, not the machine. **That is about the choice, and it is untouched.**
 
     What the choice is made *from* is a setting, and lives in `branch_prefixes.toml`
-    (settings · branch prefixes). A team whose branches are `spike/` and `poc/` had to
+    (config · branch prefixes). A team whose branches are `spike/` and `poc/` had to
     reach for `other…` every time — a free-text prompt standing in for a list lane could
     perfectly well have offered. The store always answers with at least one prefix, the
     six lane ships with when nothing has been customised.

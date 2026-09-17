@@ -55,7 +55,7 @@ PREPARATION = "preparation"
 """The name of the one question entering a lane asks. No flag answers it — which paths
 come into a lane is a screen, and `cli.answers` refuses rather than guessing."""
 
-REMEMBERED = "Answers are remembered per project — change them in settings · preparation."
+REMEMBERED = "Answers are remembered per project — change them in config · preparation."
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +110,7 @@ def _launch(context: Context, lane: Lane, prepared: Prepared) -> Entered:
         context.ui.ok(launch.detail)
     else:
         context.ui.warn(f"{launch.detail} — open it yourself: {lane.path}")
-        context.ui.detail("  Change the editor command in settings.")
+        context.ui.detail("  Change the editor command in config.")
     return Entered(launched=launch.launched, editor=launch.detail, prepared=prepared)
 
 
@@ -218,7 +218,7 @@ def _ask(context: Context, repo: Path, candidates: tuple[Candidate, ...]) -> tup
     choosing among two hundred flat rows is not a screen. A folder is answered whole
     without ever being opened, so the drilling is for looking rather than for answering.
 
-    The same `Sheet` settings opens, with a lane in hand rather than without one.
+    The same `Sheet` config opens, with a lane in hand rather than without one.
     """
     ui = context.ui
     sheet = Sheet(candidates, source=lambda one: repo / one.path, lane=True)
@@ -259,7 +259,7 @@ def _warn_about_secrets(context: Context, answered: tuple[Step, ...]) -> None:
             context.ui.warn(
                 f"{step.path} looks like it holds secrets, and every lane now gets a copy."
             )
-            context.ui.detail("  Leave it out in settings · preparation to stop that.")
+            context.ui.detail("  Leave it out in config · preparation to stop that.")
 
 
 # -- applying --------------------------------------------------------------------

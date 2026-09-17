@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from lane import __version__, buildinfo
-from lane.actions import settings
+from lane.actions import config as config_screen
 from lane.config import ENV_EDITOR, ENV_LANES_ROOT, ENV_PROJECTS_ROOT
 from lane.context import Context
 from lane.github.gh_client import INSTALL_REMEDY, LOGIN_REMEDY
@@ -182,7 +182,7 @@ def _config(context: Context) -> Check:
         lines.append(Line("detail", "  It will be migrated to TOML automatically."))
     else:
         lines.append(Line("warn", f"No config yet: {store.path}"))
-        lines.append(Line("detail", "  Choose 'settings' from the menu to create it."))
+        lines.append(Line("detail", "  Choose 'config' from the menu to create it."))
 
     for setting, variable in sorted(context.overridden.items()):
         lines.append(Line("detail", f"  {variable} overrides {setting}"))
@@ -212,7 +212,7 @@ def _projects(context: Context) -> Check:
                     "warn",
                     "Projects folder is not set, so lane does not know where your projects are.",
                 ),
-                Line("detail", f"  Set it in settings, or with {ENV_PROJECTS_ROOT}"),
+                Line("detail", f"  Set it in config, or with {ENV_PROJECTS_ROOT}"),
             ),
             facts={"root": None, "exists": False, "count": None},
         )
@@ -261,7 +261,7 @@ def _lanes(context: Context) -> Check:
             name="lanes",
             lines=(
                 Line(
-                    "warn", f"Lanes folder is not set. Set it in settings, or with {ENV_LANES_ROOT}"
+                    "warn", f"Lanes folder is not set. Set it in config, or with {ENV_LANES_ROOT}"
                 ),
             ),
             facts={"root": None, "exists": False, "open": None},
@@ -344,7 +344,9 @@ def _preparation(context: Context) -> Check:
         lines.append(
             Line(
                 "warn",
-                settings.COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root),
+                config_screen.COPY_ON_WRITE_UNAVAILABLE.format(
+                    projects=projects_root, lanes=lanes_root
+                ),
             )
         )
         lines.append(
@@ -360,9 +362,7 @@ def _editor(context: Context) -> Check:
     if not editor:
         return Check(
             name="editor",
-            lines=(
-                Line("warn", f"No editor configured. Set one in settings, or with {ENV_EDITOR}"),
-            ),
+            lines=(Line("warn", f"No editor configured. Set one in config, or with {ENV_EDITOR}"),),
             facts={"command": "", "found": False},
         )
     if context.environment.which(editor) is not None:

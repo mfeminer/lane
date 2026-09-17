@@ -222,7 +222,7 @@ def _enter(context: Context, args: argparse.Namespace) -> int:
 _PREPARATION_REMEDY = {
     "preparation": (
         "Answer those paths once — enter the lane in a terminal, or open "
-        "settings · preparation — and this lane and every other will remember."
+        "config · preparation — and this lane and every other will remember."
     )
 }
 """Entering a lane can ask **one** thing, and no flag answers it.

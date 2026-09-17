@@ -23,7 +23,7 @@ chmod +x ~/bin/lane
 xattr -d com.apple.quarantine ~/bin/lane   # it is not notarised
 ```
 
-Then run `lane`, choose **settings**, and answer three questions: where your projects
+Then run `lane`, choose **config**, and answer three questions: where your projects
 sit, where lanes should be parked, and which editor to open.
 
 ## Use it
@@ -51,7 +51,7 @@ sit, where lanes should be parked, and which editor to open.
 
   ❯ open        New work, or a branch that already exists — your editor opens in it
     list        Every open lane, where it stands, and what to do with it
-    settings    Configure lane
+    config      Configure lane
     doctor      Check git, gh, the editor and your paths
     quit        Leave lane
 
@@ -77,7 +77,7 @@ asks, once per project, what to do with it:
 
 ```
 Preparing demo/broken-pagination
-  Answers are remembered per project — change them in settings · preparation.
+  Answers are remembered per project — change them in config · preparation.
 
   14 paths lane has not been told about
 
@@ -150,9 +150,9 @@ editor = "cursor"                       # code, zed, idea, subl...
 ```
 
 `LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file. What to do
-with each project's ignored paths lives beside it in `prepare.toml`. **settings →
+with each project's ignored paths lives beside it in `prepare.toml`. **config →
 preparation** opens the very screen above, over every project at once, so changing an
-answer is the same one keystroke wherever you came from; **settings → commands** is where
+answer is the same one keystroke wherever you came from; **config → commands** is where
 you add a command to run when a lane opens. Something not working? **doctor** checks every
 bit of it — including whether your projects and lanes folders can actually share blocks,
 which is what makes bringing a path in free.

@@ -63,7 +63,7 @@ class Context:
         return self.config.projects_root
 
     def reload_config(self) -> None:
-        """After settings has written the file."""
+        """After config has written the file."""
         loaded = self.config_store.load()
         self.config = loaded.config
         self.overridden = loaded.overridden

@@ -11,7 +11,7 @@ a gap: raise it rather than guessing, and add the answer here once it's settled.
 ## 1. Screen anatomy
 
 - **Every action-level screen opens with `ui.heading`, once, naming the screen**:
-  `"lane doctor"`, `"lane settings"`, `"Closing <lane>"`. The
+  `"lane doctor"`, `"lane config"`, `"Closing <lane>"`. The
   lanes table is the original exception, and it's deliberate: its title *answers* "what
   am I looking at" (`"3 open lanes in demo"`) rather than repeating the word "lanes"
   — see ADR 0002. A new screen gets a heading unless it is, like the table, a screen
@@ -23,7 +23,7 @@ a gap: raise it rather than guessing, and add the answer here once it's settled.
   argument made again.
 - **One blank line between logical groups of output, none within a group.** A
   "group" is: the heading and its immediate context; each self-contained check or
-  question; the final outcome. Doctor's tool checks, settings' three questions (no
+  question; the final outcome. Doctor's tool checks, config's three questions (no
   blank line *between* them — they are one flow), and the close summary's findings
   vs. its "About to remove" block are the reference shape. *Why: the three report
   screens were close to this but not identical, with no written rule to check a
@@ -184,7 +184,7 @@ touched.*
 ## 4. Menu and list entry wording
 
 - **Lower-case, one word where possible, noun for a destination, verb for an
-  action** — `open`, `list`, `settings`, `doctor`, `quit`; `enter`,
+  action** — `open`, `list`, `config`, `doctor`, `quit`; `enter`,
   `close` for the two things you can do to a lane. Keep doing this.
 - **`list` is the one entry that breaks the noun/verb half of that rule, and it was
   decided rather than slipped in.** It was `lanes`, which was a perfectly good
@@ -256,7 +256,7 @@ those does.
 
 **A new screen uses one of these, for the meaning above, or none at all — it does
 not invent a new symbol.** If a screen needs to say "sub-item of the line above",
-use a two-space indent with no marker (settings, doctor, the close summary) — not a
+use a two-space indent with no marker (config, doctor, the close summary) — not a
 bullet. *Why: the changelog screen's `•` used to be the one place a bullet
 appeared, for a job every other screen does with indentation alone — it was
 dropped to match, and the screen itself has since gone (AGENTS.md, "Releasing").*
@@ -278,7 +278,7 @@ value or a new toned cell must have a
 plain-text tell alongside the colour, checkable by someone reading a
 colour-stripped transcript.
 
-## 7. Settings — as a worked example
+## 7. Config — as a worked example
 
 The old shape was an unconditional sequence of three questions, identical on a
 first run and a tenth, with no per-setting entry and no visible way to stop
@@ -286,7 +286,7 @@ partway. The current shape matches how every other multi-item screen in this app
 works — a list you act on, not a fixed script:
 
 ```
-lane settings
+lane config
   <config path>
 
   setting              current value
@@ -302,19 +302,19 @@ lane settings
 ```
 
 `preparation`, `commands` and `branch prefixes` are rows four, five and six and **not
-settings**: they are destinations, so they are nouns (§4), and their value cells say what
+config**: they are destinations, so they are nouns (§4), and their value cells say what
 is there the way the others say what they are set to. Both cover every project on one screen rather than a
 project list and then a page each — the lanes table already draws rows from several
 projects in one table with a dimmed `Cell.lead`, so a third level of nesting is
 unnecessary. Back labels stay scoped as ADR 0002 requires: `← Back to the menu` here,
-`← Back to settings` there.
+`← Back to config` there.
 
 **`preparation` opens the very screen entering a lane opens** — `Ui.check` over the same
 rows, answered with the same keystroke. That is one component with two callers, not two
 screens that resemble each other, and the difference matters because resemblance drifts:
 this pair had already drifted into a checklist on one side and `Enter` → *change* → pick-a-
 verb on the other, three screens to move one path. What the two callers pass differs in
-exactly two ways, both data: settings leads each row with its project, and entering has a
+exactly two ways, both data: config leads each row with its project, and entering has a
 lane in hand so it can say which paths are already in it.
 
 **`commands` is separate because a command is not a path.** It is typed rather than
@@ -338,7 +338,7 @@ Choosing a row asks that **one** question (with today's validation — a project
 with no repositories is still refused, a lanes root inside the projects root still
 warns) and returns to this list, updated, rather than to the menu — the same
 "looking and acting are the same widget" rule the lanes table already follows, and
-for the same reason: re-deriving a settings-list-then-separate-question flow is
+for the same reason: re-deriving a config-list-then-separate-question flow is
 exactly the fault ADR 0002 fixed for lanes.
 
 **First run** (no config file yet) is the one case that still wants the fixed
@@ -349,7 +349,18 @@ one-time branch on `store.path.exists()`, not two permanent code paths to keep i
 sync — the list screen's per-row question *is* the sequence's question, just asked
 one at a time.
 
-Implementation: `src/lane/actions/settings.py`. `run()` branches once on
+**The screen is `config`, and it was `settings`.** The same call §14 made for
+`lanes`→`list`, for the same reason and with the same tension: §4 prefers a noun for a
+destination, and both words are nouns, so §4 does not decide it. What decides it is that
+the command line now has a `config` subcommand — `git config`, `gh config`, `npm config`
+is what this class of tool calls it, and `settings` is a GUI-app word — and one concept
+with two names is the fault a reader meets every time. So the menu entry, every heading
+under it, the back label and the module are all `config`. What did **not** rename is
+*setting*: the three flat values are settings, the list's first column is still headed
+`setting`, and `lane config get <setting>` is how the command line says it. The screen is
+`config`; the things on it are settings.
+
+Implementation: `src/lane/actions/config.py`. `run()` branches once on
 `context.config_store.path.exists()`; `_run_first_time()` is the old sequence,
 unchanged; `_run_list()` is the new screen, built on `Ui.browse()` exactly like
 the lanes table. Both call the same `_ask_projects_root`/`_ask_lanes_root`/
@@ -422,7 +433,7 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
 
 - **A refusal names what's wrong and, where there's a fix, the exact command or
   screen that applies it** — already the pattern (`"Fix it with: brew install gh"`,
-  `"Point the projects folder at <path> in settings"`).
+  `"Point the projects folder at <path> in config"`).
 - **The rule for whether a refusal returns to the menu or ends the session**: it
   ends the session only when the session itself cannot start (the config file
   couldn't be read at all — there is no menu yet to return to). Every other refusal,
@@ -445,7 +456,7 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
 - **No table, no header, no cursor for an empty list.** Already the rule for the
   lanes table (ADR 0002) and worth stating generally: a screen built around a list
   does not render the list's frame when the list is empty.
-- **This governs the *data* rows.** An action row — the visible way back, or settings ·
+- **This governs the *data* rows.** An action row — the visible way back, or config ·
   preparation's `add a step` — survives an empty list, because a screen whose only purpose
   is to let you add the first item cannot answer with a line of prose. *Why: previously
   unstated, and the two readings differ exactly where it matters — on the screen you reach
@@ -516,8 +527,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | The unit of work (worktree + branch + editor window) | **lane** | task, workspace |
 | The git primitive a lane is built from | **worktree** | (used deliberately alongside "lane" — see AGENTS.md; not interchangeable, both needed) |
 | Leaving a prompt without answering | **back** / **back out** | cancel, abort, quit (that word is reserved for the menu's own exit) |
-| A setting currently coming from the environment, not the file | **overrides** | present tense, matching between doctor and settings — it reads as the current fact, not a description of an ongoing process |
-| The three-question setup screen | **settings** | config, preferences, setup (used once, for the very first run, and even then it's the same screen) |
+| A setting currently coming from the environment, not the file | **overrides** | present tense, matching between doctor and config — it reads as the current fact, not a description of an ongoing process |
+| The screen that configures lane — menu entry, subcommand, and the four screens under it | **config** | settings (the old name; still the right word for *a setting*, which is what the three flat values are called and what the list's first column is headed), preferences, setup, options |
 | Bringing what `.gitignore` hides into a lane, before the editor opens | **preparation** (verb: **prepare**) | setup, bootstrap, provisioning, sync, hydrate, seed |
 | One remembered decision — a path or a command, and what lane does with it | **step** | entry (reserved for a menu or list row), rule, item, recipe |
 | What lane does to a path | the **verb** — `clone`, `run`, `skip` | action (reserved for a menu action, `ACTIONS`, `actions/`); `link`, which was a verb and is not any more |
@@ -543,7 +554,7 @@ One term per concept. The list, and the survivor where two forms were found:
 
 **prefix** is the whole term, and the screen is plural where the concept is singular:
 one row is a prefix, and *branch prefixes* is the menu of them. **The word never stands
-alone in a heading** — `lane settings · branch prefixes`, not `lane settings · prefixes` —
+alone in a heading** — `lane config · branch prefixes`, not `lane config · prefixes` —
 because a bare `prefix` in this application could as easily be `Cell.lead`, which is also a
 dim thing in front of a name.
 

@@ -182,7 +182,7 @@ def test_size_phrase_reads_like_a_size() -> None:
 
 
 def test_cloning_is_available_within_one_volume(tmp_path: Path) -> None:
-    """What doctor and settings both ask. On this machine the temporary directory is
+    """What doctor and config both ask. On this machine the temporary directory is
     on the boot volume, so the answer is whatever that volume supports — and it has
     to be the *same* answer `clone` itself gets."""
     available = apply.cloning_available(tmp_path, tmp_path)

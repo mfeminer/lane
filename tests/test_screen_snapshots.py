@@ -15,7 +15,7 @@ builds its frame in a closure private to a running `prompt_toolkit` `Application
 to expose one, which is a larger change than this box asked for. `test_picker.py`'s
 existing tests (driven through pipe input) are what covers it instead.
 
-What's deliberately **not** pinned here, and why: doctor's and settings' `rich`
+What's deliberately **not** pinned here, and why: doctor's and config's `rich`
 output (covered by `FakeUi.said()` string assertions already — a snapshot on top
 would be the same coverage twice, and would be brittle against paths, the build
 fingerprint, and tool versions that vary by machine); the lanes table's *age*

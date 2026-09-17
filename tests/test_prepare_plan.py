@@ -169,7 +169,7 @@ def test_a_step_for_a_path_git_no_longer_ignores_still_applies(tmp_path: Path) -
     assert [e.subject for e in plan.effects] == ["node_modules"]
 
 
-def test_the_settings_view_of_a_step_says_what_was_stored(tmp_path: Path) -> None:
+def test_the_config_view_of_a_step_says_what_was_stored(tmp_path: Path) -> None:
     """Settings has no lane in hand, so it describes the answer rather than an effect."""
     del tmp_path
     assert Step(project="a", verb=Verb.CLONE, path="x").describe() == "clone"
