@@ -987,10 +987,10 @@ Every lane afterwards remembers.
 | Exit | Means |
 |---|---|
 | `0` | it did what you asked |
-| `1` | lane ran and refused, or something failed |
+| `1` | lane ran and refused, or something failed — including a batch where any entry was rejected |
 | `2` | the command line was wrong |
 | `3` | it needed an answer and there was no terminal |
-| `4` | no such lane, project or branch |
+| `4` | no such lane, project, branch, prefix or command |
 | `130` | interrupted |
 
 ---

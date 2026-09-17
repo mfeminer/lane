@@ -390,7 +390,7 @@ never renumbered**.
 | Code | Name | Means |
 |---|---|---|
 | 0 | `EXIT_OK` | it did what was asked |
-| 1 | `EXIT_REFUSED` | lane ran, and would not or could not: a close `gh` cannot verify, a worktree git would not create, a preparation step that failed, an unreadable config |
+| 1 | `EXIT_REFUSED` | lane ran, and would not or could not: a close `gh` cannot verify, a worktree git would not create, a preparation step that failed, an unreadable config, a prefix git rejects, **any** entry of a `preparation set` batch rejected |
 | 2 | `EXIT_USAGE` | the command line itself is wrong: unknown, contradictory, or inapplicable flags |
 | 3 | `EXIT_NO_TTY` | an answer is needed and there is no terminal to ask in |
 | 4 | `EXIT_NOT_FOUND` | a named project, lane or branch does not exist |
