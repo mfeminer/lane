@@ -100,7 +100,7 @@ jobs:
           uv run pytest -q
 
       - name: Build the binary
-        run: uv run pyinstaller --clean --noconfirm lane.spec
+        run: make build
 
       - name: Smoke test the binary
         # Everything the macOS smoke test does, plus doctor — because doctor is the
