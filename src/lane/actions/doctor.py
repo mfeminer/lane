@@ -18,6 +18,7 @@ would notice until the two disagreed on a user's laptop.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,7 +26,7 @@ from typing import Literal
 
 from lane import __version__, buildinfo
 from lane.actions import config as config_screen
-from lane.config import ENV_EDITOR, ENV_LANES_ROOT, ENV_PROJECTS_ROOT
+from lane.config import ENV_EDITOR, ENV_LANES_ROOT, ENV_PROJECTS_ROOT, inside_profile
 from lane.context import Context
 from lane.github.gh_client import INSTALL_REMEDY, LOGIN_REMEDY
 from lane.prepare import apply
@@ -188,6 +189,9 @@ def _config(context: Context) -> Check:
         lines.append(Line("detail", f"  {variable} overrides {setting}"))
 
     lines.append(Line("detail", f"  State: {context.state_store.path}"))
+    protection = _protection(store.path.parent)
+    if protection is not None:
+        lines.append(protection)
 
     return Check(
         name="config",
@@ -198,8 +202,34 @@ def _config(context: Context) -> Check:
             "legacy": store.legacy_path.exists(),
             "overrides": dict(sorted(context.overridden.items())),
             "state": str(context.state_store.path),
+            "inside_profile": None if sys.platform != "win32" else inside_profile(store.path),
         },
     )
+
+
+def _protection(directory: Path) -> Line | None:
+    """What is actually keeping these files private, where that is worth saying.
+
+    On POSIX it is the mode lane sets, the guide says so, and there is nothing to add.
+    On Windows `chmod` does nothing — measured, `0600` reads back `0o666` — and what
+    protects the files instead is the permissions on the user's own profile. That is a
+    real guarantee and the same shape as `0600` (where root reads everything too), but
+    it is *inherited*, so it stops holding the moment somebody points the config
+    somewhere else. Saying which of the two is doing the work is the difference between
+    a documented decision and a silent gap.
+    """
+    if sys.platform == "win32":
+        if inside_profile(directory):
+            return Line(
+                "detail",
+                "  Kept private by your Windows user profile's permissions, not by a file mode.",
+            )
+        return Line(
+            "warn",
+            f"{directory} is outside your user profile, so other users on this machine may "
+            "be able to read it. Unset XDG_CONFIG_HOME to put it back under %APPDATA%.",
+        )
+    return None
 
 
 def _projects(context: Context) -> Check:
@@ -341,19 +371,9 @@ def _preparation(context: Context) -> Check:
             )
         )
     else:
-        lines.append(
-            Line(
-                "warn",
-                config_screen.COPY_ON_WRITE_UNAVAILABLE.format(
-                    projects=projects_root, lanes=lanes_root
-                ),
-            )
-        )
-        lines.append(
-            Line(
-                "detail", "  Put both roots on one volume, or use 'link' or 'run' for large paths."
-            )
-        )
+        sentence, remedy = config_screen.copy_on_write_unavailable(projects_root, lanes_root)
+        lines.append(Line("warn", sentence))
+        lines.append(Line("detail", remedy))
     return Check(name="preparation", lines=tuple(lines), facts=facts)
 
 
@@ -372,8 +392,10 @@ def _editor(context: Context) -> Check:
             facts={"command": editor, "found": True},
         )
 
+    # macOS only, for the reason `environment.launch_editor` gives: the fallback this
+    # reports on is the one that only exists there.
     app_names = {"cursor": "Cursor", "code": "Visual Studio Code", "zed": "Zed"}
-    app = app_names.get(editor)
+    app = app_names.get(editor) if sys.platform == "darwin" else None
     if app is not None and context.environment.directory_exists(Path(f"/Applications/{app}.app")):
         return Check(
             name="editor",

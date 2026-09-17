@@ -29,6 +29,7 @@ command line naming one place two things.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -629,15 +630,42 @@ def _warn_about_cloning(context: Context) -> None:
         return
     if apply.cloning_available(projects_root, lanes_root):
         return
-    context.ui.warn(COPY_ON_WRITE_UNAVAILABLE.format(projects=projects_root, lanes=lanes_root))
-    context.ui.detail("  Put both roots on one volume, or leave the large paths out.")
+    sentence, remedy = copy_on_write_unavailable(projects_root, lanes_root)
+    context.ui.warn(sentence)
+    context.ui.detail(remedy)
 
 
-COPY_ON_WRITE_UNAVAILABLE = (
-    "Copy-on-write is not available: {projects} and {lanes} are on different volumes, "
-    "so bringing a path in is a real copy — slow, and it uses real disk."
-)
-"""One sentence, shared by doctor and by config, so they cannot say it differently."""
+def copy_on_write_unavailable(projects: Path, lanes: Path) -> tuple[str, str]:
+    """Why a path will cost real disk, and what to do about it — one pair, two callers.
+
+    Shared by doctor and by config so the two cannot say it differently, which is what
+    the constant this replaced was for. It is a function now because **the reason is not
+    the same on every platform, and the old sentence was only true on one of them.**
+
+    On macOS the answer really is about these two directories: `clonefile(2)` works and
+    refuses across volumes, so moving them together fixes it. Anywhere else the answer is
+    about the platform — lane implements copy-on-write with `clonefile(2)` and only macOS
+    has it — and naming somebody's two folders there would be a misdiagnosis of a machine
+    that is set up perfectly well, sending them off rearranging disks for nothing.
+
+    (Windows' ReFS can block-clone and Linux's btrfs and XFS can reflink. Neither is
+    wired up here, and both need a filesystem most people are not on, so the honest word
+    is "not available" rather than "impossible".)
+    """
+    # Written as "not macOS" rather than "is macOS" so that the platform mypy is
+    # checking for is the fall-through: the other way round, everything after the
+    # always-true branch reads as unreachable code.
+    if sys.platform != "darwin":
+        return (
+            "Copy-on-write is not available on this platform, so bringing a path in is a "
+            "real copy — slow, and it uses real disk.",
+            "  Use 'link' or 'run' for large paths, or leave them out.",
+        )
+    return (
+        f"Copy-on-write is not available: {projects} and {lanes} are on different "
+        "volumes, so bringing a path in is a real copy — slow, and it uses real disk.",
+        "  Put both roots on one volume, or use 'link' or 'run' for large paths.",
+    )
 
 
 def _report_overrides(context: Context) -> None:

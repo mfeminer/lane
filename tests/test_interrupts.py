@@ -6,7 +6,6 @@ whole behaviour is what the interpreter does with SIGINT.
 
 from __future__ import annotations
 
-import os
 import signal
 import threading
 import time
@@ -19,7 +18,15 @@ TIMEOUT = 2.0
 
 
 def _interrupt_self() -> None:
-    os.kill(os.getpid(), signal.SIGINT)
+    """A real SIGINT to this process — which is what a terminal sends.
+
+    `signal.raise_signal` rather than `os.kill(os.getpid(), SIGINT)`: on Windows
+    `os.kill` only understands the two console control events, and anything else there
+    is a `TerminateProcess` — so the POSIX spelling would not deliver a signal to this
+    process, it would **kill the test runner**. `raise_signal` is the C `raise()` on
+    both, which is as real as a signal to yourself gets.
+    """
+    signal.raise_signal(signal.SIGINT)
 
 
 def _settle(reached: list[str], count: int = 1) -> None:

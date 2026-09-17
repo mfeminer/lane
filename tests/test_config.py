@@ -7,6 +7,7 @@ modes and directory creation are genuinely exercised.
 from __future__ import annotations
 
 import stat
+import sys
 import tomllib
 from pathlib import Path
 
@@ -32,13 +33,135 @@ def test_config_falls_back_to_dot_config_when_xdg_is_unset(
     assert ConfigStore().path == tmp_path / ".config" / "lane" / "config.toml"
 
 
+def test_windows_puts_the_config_where_windows_software_puts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`~/.config` is a Linux convention. Nothing stops it working on Windows — it is
+    only a folder under the user's profile — but no native Windows tool uses it, so a
+    user looking for lane's settings would not find them where everything else keeps
+    them. `%APPDATA%` is that place, and it is what `XDG_CONFIG_HOME` means here."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+
+    assert ConfigStore().path == tmp_path / "Roaming" / "lane" / "config.toml"
+
+
+def test_windows_keeps_disposable_state_out_of_the_roaming_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same split XDG makes, said the way Windows says it: Roaming follows the user
+    between machines, Local does not — and the last project you opened a lane in is
+    exactly the kind of thing that should not follow anybody anywhere."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+
+    assert config_module.state_home() == tmp_path / "Local" / "lane"
+
+
+def test_an_explicit_xdg_setting_still_wins_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Somebody who has set it has said where they want it, and the test suite is one
+    of them — which is what keeps this one code path rather than two."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "asked-for"))
+
+    assert ConfigStore().path == tmp_path / "asked-for" / "lane" / "config.toml"
+
+
+def test_appdata_means_nothing_off_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It can be set by a shell someone shares between machines. It is not a macOS or
+    Linux convention and must not quietly become one."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert ConfigStore().path == tmp_path / ".config" / "lane" / "config.toml"
+
+
+def test_windows_without_appdata_still_has_somewhere_to_put_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows always sets it, so this is the answer to "and if it doesn't" rather than
+    a case anybody meets: the same fallback every other platform uses, which is a real
+    directory under the profile and never an exception."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert ConfigStore().path == tmp_path / ".config" / "lane" / "config.toml"
+
+
 def test_saving_creates_a_private_directory_and_file(xdg: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("modes mean nothing here — see the Windows tests below")
     store = ConfigStore()
 
     store.save(Config(projects_root=Path("/p"), lanes_root=Path("/l"), editor="cursor"))
 
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+
+
+def test_windows_is_not_given_a_mode_that_would_do_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured on a real Windows runner: after `chmod(0o600)` the mode reads back
+    `0o666` and the file is still writable. `Path.chmod` there toggles a read-only
+    attribute at best — it is not the access control Windows actually uses. Calling it
+    anyway would be code that looks like a security measure and is not one, which is
+    worse than not calling it: see `AGENTS.md`, *File permissions*."""
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("chmod says nothing on Windows and must not be called")
+
+    written = tmp_path / "config.toml"
+    written.write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(Path, "chmod", refuse)
+
+    config_module.keep_private(written)
+    config_module.keep_private_directory(tmp_path)
+
+
+def test_everywhere_else_the_mode_is_still_set(tmp_path: Path) -> None:
+    """The other half of the same decision: nothing about Windows loosens POSIX."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX modes")
+    written = tmp_path / "config.toml"
+    written.write_text("x = 1\n", encoding="utf-8")
+
+    config_module.keep_private(written)
+    config_module.keep_private_directory(tmp_path)
+
+    assert stat.S_IMODE(written.stat().st_mode) == 0o600
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+
+
+def test_only_one_place_in_lane_decides_how_a_written_file_is_protected() -> None:
+    """Four stores write files describing where a project keeps things it kept out of
+    git, and they must not each carry their own opinion about protecting them: a fifth
+    store should inherit the decision rather than rediscover it. Counted, not eyeballed
+    — a `chmod` added back to any of them is a Windows no-op that reads like a
+    safeguard."""
+    import inspect
+
+    from lane import prefixes, state
+    from lane.prepare import store as prepare_store
+
+    for module in (state, prepare_store, prefixes):
+        assert ".chmod(" not in inspect.getsource(module), (
+            f"{module.__name__} should ask config.keep_private"
+        )
+    assert inspect.getsource(config_module).count(".chmod(") == 1, (
+        "only config._restrict sets a mode"
+    )
 
 
 # -- round trip (E2) -------------------------------------------------------------

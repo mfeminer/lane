@@ -25,6 +25,11 @@ from lane import environment
 
 WINDOWS = sys.platform == "win32"
 
+# Both of these exist only on Windows. Read with a default so this module still
+# imports — and still type-checks — on the machine the suite usually runs on.
+_WINDOWS_NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", None)
+_CTRL_BREAK = getattr(signal, "CTRL_BREAK_EVENT", None)
+
 
 def test_a_posix_child_is_asked_for_its_own_session() -> None:
     if WINDOWS:
@@ -50,9 +55,10 @@ def test_the_flag_named_here_is_the_one_windows_actually_defines() -> None:
     A wrong constant would isolate nothing and say nothing."""
     if not WINDOWS:
         pytest.skip("only Windows defines it")
-    assert environment.detached_child() == {
-        "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
-    }
+    # Read with a default: the name exists only on Windows, so spelling it out would be
+    # a type error on the machine this suite usually runs on — and a `type: ignore` for
+    # it would itself be flagged as unused when the suite runs here.
+    assert environment.detached_child() == {"creationflags": _WINDOWS_NEW_GROUP}
 
 
 def test_a_detached_child_really_is_out_of_lanes_group_on_windows() -> None:
@@ -65,12 +71,13 @@ def test_a_detached_child_really_is_out_of_lanes_group_on_windows() -> None:
     """
     if not WINDOWS:
         pytest.skip("Windows process groups")
+    assert _CTRL_BREAK is not None
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
         **environment.detached_child(),
     )
     try:
-        os.kill(child.pid, signal.CTRL_BREAK_EVENT)
+        os.kill(child.pid, _CTRL_BREAK)
         deadline = time.monotonic() + 15
         while child.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
@@ -121,9 +128,7 @@ def test_a_prepared_command_is_spawned_detached(
         assert environment.detached_child().items() <= kwargs.items()
 
 
-def test_the_editor_is_launched_detached(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_the_editor_is_launched_detached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Fire-and-forget, and still out of the group: quitting lane must not take the
     editor with it."""
     seen: list[dict[str, object]] = []
@@ -140,3 +145,56 @@ def test_the_editor_is_launched_detached(
     assert launch.launched
     assert seen
     assert environment.detached_child().items() <= seen[0].items()
+
+
+# -- the macOS .app fallback is macOS's -------------------------------------------
+
+
+def _nothing_on_path(command: str) -> str | None:
+    """An editor whose shell command was never installed — the only case the fallback
+    below exists for."""
+    del command
+    return None
+
+
+def test_the_app_bundle_fallback_is_not_consulted_off_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`/Applications/Cursor.app` is a macOS install layout. Asking about it on Windows
+    or Linux is a question with only one possible answer, and a `warn` naming
+    `open -a Cursor` to a Windows user is worse than no advice at all."""
+
+    def refuse(path: Path) -> bool:
+        del path
+        raise AssertionError("no .app should be looked for off macOS")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    real = environment.RealEnvironment()
+    monkeypatch.setattr(type(real), "which", staticmethod(_nothing_on_path))
+    monkeypatch.setattr(type(real), "directory_exists", staticmethod(refuse))
+
+    launch = real.launch_editor("cursor", tmp_path)
+
+    assert not launch.launched
+    assert "PATH" in launch.detail
+
+
+def test_the_app_bundle_fallback_is_still_consulted_on_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An editor installed as an .app without its shell command is common enough on
+    macOS that this is the one fallback lane has; narrowing it must not remove it."""
+    asked: list[Path] = []
+
+    def watching(path: Path) -> bool:
+        asked.append(path)
+        return False
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    real = environment.RealEnvironment()
+    monkeypatch.setattr(type(real), "which", staticmethod(_nothing_on_path))
+    monkeypatch.setattr(type(real), "directory_exists", staticmethod(watching))
+
+    real.launch_editor("cursor", tmp_path)
+
+    assert asked == [Path("/Applications/Cursor.app")]

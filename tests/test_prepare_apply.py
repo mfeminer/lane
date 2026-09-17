@@ -13,8 +13,12 @@ demonstrate honestly.
 
 from __future__ import annotations
 
+import ctypes
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from lane.prepare import apply
 
@@ -148,9 +152,14 @@ def test_run_reports_a_missing_directory_rather_than_raising(tmp_path: Path) -> 
 
 
 def test_run_leaves_the_command_out_of_lanes_process_group(tmp_path: Path) -> None:
-    """The same reason git gets `start_new_session`: the terminal's Ctrl-C reaches
-    lane and nothing else, so lane decides what happens to the child rather than the
-    terminal killing it out from under a spinner."""
+    """The same reason git is detached: the terminal's Ctrl-C reaches lane and nothing
+    else, so lane decides what happens to the child rather than the terminal killing it
+    out from under a spinner.
+
+    POSIX only — `getpgrp` is. The Windows half of the same property is asserted for
+    real in `test_environment.py`."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX process groups — see tests/test_environment.py")
     outcome = apply.run("sh -c 'ps -o pgid= -p $$'", tmp_path)
 
     assert outcome.ok
@@ -227,6 +236,44 @@ def test_size_phrase_reads_like_a_size() -> None:
     assert apply.size_phrase(1_400) == "1.4 KB"
     assert apply.size_phrase(340 * 1000**2) == "340 MB"
     assert apply.size_phrase(1_200 * 1000**2) == "1.2 GB"
+
+
+# -- loading clonefile at all ----------------------------------------------------
+
+
+def test_clonefile_is_not_even_looked_for_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`clonefile(2)` is a macOS system call, and looking for it elsewhere is not free:
+    `ctypes.CDLL(None)` — the form that keeps this working inside a PyInstaller bundle —
+    raises **TypeError** on Windows, which is neither of the errors this used to catch.
+    That happens at import time, so lane did not start at all; the fix is to ask the
+    question only where it has an answer."""
+
+    def refuse(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("no library should be opened off macOS")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "CDLL", refuse)
+
+    assert apply._load_clonefile() is None
+
+
+def test_clonefile_is_still_looked_for_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """And the gate must not be so tight that macOS stops asking — which would turn
+    every clone into a real copy without a word about it."""
+    asked: list[object] = []
+    real = ctypes.CDLL
+
+    def watching(*args: object, **kwargs: object) -> object:
+        asked.append(args)
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ctypes, "CDLL", watching)
+
+    apply._load_clonefile()
+
+    assert asked, "macOS must still look for the symbol"
 
 
 # -- whether cloning can happen at all -------------------------------------------

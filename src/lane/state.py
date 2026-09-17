@@ -17,10 +17,7 @@ from pathlib import Path
 
 import tomli_w
 
-from lane.config import state_home
-
-_FILE_MODE = 0o600
-_DIR_MODE = 0o700
+from lane.config import keep_private, keep_private_directory, state_home
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +51,9 @@ class StateStore:
             body["last_project"] = state.last_project
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            self._dir.chmod(_DIR_MODE)
+            keep_private_directory(self._dir)
             self.path.write_text(tomli_w.dumps(body), encoding="utf-8")
-            self.path.chmod(_FILE_MODE)
+            keep_private(self.path)
         except OSError:
             return
 

@@ -130,8 +130,19 @@ class RealEnvironment:
                 return EditorLaunch(launched=False, detail=f"{command} could not start: {exc}")
             return EditorLaunch(launched=True, detail=f"Launching {command} in the lane.")
 
-        # A macOS editor installed as an .app but without its shell command.
-        app = _MAC_APPS.get(command)
+        # A macOS editor installed as an .app but without its shell command. Gated on
+        # the platform because `/Applications/<X>.app` is a macOS install layout and
+        # nothing else: asking elsewhere is a question with one possible answer, and
+        # answering it wrongly would offer `open -a Cursor` to a Windows user.
+        #
+        # **There is deliberately no Windows equivalent**, and that is a decision rather
+        # than an omission — `shutil.which` above is already PATHEXT-aware, and every
+        # editor lane names offers to put its command on PATH when it installs. A table
+        # of `%LOCALAPPDATA%\Programs\<X>` guesses would have to be right about each
+        # editor, each install scope (per-user, machine-wide, Store) and each version,
+        # and a wrong guess produces exactly the message below after more code. See
+        # AGENTS.md, *Launching the editor*.
+        app = _MAC_APPS.get(command) if sys.platform == "darwin" else None
         if app is not None and self.directory_exists(Path(f"/Applications/{app}.app")):
             try:
                 subprocess.Popen(

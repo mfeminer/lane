@@ -42,6 +42,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,11 +77,21 @@ def staged_path(target: Path) -> Path:
 
 
 def _load_clonefile() -> Callable[[bytes, bytes, int], int] | None:
-    """`clonefile(2)`, or None where there is no such call (anything but macOS)."""
+    """`clonefile(2)`, or None where there is no such call — which is anywhere but macOS.
+
+    **The platform is checked before the library is opened, and that is not tidiness.**
+    `CDLL(None)` — the form that keeps this working inside a PyInstaller one-file bundle
+    — raises `TypeError` on Windows, because there is no "the process's own symbols" to
+    ask for: `LoadLibrary` wants a name. That is neither of the errors caught below, and
+    this runs at **import time**, so lane did not start at all on Windows. Asking only
+    where the question has an answer is both the fix and the honest shape.
+    """
+    if sys.platform != "darwin":
+        return None
     try:
         library = ctypes.CDLL(None, use_errno=True)
         entry = library.clonefile
-    except OSError, AttributeError:  # pragma: no cover - platform dependent
+    except OSError, AttributeError:  # pragma: no cover - a macOS without the symbol
         return None
     entry.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
     entry.restype = ctypes.c_int

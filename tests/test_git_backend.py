@@ -7,7 +7,10 @@ whatever implementation sits behind `GitBackend`.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from lane.git.backend import GitError
 from lane.git.cli_backend import CliGitBackend
@@ -851,7 +854,14 @@ def test_git_runs_in_its_own_session_so_ctrl_c_cannot_kill_it(tmp_path: Path) ->
 
     Asserted through a shim standing in for git, because a process group is not
     something git will report about itself.
+
+    POSIX only — a shebang and `getpgrp` are both POSIX, and Windows says the same
+    thing with a process group founded by `CREATE_NEW_PROCESS_GROUP`. That half is
+    asserted for real in `test_environment.py`, and the keywords this backend passes
+    are asserted there on every platform.
     """
+    if sys.platform == "win32":
+        pytest.skip("POSIX process groups — see tests/test_environment.py")
     shim = tmp_path / "pgid"
     shim.write_text("#!/usr/bin/env python3\nimport os\nprint(os.getpgrp())\n")
     shim.chmod(0o755)
