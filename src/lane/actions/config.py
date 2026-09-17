@@ -49,6 +49,7 @@ from lane.context import Context
 from lane.naming import sanitize_branch
 from lane.prepare import Candidate, Step, Verb, apply
 from lane.prepare.sheet import Sheet, answers_from
+from lane.prepare.store import PrepareStore
 from lane.projects import count_subdirectories, find_nested_repository, list_projects
 from lane.ui.seam import Abandoned, Cell, Choice, Column, Row
 
@@ -106,6 +107,19 @@ file is beside the config (`lane/prefixes.py`).
 
 Which prefix a lane takes is still decided per lane, at the prompt. This row is the menu
 that choice is made from, which is a different thing."""
+
+COMMAND_VERB = "command-verb"
+COMMAND = "command"
+COMMAND_DIRECTORY = "command-directory"
+COMMAND_UNLESS = "command-unless"
+"""The commands screen's questions, named so the command line can answer them.
+
+`change` re-asks all three fields with each **defaulted to its stored value**, so
+pressing Enter on one keeps it. That is what `lane config commands change --directory
+api` reaches: the field it was given is answered, and the other two take the prompt's own
+default (`Prefilled.DEFAULT`). "Edit only what changed" is therefore the screen's
+existing behaviour rather than a second notion of *changed* living out on the flags.
+"""
 
 PREFIX_VERB = "prefix-verb"
 PREFIX = "prefix"
@@ -386,12 +400,25 @@ def _run_preparation(context: Context) -> None:
         return
 
     answered = sheet.steps(decided)
-    # One write, not one per path: `add` reloads and rewrites the file each time, which
-    # over fifty rows is fifty read-modify-write cycles and fifty chances to be
-    # interrupted half way through the set the user just accepted.
-    keys = {step.key for step in answered}
-    store.save([*(step for step in remembered.steps if step.key not in keys), *answered])
+    remember_answers(store, remembered.steps, answered)
     _report_preparation(context, remembered.steps, answered)
+
+
+def remember_answers(store: PrepareStore, before: Sequence[Step], answered: Sequence[Step]) -> None:
+    """Write a set of answers over what was already there. **One write, not one per path.**
+
+    `PrepareStore.add` reloads and rewrites the file each time, which over fifty rows is
+    fifty read-modify-write cycles and fifty chances to be interrupted half way through
+    the set somebody just accepted. That is why the screen accumulates and writes once —
+    and it is why `lane config preparation set --from-json` exists at all, since two
+    hundred paths answered one invocation each would be two hundred of those cycles.
+
+    Extracted so both callers are this rather than two things that look alike. Answers
+    for paths not named are left exactly as they are, so this is never a whole-file
+    rewrite and never touches another project.
+    """
+    keys = {step.key for step in answered}
+    store.save([*(step for step in before if step.key not in keys), *answered])
 
 
 def _candidates(steps: Sequence[Step]) -> list[Candidate]:
@@ -469,18 +496,32 @@ def _run_commands(context: Context) -> None:
             return
 
         if chosen == ADD_COMMAND:
-            _add_command(context)
+            add_command(context)
             continue
         assert isinstance(chosen, Step)
-        _act_on_command(context, chosen)
+        act_on_command(context, chosen)
+
+
+def commands_in(steps: Sequence[Step], project: str | None = None) -> list[Step]:
+    """The `run` steps, in the order the screen lists them — one project's, or all.
+
+    Shared with `lane config commands list` so the two agree about what order these are
+    in. Nothing depends on that order the way the prefixes do, but two listings of one
+    thing disagreeing is its own small lie.
+    """
+    return sorted(
+        (
+            step
+            for step in steps
+            if step.verb is Verb.RUN and (project is None or step.project == project)
+        ),
+        key=lambda step: (step.project.lower(), step.command.lower()),
+    )
 
 
 def _command_rows(steps: Sequence[Step]) -> list[Row[Step | str]]:
     """Ordered by project, then command — and never rearranged while on screen."""
-    ordered = sorted(
-        (step for step in steps if step.verb is Verb.RUN),
-        key=lambda step: (step.project.lower(), step.command.lower()),
-    )
+    ordered = commands_in(steps)
     rows: list[Row[Step | str]] = [
         Row(
             value=step,
@@ -504,8 +545,14 @@ def _command_detail(step: Step) -> tuple[str, ...]:
     return ("Runs on every enter — nothing guards it.",)
 
 
-def _act_on_command(context: Context, step: Step) -> None:
-    """Two verbs for the row under the cursor, exactly as the lanes table offers two."""
+def act_on_command(context: Context, step: Step) -> bool:
+    """Two verbs for one command, as the lanes table offers two. Reports whether it wrote.
+
+    **`change` re-asks all three fields, each defaulted to what is stored**, so pressing
+    Enter on one keeps it. That is the behaviour `lane config commands change` reaches
+    rather than reimplements: it answers the fields it was given and lets the rest take
+    their own defaults.
+    """
     try:
         verb = context.ui.choose(
             f"{step.project}/{step.command}",
@@ -513,38 +560,47 @@ def _act_on_command(context: Context, step: Step) -> None:
                 Choice("change", "change", "edit the command, where it runs, or its guard"),
                 Choice("forget", "forget", "and stop running it"),
             ],
+            key=COMMAND_VERB,
         )
     except Abandoned:
-        return
+        return False
 
     if verb == "forget":
         context.prepare_store().forget(step)
         context.ui.ok(f"Forgot {step.project}/{step.command}.")
-        return
+        return True
 
-    command = context.ui.text("Command to run", default=step.command)
-    directory = context.ui.text("Where to run it, relative to the lane", default=step.directory)
-    unless = context.ui.text("Skip it when this path is already in the lane", default=step.unless)
+    command = context.ui.text("Command to run", default=step.command, key=COMMAND)
+    directory = context.ui.text(
+        "Where to run it, relative to the lane", default=step.directory, key=COMMAND_DIRECTORY
+    )
+    unless = context.ui.text(
+        "Skip it when this path is already in the lane", default=step.unless, key=COMMAND_UNLESS
+    )
+    # Forget-then-save rather than an in-place edit: a changed command text is a
+    # different `Step.key`, so the old record has to go either way. Unlike the prefixes,
+    # order carries no meaning here — the screen sorts these rows.
     context.prepare_store().forget(step)
-    _save_command(context, step.project, command, directory, unless)
+    return _save_command(context, step.project, command, directory, unless)
 
 
-def _add_command(context: Context) -> None:
+def add_command(context: Context) -> bool:
+    """Record one more `run` step. Reports whether it wrote."""
     project = choose_project(context, "Which project?")
     if project is None:
-        return
-    command = context.ui.text("Command to run")
-    directory = context.ui.text("Where to run it, relative to the lane")
-    unless = context.ui.text("Skip it when this path is already in the lane")
-    _save_command(context, project.name, command, directory, unless)
+        return False
+    command = context.ui.text("Command to run", key=COMMAND)
+    directory = context.ui.text("Where to run it, relative to the lane", key=COMMAND_DIRECTORY)
+    unless = context.ui.text("Skip it when this path is already in the lane", key=COMMAND_UNLESS)
+    return _save_command(context, project.name, command, directory, unless)
 
 
 def _save_command(
     context: Context, project: str, command: str, directory: str, unless: str
-) -> None:
+) -> bool:
     if not command.strip():
         context.ui.error("A command is required.")
-        return
+        return False
     context.prepare_store().add(
         Step(
             project=project,
@@ -559,6 +615,7 @@ def _save_command(
             "Nothing guards this, so it runs on every enter — and entering is instant today."
         )
     context.ui.ok(f"{project}/{command.strip()} — run")
+    return True
 
 
 def _warn_about_cloning(context: Context) -> None:

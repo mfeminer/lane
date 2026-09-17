@@ -20,7 +20,10 @@ import pytest
 from lane import cli
 from lane.actions import config as config_screen
 from lane.config import Config, ConfigStore
+from lane.lanes import LaneMeta, LaneStore
 from lane.prefixes import DEFAULT_PREFIXES, BranchPrefixStore
+from lane.prepare import Step, Verb
+from lane.prepare.store import PrepareStore
 from tests.conftest import git
 from tests.fakes import FakeEnvironment
 
@@ -435,3 +438,495 @@ def test_help_is_generated_at_every_level_it_is_asked_at(
     assert "lane config prefixes" in nested
     assert "forget" in nested
     assert "print one setting's current value" not in nested, "one level's help, not its parent's"
+
+    # Three deep, which is as deep as `config` goes — and the level a path-walking
+    # lookup could get right for two and wrong for three.
+    assert (
+        cli.main(["config", "preparation", "set", "--help"], environment=environment) == cli.EXIT_OK
+    )
+    leaf = capsys.readouterr().out
+    assert leaf.startswith("usage: lane config preparation set")
+    assert "--from-json" in leaf
+
+
+def test_every_leaf_of_config_offers_help_and_json(
+    xdg: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both are added once, in `parser._under`, rather than repeated per command — so what
+    this guards is that no command is ever added by a route that skips them. A subcommand
+    nobody can pipe is a hole that shows up the first time somebody tries to."""
+    del xdg
+    environment = FakeEnvironment(interactive=False)
+    leaves = [
+        ["get"],
+        ["set"],
+        *(["prefixes", verb] for verb in ("list", "add", "change", "forget")),
+        *(["preparation", verb] for verb in ("list", "set")),
+        *(["commands", verb] for verb in ("list", "add", "change", "forget")),
+    ]
+
+    for leaf in leaves:
+        assert cli.main(["config", *leaf, "--help"], environment=environment) == cli.EXIT_OK
+        printed = capsys.readouterr().out
+        assert printed.startswith(f"usage: lane config {' '.join(leaf)}"), leaf
+        assert "--json" in printed, leaf
+        assert "-h, --help" in printed, leaf
+
+
+# -- commands ----------------------------------------------------------------------
+
+
+def _a_project(projects_root: Path, name: str = "demo") -> None:
+    git(["init", "--quiet", str(projects_root / name)])
+
+
+def test_commands_list_reports_one_projects_run_steps(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `run` step carries three fields the screen lets you edit, so all three are here."""
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [
+            Step(
+                project="demo",
+                verb=Verb.RUN,
+                command="install",
+                directory="web",
+                unless="web/node_modules",
+            ),
+            Step(project="demo", verb=Verb.CLONE, path="node_modules"),
+            Step(project="other", verb=Verb.RUN, command="elsewhere"),
+        ]
+    )
+
+    code = cli.main(
+        ["config", "commands", "list", "--project", "demo", "--json"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_OK
+    assert report["commands"] == [
+        {
+            "id": "demo/install",
+            "project": "demo",
+            "command": "install",
+            "directory": "web",
+            "unless": "web/node_modules",
+        }
+    ], "this project's run steps, and neither its paths nor another project's"
+
+
+def test_a_command_can_be_added_and_round_trips_through_the_store(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+
+    code = cli.main(
+        [
+            "config",
+            "commands",
+            "add",
+            "--project",
+            "demo",
+            "--command",
+            "install",
+            "--directory",
+            "web",
+            "--unless",
+            "web/node_modules",
+        ],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    step = PrepareStore(ConfigStore().path.parent).load().for_project("demo")[0]
+    assert (step.verb, step.command, step.directory, step.unless) == (
+        Verb.RUN,
+        "install",
+        "web",
+        "web/node_modules",
+    )
+
+
+def test_changing_one_field_leaves_the_others_exactly_as_they_were(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """The screen re-asks all three with each defaulted to its stored value, so pressing
+    Enter keeps it. `change` supplies the field it was given and takes the prompt's own
+    default for the rest — which is that behaviour reached, not a second notion of
+    "changed"."""
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [
+            Step(
+                project="demo",
+                verb=Verb.RUN,
+                command="install",
+                directory="web",
+                unless="web/node_modules",
+            )
+        ]
+    )
+
+    code = cli.main(
+        ["config", "commands", "change", "demo/install", "--directory", "api"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    step = PrepareStore(ConfigStore().path.parent).load().for_project("demo")[0]
+    assert step.directory == "api"
+    assert step.command == "install", "not given, so not changed"
+    assert step.unless == "web/node_modules", "not given, so not changed"
+
+
+def test_a_command_with_a_slash_in_it_is_still_one_identifier(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """`<project>/<command>` splits on the **first** slash and takes the rest verbatim.
+
+    A lane name containing a slash is refused, because a lane name cannot have one. A
+    command routinely does — `bin/install` — so the same identifier shape needs one
+    clause different, and that difference is this test."""
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [Step(project="demo", verb=Verb.RUN, command="bin/install things")]
+    )
+
+    code = cli.main(
+        ["config", "commands", "forget", "demo/bin/install things"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    assert PrepareStore(ConfigStore().path.parent).load().for_project("demo") == ()
+
+
+def test_forgetting_a_command_leaves_the_paths_alone(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [
+            Step(project="demo", verb=Verb.RUN, command="install"),
+            Step(project="demo", verb=Verb.CLONE, path="node_modules"),
+        ]
+    )
+
+    code = cli.main(
+        ["config", "commands", "forget", "demo/install"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    remaining = PrepareStore(ConfigStore().path.parent).load().for_project("demo")
+    assert [step.path for step in remaining] == ["node_modules"]
+
+
+def test_a_command_that_is_not_stored_is_not_found(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+
+    code = cli.main(
+        ["config", "commands", "forget", "demo/nothing"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_NOT_FOUND
+    assert "nothing" in capsys.readouterr().err
+
+
+def test_a_project_that_does_not_exist_is_not_found(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--project` names a project, and a name that is not there is the same kind of
+    mistake as a lane that is not open."""
+    del xdg
+    _a_project(projects_root)
+    _configured(projects_root, lanes_root)
+
+    code = cli.main(
+        ["config", "commands", "list", "--project", "nonesuch"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_NOT_FOUND
+    assert "nonesuch" in capsys.readouterr().err
+
+
+# -- preparation -------------------------------------------------------------------
+
+
+def _a_project_with_ignored(projects_root: Path, *names: str) -> Path:
+    """A real repository ignoring each `name/`, with each directory actually there.
+
+    The names here are what **git reports**, which is the unslashed form — a fully
+    ignored directory is `node_modules` in `ls-files -o -i --directory` output even
+    though `.gitignore` says `node_modules/`. That is the spelling every answer is
+    stored under, so it is the spelling the command line takes.
+    """
+    repo = projects_root / "demo"
+    git(["init", "--quiet", str(repo)])
+    git(["config", "user.email", "t@example.invalid"], cwd=repo)
+    git(["config", "user.name", "t"], cwd=repo)
+    (repo / ".gitignore").write_text("".join(f"{name}/\n" for name in names))
+    git(["add", ".gitignore"], cwd=repo)
+    git(["commit", "--quiet", "-m", "ignore"], cwd=repo)
+    for name in names:
+        (repo / name).mkdir(parents=True, exist_ok=True)
+        (repo / name / "thing.txt").write_text("x\n")
+    return repo
+
+
+def test_preparation_list_says_in_out_and_unset_for_each_path(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The tri-state the checklist uses, as data: a stored `skip` is `out` and a path
+    nobody has answered is `unset` — the distinction two states could not make."""
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules", "build", "cache")
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [
+            Step(project="demo", verb=Verb.CLONE, path="node_modules"),
+            Step(project="demo", verb=Verb.SKIP, path="build"),
+        ]
+    )
+
+    code = cli.main(
+        ["config", "preparation", "list", "--project", "demo", "--json"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_OK
+    answers = {one["path"]: one["answer"] for one in report["paths"]}
+    assert answers["node_modules"] == "in"
+    assert answers["build"] == "out"
+    assert answers["cache"] == "unset", "discovered, never answered"
+
+
+def test_preparation_list_says_whether_a_path_is_in_an_open_lane(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tick that copies a gigabyte and a tick that does nothing have to look different,
+    and with no lane in hand the screen cannot say it — a script can be told."""
+    del xdg
+    repo = _a_project_with_ignored(projects_root, "node_modules", "build")
+    _configured(projects_root, lanes_root)
+    # A real worktree, because that is what the listing counts as an open lane — a bare
+    # directory under the lanes root is not one, and asserting against a fake would be
+    # asserting against something lane would never see.
+    store = LaneStore(lanes_root)
+    lane = store.lane_path("demo", "pager")
+    lane.parent.mkdir(parents=True, exist_ok=True)
+    git(["worktree", "add", "--quiet", str(lane), "-b", "feature/pager", "HEAD"], cwd=repo)
+    store.write_meta(
+        "demo", "pager", LaneMeta(description="pager", base="main", repo=str(repo), start="")
+    )
+    (lane / "node_modules").mkdir(parents=True)
+
+    cli.main(
+        ["config", "preparation", "list", "--project", "demo", "--json"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    present = {one["path"]: one["present_in_a_lane"] for one in report["paths"]}
+    assert present["node_modules"] is True
+    assert present["build"] is False
+
+
+def test_one_path_can_be_answered_and_round_trips_through_the_store(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules")
+    _configured(projects_root, lanes_root)
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--path", "node_modules", "--in"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    steps = PrepareStore(ConfigStore().path.parent).load().for_project("demo")
+    assert [(step.path, step.verb) for step in steps] == [("node_modules", Verb.CLONE)]
+
+
+def test_a_batch_applies_every_valid_entry_in_one_write(
+    xdg: Path,
+    projects_root: Path,
+    lanes_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The screen's own rule (`prepare/store.py`, "one write, not one per path"), and the
+    reason `--from-json` exists: two hundred paths answered one invocation each is parity
+    on paper and unusable in practice."""
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules", "build", "cache")
+    _configured(projects_root, lanes_root)
+    batch = projects_root / "answers.json"
+    batch.write_text(
+        json.dumps(
+            [
+                {"path": "node_modules", "answer": "in"},
+                {"path": "build", "answer": "out"},
+                {"path": "cache", "answer": "in"},
+            ]
+        )
+    )
+    writes: list[int] = []
+    real = PrepareStore.save
+
+    def counted(self: PrepareStore, steps: object) -> None:
+        writes.append(1)
+        real(self, steps)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PrepareStore, "save", counted)
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--from-json", str(batch), "--json"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_OK
+    assert len(writes) == 1, "one write, not one per path"
+    assert len(report["applied"]) == 3
+    assert report["rejected"] == []
+
+
+def test_a_batch_with_a_typo_applies_the_rest_and_reports_that_one(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ "Some of two hundred were typos" is the case a batch tool has to answer usefully:
+    the good ones land, the bad ones are named one by one, and the file is never left
+    half-written."""
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules", "build")
+    _configured(projects_root, lanes_root)
+    batch = projects_root / "answers.json"
+    batch.write_text(
+        json.dumps(
+            [
+                {"path": "node_modules", "answer": "in"},
+                {"path": "ndoe_modules", "answer": "in"},
+                {"path": "build", "answer": "out"},
+            ]
+        )
+    )
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--from-json", str(batch), "--json"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_REFUSED, "something was refused, so it did not all happen"
+    assert [one["path"] for one in report["applied"]] == ["node_modules", "build"]
+    assert [one["path"] for one in report["rejected"]] == ["ndoe_modules"]
+
+    stored = PrepareStore(ConfigStore().path.parent).load().for_project("demo")
+    assert {step.path for step in stored} == {"node_modules", "build"}, "no half-written file"
+
+
+def test_a_batch_where_everything_is_a_typo_writes_nothing_at_all(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules")
+    _configured(projects_root, lanes_root)
+    batch = projects_root / "answers.json"
+    batch.write_text(json.dumps([{"path": "nope", "answer": "in"}]))
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--from-json", str(batch)],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_REFUSED
+    assert not PrepareStore(ConfigStore().path.parent).path.exists()
+
+
+def test_a_batch_can_be_read_from_stdin(
+    xdg: Path,
+    projects_root: Path,
+    lanes_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`-` is the shell convention, and the point of a batch is that it is generated."""
+    import io
+
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules")
+    _configured(projects_root, lanes_root)
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO(json.dumps([{"path": "node_modules", "answer": "in"}]))
+    )
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--from-json", "-"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    assert code == cli.EXIT_OK
+    assert PrepareStore(ConfigStore().path.parent).load().for_project("demo")[0].verb is Verb.CLONE
+
+
+def test_answering_one_path_leaves_every_other_projects_answers_alone(
+    xdg: Path, projects_root: Path, lanes_root: Path
+) -> None:
+    """One project at a time, like `remember` — this must never be a whole-file rewrite."""
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules")
+    _configured(projects_root, lanes_root)
+    PrepareStore(ConfigStore().path.parent).save(
+        [
+            Step(project="other", verb=Verb.CLONE, path="vendor"),
+            Step(project="other", verb=Verb.RUN, command="install"),
+        ]
+    )
+
+    cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--path", "node_modules", "--out"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    remembered = PrepareStore(ConfigStore().path.parent).load()
+    assert len(remembered.for_project("other")) == 2
+    assert remembered.for_project("demo")[0].verb is Verb.SKIP
+
+
+def test_set_with_neither_in_nor_out_is_a_usage_error(
+    xdg: Path, projects_root: Path, lanes_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A path is in or out and nothing else; "set it to nothing" is not one of the three
+    states — an unanswered path has no step at all, which is a deletion, not a `set`."""
+    del xdg
+    _a_project_with_ignored(projects_root, "node_modules")
+    _configured(projects_root, lanes_root)
+
+    code = cli.main(
+        ["config", "preparation", "set", "--project", "demo", "--path", "node_modules"],
+        environment=FakeEnvironment(interactive=False),
+    )
+
+    del capsys
+    assert code == cli.EXIT_USAGE
+    assert not PrepareStore(ConfigStore().path.parent).path.exists()
