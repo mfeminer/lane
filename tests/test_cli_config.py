@@ -439,6 +439,39 @@ def test_help_is_generated_at_every_level_it_is_asked_at(
     assert "forget" in nested
     assert "print one setting's current value" not in nested, "one level's help, not its parent's"
 
+    # Three deep, which is as deep as `config` goes — and the level a path-walking
+    # lookup could get right for two and wrong for three.
+    assert (
+        cli.main(["config", "preparation", "set", "--help"], environment=environment) == cli.EXIT_OK
+    )
+    leaf = capsys.readouterr().out
+    assert leaf.startswith("usage: lane config preparation set")
+    assert "--from-json" in leaf
+
+
+def test_every_leaf_of_config_offers_help_and_json(
+    xdg: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both are added once, in `parser._under`, rather than repeated per command — so what
+    this guards is that no command is ever added by a route that skips them. A subcommand
+    nobody can pipe is a hole that shows up the first time somebody tries to."""
+    del xdg
+    environment = FakeEnvironment(interactive=False)
+    leaves = [
+        ["get"],
+        ["set"],
+        *(["prefixes", verb] for verb in ("list", "add", "change", "forget")),
+        *(["preparation", verb] for verb in ("list", "set")),
+        *(["commands", verb] for verb in ("list", "add", "change", "forget")),
+    ]
+
+    for leaf in leaves:
+        assert cli.main(["config", *leaf, "--help"], environment=environment) == cli.EXIT_OK
+        printed = capsys.readouterr().out
+        assert printed.startswith(f"usage: lane config {' '.join(leaf)}"), leaf
+        assert "--json" in printed, leaf
+        assert "-h, --help" in printed, leaf
+
 
 # -- commands ----------------------------------------------------------------------
 

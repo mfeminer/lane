@@ -365,7 +365,7 @@ drifting.
   say a path is a *typo* rather than filing an answer against a path this project does
   not have. So it asks git the same question entering a lane asks (`ignored_paths`) and
   reports the union, with `discovered` false for a stored answer git no longer reports.
-  `present_in_a_lane` is computed by neither screen — settings has no lane in hand and
+  `present_in_a_lane` is computed by neither screen — config has no lane in hand and
   entering knows about one lane — and is reported because a tick that copies a gigabyte
   and a tick that does nothing have to be tellable apart, and a script has no cursor
   panel to read that from.
