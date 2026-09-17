@@ -190,7 +190,7 @@ def test_applying_an_untouched_screen_brings_nothing_in_and_records_no_answer(
     assert not (lane.path / "node_modules").exists()
     assert context.prepare_store().load().for_project("demo") == ()
     assert ui.said("remembered")
-    assert ui.said("settings")
+    assert ui.said("config")
     assert not any(told.kind in {"error", "progress"} for told in ui.told), (
         "a skip has nothing to apply, so it must not become a step that runs"
     )

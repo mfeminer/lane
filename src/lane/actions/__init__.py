@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from lane.actions import doctor, list_lanes, open_lane, settings
+from lane.actions import config, doctor, list_lanes, open_lane
 from lane.context import Context
 
 
@@ -59,10 +59,10 @@ ACTIONS: tuple[Action, ...] = (
         run=list_lanes.run,
     ),
     Action(
-        key="settings",
-        label="settings",
+        key="config",
+        label="config",
         description="Configure lane",
-        run=settings.run,
+        run=config.run,
     ),
     Action(
         key="doctor",

@@ -29,7 +29,7 @@ under it:
 
   ❯ open        New work, or a branch that already exists — your editor opens in it
     list        Every open lane, where it stands, and what to do with it
-    settings    Configure lane
+    config      Configure lane
     doctor      Check git, gh, the editor and your paths
     quit        Leave lane
 
@@ -124,7 +124,7 @@ asks **what the lane is for**, and the two answers lead different ways:
 
    - **branch** — pick the name right there. You get one entry per configured
      prefix — `feature/`, `bugfix/`, `hotfix/`, `chore/`, `refactor/`, `docs/` until
-     you change them in **settings → branch prefixes** — plus the bare lane name, or
+     you change them in **config → branch prefixes** — plus the bare lane name, or
      *other…* to type your own. Hand-typed names are cleaned up
      (`EMİN/deneme  şube!!` → `EMIN/deneme-sube`) and validated with
      `git check-ref-format`; if git rejects it, lane asks again rather than giving up.
@@ -241,7 +241,7 @@ row on the way to your editor is a toll:
 
 ```
 Preparing demo/broken-pagination
-  Answers are remembered per project — change them in settings · preparation.
+  Answers are remembered per project — change them in config · preparation.
 
   14 paths lane has not been told about
 
@@ -352,11 +352,11 @@ A path answered *in* is copied in from your main clone. On APFS that's a copy-on
 64 MB tree takes about a third of a millisecond and no extra disk until something writes to
 it. That's what makes this cheap rather than merely automatic. If your projects and lanes
 folders are on **different** volumes it can't be a clone at all and becomes a real copy —
-slow, and real disk. `doctor` tells you which you've got, and settings warns you when you
+slow, and real disk. `doctor` tells you which you've got, and config warns you when you
 bring something in and the answer is no.
 
 There's one other kind of step, and it isn't a path: a **command** to run when a lane
-opens. A command isn't something lane can discover, so it's added from **settings →
+opens. A command isn't something lane can discover, so it's added from **config →
 commands** rather than here. It asks for the command, where to run it, and a path that
 means "don't bother" (`unless`), so an `install` step runs on a lane that needs it and
 skips one that doesn't.
@@ -389,11 +389,11 @@ don't look the same.
 
 ### Changing an answer later
 
-**settings → preparation** opens *the same screen*, over every project at once, with the
+**config → preparation** opens *the same screen*, over every project at once, with the
 project dimmed in front of the path:
 
 ```
-lane settings · preparation
+lane config · preparation
   /Users/you/.config/lane/prepare.toml
 
   4 answered paths in 2 projects
@@ -414,16 +414,16 @@ that project from now on. Changing a decision you made months ago is one
 There's no `in lane` column here, because there's no lane in hand; nothing is copied when
 you accept, and the next lane you enter in that project acts on the answers.
 
-**settings → commands** is the other half: the `run` steps, which are typed rather than
+**config → commands** is the other half: the `run` steps, which are typed rather than
 discovered and have a directory and a guard to edit. `Enter` on one offers `change` and
 `forget`, and `add a command` is where a new one comes from.
 
 ## Branch prefixes
 
-**settings → branch prefixes** is the list the branch prompt offers when you open a lane:
+**config → branch prefixes** is the list the branch prompt offers when you open a lane:
 
 ```
-lane settings · branch prefixes
+lane config · branch prefixes
   /Users/you/.config/lane/branch_prefixes.toml
 
   prefix           example
@@ -434,7 +434,7 @@ lane settings · branch prefixes
   refactor         refactor/<lane>
   docs             docs/<lane>
   add a prefix
-  ← Back to settings
+  ← Back to config
 
   ↑↓ move · enter choose
 ```
@@ -465,7 +465,7 @@ row says so while you're deciding, and again once you have:
 
 ```
 ! apps/console/.env looks like it holds secrets, and every lane now gets a copy.
-  Leave it out in settings · preparation to stop that.
+  Leave it out in config · preparation to stop that.
 ```
 
 It's a suggestion, not a refusal.
@@ -846,7 +846,7 @@ without touching anything else.
 ### Environment overrides
 
 `LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file. When
-one is active, settings still edits the file but says plainly that the environment
+one is active, config still edits the file but says plainly that the environment
 is currently winning — otherwise saving a value that then appears not to work looks
 like a bug.
 
@@ -913,7 +913,7 @@ an error, before anything is removed.
 
 **Entering a lane can refuse.** If some ignored path has never been answered — a new
 `node_modules` in a package that did not have one — lane cannot guess, so in a pipe it
-refuses and tells you to answer it once, in a terminal or in settings · preparation.
+refuses and tells you to answer it once, in a terminal or in config · preparation.
 Every lane afterwards remembers.
 
 | Exit | Means |
@@ -962,7 +962,7 @@ your editor command is on PATH. lane prints the path so you can open it yourself
 
 **lane keeps asking me about the same path** — you answered it for a *different* project
 name, or the project directory was renamed. Answers are keyed by project name; check
-**settings → preparation**.
+**config → preparation**.
 
 **A path I answered *in* isn't in my lane** — it has to exist in your main clone for there
 to be anything to copy, and it has to be ignored by the lane's own `.gitignore`. A lane

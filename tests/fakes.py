@@ -135,7 +135,7 @@ class FakeUi:
         self.asked: list[str] = []
         self.checklists = 0
         """How many times the checklist was opened — the one screen with two callers, so
-        "settings opens the same component entering a lane does" is a fact a test can
+        "config opens the same component entering a lane does" is a fact a test can
         check rather than a resemblance it has to eyeball."""
 
     # -- the script ----------------------------------------------------------

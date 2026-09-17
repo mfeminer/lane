@@ -72,7 +72,7 @@ class NeedsAnswer(Exception):
 
         Preparation is the one that needs this: which ignored paths come into a lane is
         a screen, not a value, so the way out is to answer it once — in a terminal, or
-        in settings · preparation — rather than to pass something here."""
+        in config · preparation — rather than to pass something here."""
 
         self.offered = tuple(offered)
         self.spent = spent

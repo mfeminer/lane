@@ -1,12 +1,12 @@
 """The rows of the preparation screen, and the answers they carry.
 
 **One screen, reached from two directions.** Entering a lane opens it when some path
-has no answer yet; settings opens it to review or change anything. They are not two
+has no answer yet; config opens it to review or change anything. They are not two
 screens that resemble each other — resemblance drifts — but one, built here and drawn
 by `ui/checklist.py`. What differs between the callers is *data*, and it is exactly
 two things:
 
-* settings shows several projects at once, so the project leads the row (the dimmed
+* config shows several projects at once, so the project leads the row (the dimmed
   `Cell.lead` the lanes table already uses for the same job);
 * entering has a lane in hand, so it can say which paths are already in it.
 
@@ -20,7 +20,7 @@ That third state is what `steps()` turns into the property this module exists fo
 path nobody answered gets no step written**, so `prepare.unanswered` offers it again next
 time, exactly as it would a path nobody has ever seen. With two states there was no way
 to say it — accepting a screen filed a `skip` for every row the user had not got to, and
-in settings that stored `skip` then drew identically to a path never asked about.
+in config that stored `skip` then drew identically to a path never asked about.
 
 **A folder row is not a leaf, and it has five states rather than a leaf's three** —
 everything in, everything out, a question still open under it (`?`), or fully answered and
@@ -111,7 +111,7 @@ class Sheet:
         own rows to avoid a tick that would be false for half of it.
 
         A path with **no** stored answer is simply absent, and that is the whole gain over
-        the set this replaced: settings can now show `○` for a path nobody has ever been
+        the set this replaced: config can now show `○` for a path nobody has ever been
         asked about, where before a stored `skip` and a question never put drew the same
         blank.
         """
@@ -285,7 +285,7 @@ def answers_from(steps: Iterable[Step]) -> dict[tuple[str, str], bool]:
 
     A pair that is *absent* is one no step covers, which the screen draws as unanswered.
     A stored `skip` is `False` and no longer indistinguishable from it: that was the gap
-    the two-state set left in settings, where a path deliberately kept out and a path
+    the two-state set left in config, where a path deliberately kept out and a path
     never asked about rendered identically.
     """
     return {(step.project, step.path): step.verb is Verb.CLONE for step in steps if step.path}

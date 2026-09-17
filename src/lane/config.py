@@ -12,6 +12,10 @@ Two kinds of forward migration are handled, both required rather than optional:
 Both carry the user's values over, keep a backup, and announce themselves in **one
 short line**. What actually changed in the release belongs to its notes on GitHub;
 an upgrade notice that grows into a changelog dump is a regression.
+
+**This is the store, not the screen.** `actions/config.py` is the screen that edits it,
+and `cli/configuring.py` is the command line that edits it. Both read and write this
+module; it knows about neither.
 """
 
 from __future__ import annotations
@@ -163,7 +167,7 @@ class ConfigStore:
         )
 
     def load_file_only(self) -> Config:
-        """What the file says, ignoring the environment — what settings edits."""
+        """What the file says, ignoring the environment — what config edits."""
         if self.path.exists():
             try:
                 return _from_toml(tomllib.loads(self.path.read_text(encoding="utf-8")))

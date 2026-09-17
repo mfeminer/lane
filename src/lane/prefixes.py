@@ -19,7 +19,7 @@ setting in any case: it has no per-value default, no environment override and no
 validation of its own.
 
 A separate file can also be deleted to put the six back without touching the three
-settings.
+settings themselves.
 
 ## Why a seed rather than a written-out default
 

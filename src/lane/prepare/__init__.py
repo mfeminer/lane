@@ -106,10 +106,10 @@ class Step:
         return bool(self.path)
 
     def describe(self) -> str:
-        """The stored answer in words, for the settings list.
+        """The stored answer in words, for the config list.
 
         Not the same question the preparation screen answers: that one says what will
-        happen to a particular lane, and settings has no lane in hand.
+        happen to a particular lane, and config has no lane in hand.
         """
         match self.verb:
             case Verb.RUN:
@@ -134,7 +134,7 @@ class Candidate:
     """
 
     project: str = ""
-    """Which project's path this is. Empty where there is only one in play; settings
+    """Which project's path this is. Empty where there is only one in play; config
     shows several at once and needs it to find the file and to lead the row."""
 
     @property

@@ -16,6 +16,15 @@ Both paths ask through the same three functions (`_ask_projects_root`,
 When an environment variable is currently winning, this still edits the *file* —
 but says so plainly, because otherwise saving a value that then appears not to take
 effect looks like a bug.
+
+**Two modules are now called `config`, and they are not the same thing.** This one is
+the *screen* — the menu entry, its list, and the four sub-screens under it.
+`lane/config.py` is the *store*: the three settings, their defaults, their environment
+overrides, and the file they live in. This module reads and writes that one, never the
+other way round. The screen was called `settings` until the command line grew a `config`
+subcommand, and `git config`/`gh config`/`npm config` is what this class of tool calls
+it; keeping the screen on the old word would have meant the interactive session and the
+command line naming one place two things.
 """
 
 from __future__ import annotations
@@ -77,7 +86,7 @@ can be the shared screen and nothing else."""
 PREFIXES = "branch prefixes"
 """The menu `open` offers when a lane names its branch — a destination, so a noun (§4).
 
-Not a sixth *setting*: `config.py` is explicit that three settings is a closed list, and
+Not a sixth *setting*: `lane/config.py` is explicit that three settings is a closed list, and
 this is an unbounded list of strings with no per-value default and no environment
 override. It lives in `branch_prefixes.toml`, beside `prepare.toml`, for the reason that
 file is beside the config (`lane/prefixes.py`).
@@ -85,8 +94,8 @@ file is beside the config (`lane/prefixes.py`).
 Which prefix a lane takes is still decided per lane, at the prompt. This row is the menu
 that choice is made from, which is a different thing."""
 
-PREPARE_BACK = "← Back to settings"
-"""Scoped deliberately, as ADR 0002 requires — one step back, not out of settings."""
+PREPARE_BACK = "← Back to config"
+"""Scoped deliberately, as ADR 0002 requires — one step back, not out of config."""
 
 ADD_COMMAND = "\x00add\x00"
 ADD_PREFIX = "\x00add-prefix\x00"
@@ -115,7 +124,7 @@ def _run_first_time(context: Context) -> None:
     ui = context.ui
     store = context.config_store
 
-    ui.heading("lane settings")
+    ui.heading("lane config")
     ui.detail(f"  {store.path}")
     _report_overrides(context)
 
@@ -137,7 +146,7 @@ def _run_list(context: Context) -> None:
     ui = context.ui
     store = context.config_store
 
-    ui.heading("lane settings")
+    ui.heading("lane config")
     ui.detail(f"  {store.path}")
     _report_overrides(context)
     ui.blank()
@@ -151,7 +160,7 @@ def _run_list(context: Context) -> None:
             return rows
 
         try:
-            key, cursor = ui.browse("lane settings", COLUMNS, _rows_now, back=BACK, cursor=cursor)
+            key, cursor = ui.browse("lane config", COLUMNS, _rows_now, back=BACK, cursor=cursor)
         except Abandoned:
             return
 
@@ -294,7 +303,7 @@ def _run_preparation(context: Context) -> None:
     ui = context.ui
     store = context.prepare_store()
 
-    ui.heading("lane settings · preparation")
+    ui.heading("lane config · preparation")
     ui.detail(f"  {store.path}")
     remembered = store.load()
     if remembered.problem is not None:
@@ -384,7 +393,7 @@ def _report_preparation(context: Context, before: Sequence[Step], answered: Sequ
 def _run_commands(context: Context) -> None:
     """A `run` step is typed rather than discovered, and carries a directory and a guard.
 
-    None of that is a checkbox, so this stays the list you act on a row of — the settings
+    None of that is a checkbox, so this stays the list you act on a row of — the config
     list's own shape, and the lanes table's. It is a second row rather than a second level
     under `preparation` because the two are different kinds of thing, and folding a typed
     command into a screen of discovered paths would be the resemblance this change exists
@@ -393,7 +402,7 @@ def _run_commands(context: Context) -> None:
     ui = context.ui
     store = context.prepare_store()
 
-    ui.heading("lane settings · commands")
+    ui.heading("lane config · commands")
     ui.detail(f"  {store.path}")
     ui.blank()
 
@@ -523,7 +532,7 @@ COPY_ON_WRITE_UNAVAILABLE = (
     "Copy-on-write is not available: {projects} and {lanes} are on different volumes, "
     "so bringing a path in is a real copy — slow, and it uses real disk."
 )
-"""One sentence, shared by doctor and by settings, so they cannot say it differently."""
+"""One sentence, shared by doctor and by config, so they cannot say it differently."""
 
 
 def _report_overrides(context: Context) -> None:
@@ -663,7 +672,7 @@ def _run_branch_prefixes(context: Context) -> None:
     ui = context.ui
     store = context.prefix_store()
 
-    ui.heading("lane settings · branch prefixes")
+    ui.heading("lane config · branch prefixes")
     ui.detail(f"  {store.path}")
     ui.blank()
 

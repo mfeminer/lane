@@ -440,7 +440,7 @@ def test_entering_with_an_unanswered_path_and_no_terminal_refuses_before_doing_a
 
     err = capsys.readouterr().err
     assert code == cli.EXIT_NO_TTY
-    assert "settings" in err or "preparation" in err
+    assert "config" in err or "preparation" in err
     assert not (lanes_root / "demo" / "pager" / "junk").exists()
 
 

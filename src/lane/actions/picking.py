@@ -16,7 +16,7 @@ from lane.projects import Project, diagnose, list_projects
 from lane.ui.seam import Choice
 
 PROJECT = "project"
-"""The key `--project` answers. Named here because both `open` and settings ask it."""
+"""The key `--project` answers. Named here because both `open` and config ask it."""
 
 
 def choose_project(context: Context, title: str = "Which project?") -> Project | None:
@@ -49,12 +49,12 @@ def explain_no_projects(context: Context) -> None:
 
     if context.projects_root is None:
         ui.error("lane does not know where your projects are.")
-        ui.detail("  Set a projects folder in settings.")
+        ui.detail("  Set a projects folder in config.")
         return
 
     if not problem.root_exists:
         ui.error(f"Projects folder is missing: {problem.root}")
-        ui.detail("  Fix the path in settings, or check it with doctor.")
+        ui.detail("  Fix the path in config, or check it with doctor.")
         return
 
     ui.error(
@@ -66,9 +66,9 @@ def explain_no_projects(context: Context) -> None:
     suggested = problem.suggested_root
     if suggested is not None:
         ui.detail(f"  Your repositories look nested — found one at {problem.nested_example}")
-        ui.detail(f"  Point the projects folder at {suggested} in settings.")
+        ui.detail(f"  Point the projects folder at {suggested} in config.")
     else:
-        ui.detail("  Fix the path in settings, or check it with doctor.")
+        ui.detail("  Fix the path in config, or check it with doctor.")
 
 
 def resolve_base(context: Context, lane: Lane) -> str | None:

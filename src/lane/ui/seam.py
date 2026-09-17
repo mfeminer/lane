@@ -289,7 +289,7 @@ class Ui(Protocol):
         makes `apply` mean "commit what I have decided" on a screen that still has
         unanswered rows on it.
 
-        `answers` is what arrives already answered, so settings can open the same screen
+        `answers` is what arrives already answered, so config can open the same screen
         over decisions made months ago and show them as they stand — including the paths
         it has no answer for, which two states could not tell from the ones it refused.
 

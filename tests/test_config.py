@@ -44,7 +44,7 @@ def test_saving_creates_a_private_directory_and_file(xdg: Path) -> None:
 # -- round trip (E2) -------------------------------------------------------------
 
 
-def test_settings_round_trip_through_toml(xdg: Path) -> None:
+def test_the_three_settings_round_trip_through_toml(xdg: Path) -> None:
     store = ConfigStore()
     saved = Config(
         projects_root=Path("/Users/x/Projects"),
@@ -84,7 +84,7 @@ def test_environment_overrides_the_file(xdg: Path, monkeypatch: pytest.MonkeyPat
     assert loaded.config.lanes_root == Path("/l"), "un-overridden values still come from the file"
 
 
-def test_overrides_are_named_so_settings_can_say_the_environment_is_winning(
+def test_overrides_are_named_so_config_can_say_the_environment_is_winning(
     xdg: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LANE_LANES_ROOT", "/from/env")
