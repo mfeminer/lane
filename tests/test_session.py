@@ -74,7 +74,7 @@ def test_entering_and_closing_are_not_menu_entries(projects_root: Path, lanes_ro
     ui = Recording(["quit"])
     session.run(_context(ui, projects_root, lanes_root))
 
-    assert offered == ["open", "lanes", "settings", "doctor", "quit"]
+    assert offered == ["open", "list", "settings", "doctor", "quit"]
 
 
 def test_the_menu_is_always_the_full_list_even_without_git(
@@ -172,7 +172,7 @@ def test_an_interruption_says_what_might_be_half_done(
 
     assert ui.said("half-done")
     # Named by its current menu name, so the next step is one the user can find.
-    assert ui.said("lanes")
+    assert ui.said("list")
 
 
 def test_ctrl_c_at_a_prompt_inside_an_action_ends_the_session_silently(
@@ -310,8 +310,8 @@ def test_a_whole_working_day_menu_open_menu_close_menu_quit(
             "Fix the CSV export",  # description
             "branch",  # mode
             "bugfix/fix-the-csv-export",  # branch
-            # menu -> lanes -> the row -> close it
-            "lanes",
+            # menu -> list -> the row -> close it
+            "list",
             "fix-the-csv-export",  # the row under the cursor
             "close",  # what to do with it
             [],  # the close screen, accepted as it opened
@@ -492,12 +492,12 @@ def test_a_whole_working_day_with_a_lane_that_needs_preparing(
             "branch",
             "bugfix/fix-the-csv-export",
             ["node_modules"],  # one keystroke: it comes in
-            # menu -> lanes -> enter it again. Nothing is asked this time.
-            "lanes",
+            # menu -> list -> enter it again. Nothing is asked this time.
+            "list",
             "fix-the-csv-export",
             "enter",
-            # menu -> lanes -> close it
-            "lanes",
+            # menu -> list -> close it
+            "list",
             "fix-the-csv-export",
             "close",
             [],

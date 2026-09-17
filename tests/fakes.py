@@ -161,6 +161,7 @@ class FakeUi:
         *,
         back: str | None = BACK_LABEL,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> T:
         if on_render is not None:
             for option in options:
@@ -191,6 +192,7 @@ class FakeUi:
         fill: Fill | None = None,
         cursor: int = 0,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> tuple[T, int]:
         """Records the whole table, then answers it from the script.
 
@@ -220,6 +222,7 @@ class FakeUi:
         fill: Fill | None = None,
         finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> Answers[T]:
         """Records the whole screen, then answers it with one scripted keystroke run.
 
@@ -331,6 +334,7 @@ class FakeUi:
         title: str,
         *,
         default: str = "",
+        key: str = "",
     ) -> str:
         answer = self._next(title)
         if answer == "":
@@ -343,6 +347,7 @@ class FakeUi:
         title: str,
         *,
         default: bool = False,
+        key: str = "",
     ) -> bool:
         answer = self._next(title)
         assert isinstance(answer, bool), f"confirm() needs a bool, got {answer!r}"
@@ -363,6 +368,15 @@ class FakeUi:
 
     def detail(self, text: str) -> None:
         self.told.append(Told("detail", text))
+
+    def table(
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Sequence[Row[object]],
+    ) -> None:
+        del columns
+        self._paint(title, rows, None)
 
     def heading(self, text: str) -> None:
         self.told.append(Told("heading", text))

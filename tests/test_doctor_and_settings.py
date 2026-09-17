@@ -249,10 +249,10 @@ def test_the_lanes_default_is_offered_next_to_the_projects_folder(
     offered: list[str] = []
 
     class Recording(FakeUi):
-        def text(self, title, *, default=""):  # type: ignore[no-untyped-def]
+        def text(self, title, *, default="", **rest):  # type: ignore[no-untyped-def]
             if "lanes be parked" in title:
                 offered.append(default)
-            return super().text(title, default=default)
+            return super().text(title, default=default, **rest)
 
     # Answer the lanes question with "" so the default is taken.
     ui = Recording([str(projects_root), "", "cursor"])
@@ -284,10 +284,10 @@ def test_an_already_configured_lanes_folder_is_offered_instead(
     offered: list[str] = []
 
     class Recording(FakeUi):
-        def text(self, title, *, default=""):  # type: ignore[no-untyped-def]
+        def text(self, title, *, default="", **rest):  # type: ignore[no-untyped-def]
             if "lanes be parked" in title:
                 offered.append(default)
-            return super().text(title, default=default)
+            return super().text(title, default=default, **rest)
 
     ui = Recording(["lanes root", "", "back"])
     context = _context(ui, projects_root=projects_root, lanes_root=chosen, config_dir=config_dir)

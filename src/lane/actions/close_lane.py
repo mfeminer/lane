@@ -19,7 +19,7 @@ disagrees. That is the whole reason this feature is here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from lane import interrupts
@@ -63,6 +63,28 @@ class _Findings:
         return len(self.issues)
 
 
+@dataclass(frozen=True, slots=True)
+class Closed:
+    """What closing came to. Read by `--json`; ignored by the listing.
+
+    A refusal is one of these too, with `closed` false and `refusal` saying why — a
+    script needs the difference between "it would not" and "it did", and both of those
+    are different again from a crash.
+    """
+
+    slug: str
+    closed: bool
+    refusal: str | None = None
+    issues: tuple[str, ...] = ()
+    clean: tuple[str, ...] = ()
+    rescued: str | None = None
+    delete_others: tuple[str, ...] = ()
+    """The abandoned branches this close was allowed to force-delete."""
+
+    deleted: tuple[str, ...] = ()
+    kept: tuple[str, ...] = ()
+
+
 @dataclass
 class _Decisions:
     """Everything the user agreed to, gathered before the first removal."""
@@ -86,21 +108,37 @@ class _Decisions:
 
 
 @dataclass(frozen=True, slots=True)
-class _Rescue:
+class Rescue:
     """Park the commits stranded on a detached HEAD on a branch of their own."""
 
     branch: str
 
 
 @dataclass(frozen=True, slots=True)
-class _Delete:
-    """Delete one branch git would otherwise refuse to remove, because it is unmerged."""
+class Delete:
+    """Delete one branch git would otherwise refuse to remove, because it is unmerged.
+
+    `own` tells the lane's own branch from one it used earlier and left. On screen the
+    row's panel line already says which; in the value it matters because they are
+    answered by different flags — `--delete-branch` and `--delete-others` — and because
+    they are two different questions wearing the same words.
+    """
 
     branch: str
+    own: bool = False
 
 
-type _Ask = _Rescue | _Delete
-"""One row of the close screen: a thing closing can additionally do, in or out."""
+type Ask = Rescue | Delete
+"""One row of the close screen: a thing closing can additionally do, in or out.
+
+Public because `--rescue` and `--delete-others` have to name one, and the honest way
+to name a row is in the vocabulary the row is built from. The alternative — matching
+the words printed on it — would make `docs/CONVENTIONS.md` §8 rewording a flag change.
+"""
+
+SCREEN = "close"
+"""The name of the one question closing asks. `--yes` answers it; row flags say what
+it is answered *with*."""
 
 
 DECISIONS = (Column("what closing does"),)
@@ -117,7 +155,7 @@ checklist's `apply`/`discard`: what is being accepted here is a close, not a set
 answers to file away."""
 
 
-def close(context: Context, lane: Lane) -> None:
+def close(context: Context, lane: Lane) -> Closed:
     """Close a lane the listing has already put the cursor on.
 
     It takes the lane rather than asking for one: closing is reached from the
@@ -130,7 +168,7 @@ def close(context: Context, lane: Lane) -> None:
     if base is None:
         ui.error("Could not determine the default branch, so the checks cannot run.")
         ui.detail("  Try: git remote set-head origin --auto")
-        return
+        return Closed(lane.slug, closed=False, refusal="no default branch")
 
     repo = lane.repo_path(context.projects_root)
 
@@ -145,7 +183,7 @@ def close(context: Context, lane: Lane) -> None:
         status = context.git.status(lane.path, base, lane.meta.start)
     except GitError as exc:
         ui.error(f"Could not inspect the lane: {exc}")
-        return
+        return Closed(lane.slug, closed=False, refusal=f"could not inspect the lane: {exc}")
 
     remote_url = context.git.remote_url(repo)
     answer = ui.progress(
@@ -159,7 +197,9 @@ def close(context: Context, lane: Lane) -> None:
     # alone, never by probing the environment separately.
     if isinstance(answer, CannotTell):
         _refuse(context, f"the pull request for '{status.branch}'", answer)
-        return
+        return Closed(
+            lane.slug, closed=False, refusal=f"cannot verify the pull request: {answer.detail}"
+        )
 
     stacked = ui.progress(
         "Asking GitHub what is based on this branch…",
@@ -172,17 +212,32 @@ def close(context: Context, lane: Lane) -> None:
     # what is stacked on it" is not permission to do that.
     if isinstance(stacked, CannotTell):
         _refuse(context, f"what is based on '{status.branch}'", stacked)
-        return
+        return Closed(
+            lane.slug,
+            closed=False,
+            refusal=f"cannot verify what is stacked on it: {stacked.detail}",
+        )
 
     findings = _check(context, lane, status, base, answer, stacked)
     _report(context, findings)
 
     decisions = _ask(context, lane, status, base, findings)
+    reported = Closed(
+        slug=lane.slug,
+        closed=False,
+        issues=tuple(findings.issues),
+        clean=tuple(findings.clean_notes),
+        rescued=decisions.rescue_branch,
+        delete_others=tuple(
+            other for other in decisions.also_delete if other in decisions.may_force
+        ),
+    )
     if not decisions.proceed:
         ui.info("Left open.")
-        return
+        return replace(reported, refusal="left open")
 
-    _execute(context, lane, repo, status, decisions)
+    done = _execute(context, lane, repo, status, decisions)
+    return replace(reported, closed=done.removed, deleted=done.deleted, kept=done.kept)
 
 
 def _refuse(context: Context, subject: str, cannot: CannotTell) -> None:
@@ -464,11 +519,11 @@ def _ask(
     # no question about something that cannot happen. The wording says what closing
     # does and nothing about how bad it would be: the `!` lines above already said
     # that, which is the whole of docs/CONVENTIONS.md §8.
-    rows: list[Node[_Ask]] = []
-    starting: dict[_Ask, bool] = {}
+    rows: list[Node[Ask]] = []
+    starting: dict[Ask, bool] = {}
 
     if status.detached and status.unpushed_count > 0:
-        rescue = _Rescue(f"wip/{lane.name}")
+        rescue = Rescue(f"wip/{lane.name}")
         rows.append(
             Node(
                 row=Row(
@@ -491,8 +546,10 @@ def _ask(
         if nothing_would_be_lost:
             permitted.add(status.branch)
         else:
-            rows.append(_deletion(status.branch, "It holds commits that are nowhere else."))
-            starting[_Delete(status.branch)] = False
+            rows.append(
+                _deletion(status.branch, "It holds commits that are nowhere else.", own=True)
+            )
+            starting[Delete(status.branch, own=True)] = False
 
     # The same decision, for the branches this lane used before the one it is on — one
     # row each. They share a reason but not a fate: a single question covering all of
@@ -500,7 +557,7 @@ def _ask(
     # listed them individually.
     for other in unmerged_others:
         rows.append(_deletion(other, "This lane used it earlier, and it holds unique work."))
-        starting[_Delete(other)] = False
+        starting[Delete(other)] = False
 
     try:
         answered = ui.check(
@@ -509,6 +566,7 @@ def _ask(
             lambda: rows,
             answers=starting,
             finish=FINISH,
+            key=SCREEN,
         )
     except Abandoned:
         # `leave open` is this screen's `discard`. Nothing has been touched, which is
@@ -520,16 +578,16 @@ def _ask(
         if not answer:
             continue
         match asked:
-            case _Rescue(branch=branch):
+            case Rescue(branch=branch):
                 decisions.rescue_branch = branch
-            case _Delete(branch=branch):
+            case Delete(branch=branch):
                 permitted.add(branch)
     decisions.may_force = frozenset(permitted)
 
     return decisions
 
 
-def _deletion(branch: str, why: str) -> Node[_Ask]:
+def _deletion(branch: str, why: str, *, own: bool = False) -> Node[Ask]:
     """One branch git will refuse to delete, and the row that overrides that refusal.
 
     Worded as what closing does — `delete branch x` — rather than as *delete it
@@ -539,7 +597,7 @@ def _deletion(branch: str, why: str) -> Node[_Ask]:
     """
     return Node(
         row=Row(
-            value=_Delete(branch),
+            value=Delete(branch, own=own),
             cells=(Cell(f"delete branch {branch}", tone="warn"),),
             detail=(why, "Left out, it stays, and lane says how to remove it later."),
         )
@@ -564,13 +622,22 @@ def _other_lane_branches(
     return tuple(name for name in used if name not in (status.branch, base))
 
 
+@dataclass(frozen=True, slots=True)
+class _Removal:
+    """What the destructive phase actually managed. Not a decision — an outcome."""
+
+    removed: bool
+    deleted: tuple[str, ...] = ()
+    kept: tuple[str, ...] = ()
+
+
 def _execute(
     context: Context,
     lane: Lane,
     repo: Path,
     status: WorktreeStatus,
     decisions: _Decisions,
-) -> None:
+) -> _Removal:
     """Nothing here asks anything. Every decision was made above.
 
     Every step announces itself. This is the slow half of a close — removing a
@@ -591,7 +658,7 @@ def _execute(
         ui.detail("  Ctrl-C received — finishing the removal first. Ctrl-C again to stop now.")
 
     with interrupts.deferred(acknowledge):
-        _remove_everything(context, lane, repo, status, decisions)
+        return _remove_everything(context, lane, repo, status, decisions)
 
 
 def _remove_everything(
@@ -600,7 +667,7 @@ def _remove_everything(
     repo: Path,
     status: WorktreeStatus,
     decisions: _Decisions,
-) -> None:
+) -> _Removal:
     """The destructive phase itself, run under the deferral above."""
     ui = context.ui
 
@@ -615,7 +682,7 @@ def _remove_everything(
         except GitError as exc:
             ui.error(f"Could not park the commits: {exc}")
             ui.warn("Leaving the lane open so nothing is lost.")
-            return
+            return _Removal(removed=False)
         ui.ok(f"Parked on {rescue}")
 
     def remove() -> None:
@@ -630,7 +697,7 @@ def _remove_everything(
         ui.progress("Removing the worktree…", remove)
     except GitError as exc:
         ui.error(f"Could not remove the worktree: {exc}")
-        return
+        return _Removal(removed=False)
     context.lane_store().forget(lane.project, lane.name)
     ui.ok(f"Lane closed: {lane.slug}")
 
@@ -640,14 +707,22 @@ def _remove_everything(
     # Every branch is deleted the same way, and the only thing that differs is whether
     # the user allowed git's refusal to be overridden for **that** branch. A merged one
     # is not in the set and does not need to be: `-d` succeeds on its own.
+    deleted: list[str] = []
+    kept: list[str] = []
     if decisions.delete_branch and status.branch is not None:
-        _delete_branch(context, repo, status.branch, may_force=status.branch in decisions.may_force)
+        gone = _delete_branch(
+            context, repo, status.branch, may_force=status.branch in decisions.may_force
+        )
+        (deleted if gone else kept).append(status.branch)
     for other in decisions.also_delete:
-        _delete_branch(context, repo, other, may_force=other in decisions.may_force)
+        gone = _delete_branch(context, repo, other, may_force=other in decisions.may_force)
+        (deleted if gone else kept).append(other)
+
+    return _Removal(removed=True, deleted=tuple(deleted), kept=tuple(kept))
 
 
-def _delete_branch(context: Context, repo: Path, branch: str, *, may_force: bool) -> None:
-    """One branch, announced, and reported either way."""
+def _delete_branch(context: Context, repo: Path, branch: str, *, may_force: bool) -> bool:
+    """One branch, announced, and reported either way. True when it is gone."""
     ui = context.ui
 
     def delete() -> bool:
@@ -661,7 +736,8 @@ def _delete_branch(context: Context, repo: Path, branch: str, *, may_force: bool
 
     if ui.progress(f"Deleting the branch {branch}…", delete):
         ui.ok(f"Branch deleted: {branch}")
-        return
+        return True
 
     ui.warn(f"Branch kept: {branch}")
     ui.detail(f"  Delete it yourself with: git -C {repo} branch -D {branch}")
+    return False

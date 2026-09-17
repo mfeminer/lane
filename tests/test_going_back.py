@@ -182,10 +182,10 @@ def test_the_menu_has_quit_and_not_a_duplicate_back(projects_root: Path, lanes_r
     offered: list[str] = []
 
     class Recording(FakeUi):
-        def choose(self, title, options, *, back="Back", on_render=None):  # type: ignore[no-untyped-def]
+        def choose(self, title, options, **rest):  # type: ignore[no-untyped-def]
             if not title:
                 offered.extend(o.label for o in options)
-            return super().choose(title, options, back=back, on_render=on_render)
+            return super().choose(title, options, **rest)
 
     ui = Recording(["quit"])
     session.run(_context(ui, projects_root, lanes_root))

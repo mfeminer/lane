@@ -198,7 +198,13 @@ the top of a scrolling screen.
 
 
 class Ui(Protocol):
-    """Asking and telling. Both are presentation; an action needs both."""
+    """Asking and telling. Both are presentation; an action needs both.
+
+    **Every asking method takes a `key`, and the real implementations ignore it.** It
+    names the question — not the title, which is prose §8 expects to be reworded —
+    so that a flag on the command line can answer it before it is ever drawn
+    (`cli.answers.Prefilled`). A prompt with no key can only ever be asked.
+    """
 
     # -- asking --------------------------------------------------------------
     def choose[T](
@@ -208,6 +214,7 @@ class Ui(Protocol):
         *,
         back: str | None = BACK_LABEL,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> T:
         """Pick one option. A lone candidate is auto-selected without prompting.
 
@@ -230,6 +237,7 @@ class Ui(Protocol):
         fill: Fill | None = None,
         cursor: int = 0,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> tuple[T, int]:
         """A table with a cursor over it: the row under the cursor, and where it was.
 
@@ -258,6 +266,7 @@ class Ui(Protocol):
         fill: Fill | None = None,
         finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
     ) -> Answers[T]:
         """Every leaf that was answered, and which way, when `apply` was chosen.
 
@@ -302,6 +311,7 @@ class Ui(Protocol):
         title: str,
         *,
         default: str = "",
+        key: str = "",
     ) -> str:
         """Free text. `q` is ordinary input here; `Ctrl-C` quits lane."""
         ...
@@ -311,6 +321,7 @@ class Ui(Protocol):
         title: str,
         *,
         default: bool = False,
+        key: str = "",
     ) -> bool:
         """Yes or no. `Ctrl-C` quits lane."""
         ...
@@ -322,6 +333,21 @@ class Ui(Protocol):
     def error(self, text: str) -> None: ...
     def detail(self, text: str) -> None:
         """Secondary, dimmed. Paths, hints, URLs."""
+        ...
+
+    def table(
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Sequence[Row[object]],
+    ) -> None:
+        """A table **printed**, for a caller that cannot stand in one.
+
+        Telling, not asking — which is the whole difference from `browse`. `lane list`
+        in a pipe has no cursor to move and nowhere to go back to, so it gets the rows
+        and the same column rules and nothing else. The layout is shared with `browse`
+        rather than written twice (docs/CONVENTIONS.md §13).
+        """
         ...
 
     def heading(self, text: str) -> None: ...
