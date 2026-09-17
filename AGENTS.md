@@ -931,6 +931,26 @@ One thing that *was* broken: `_load_clonefile()` called `ctypes.CDLL(None)`, whi
 raises **`TypeError`** on Windows — not the `OSError` or `AttributeError` it caught —
 at **import time**, so lane did not start there at all. It now asks only on macOS.
 
+### What comes back from git and gh is UTF-8, and has to be read that way
+
+`subprocess`'s `text=True` decodes with the **locale** encoding. On macOS and Linux that
+is UTF-8 and nobody notices; on Windows it is a code page, and `ünïcode näme.txt` came
+back from `git status` as `Ã¼nÃ¯code nÃ¤me.txt` — not a path anything can act on, and not
+a name anybody can read. lane exists partly to handle names typed in whatever language
+somebody thinks in, so this is a defect at the centre of the thing rather than an edge.
+
+Both `git/cli_backend.py` and `github/gh_client.py` now pass `encoding="utf-8",
+errors="replace"`: git writes paths and messages as UTF-8 (which is what forcing
+`core.quotePath=false` is for), and `gh --json` answers in UTF-8. `replace` rather than
+`strict` because a path that is not valid UTF-8 is a reason to show it oddly, never a
+reason for lane to stop working.
+
+**A user's configured command is deliberately left alone.** `prepare/apply.run` captures
+whatever some tool printed, and on Windows that really is the console's code page — so
+`text=True` is the right guess there and UTF-8 would be the wrong one. The rule is: read
+UTF-8 where the format says UTF-8, and read the platform's where the platform's is what
+was written.
+
 ### Splitting a configured command
 
 `shlex.split` defaults to POSIX rules, where a **backslash escapes the next
@@ -2030,6 +2050,8 @@ All of it arrived at test-first:
 - Ctrl-C during a spinner quitting lane, Ctrl-C inside an action being reported with
   what might be half-done and *then* quitting, Ctrl-C at a bare menu prompt still
   quitting, and the boundary exiting `130` rather than tracing back
+- a non-ASCII path coming back from git readable rather than mojibake, and both git and
+  gh being asked for UTF-8 explicitly rather than the machine's code page
 - git running outside lane's process group, so the terminal's Ctrl-C cannot reach it —
   and, on Windows, a detached child really founding its own process group, asserted by
   addressing a console control event to it; plus every spawn in lane passing whichever

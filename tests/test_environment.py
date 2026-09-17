@@ -201,3 +201,41 @@ def test_the_app_bundle_fallback_is_still_consulted_on_macos(
     real.launch_editor("cursor", tmp_path)
 
     assert asked == [Path("/Applications/Cursor.app")]
+
+
+# -- what comes back from git and gh is UTF-8, whatever the machine's locale is ----
+
+
+def test_git_output_is_read_as_utf8_rather_than_the_machines_code_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """lane exists partly to handle names typed in whatever language somebody thinks
+    in, so this is not a nicety.
+
+    git writes paths and messages as UTF-8 — lane forces `core.quotePath=false` to get
+    them unescaped — but Python's text mode decodes with the *locale* encoding, and on
+    Windows that is a code page. `ünïcode näme.txt` came back as `Ã¼nÃ¯code nÃ¤me.txt`,
+    which is not a path anything can act on and not a name anybody can read.
+    """
+    from lane.git.cli_backend import CliGitBackend
+
+    seen = _capture(monkeypatch, "run")
+    CliGitBackend().is_repository(tmp_path)
+
+    assert seen
+    for kwargs in seen:
+        assert kwargs["encoding"] == "utf-8", "never the locale's code page"
+
+
+def test_gh_output_is_read_as_utf8_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A pull request title is prose somebody wrote, and `gh --json` answers in UTF-8."""
+    from lane.github.gh_client import GhClient
+
+    seen = _capture(monkeypatch, "run")
+    GhClient("definitely-not-a-real-gh").pull_request_for(
+        branch="feature/x", remote_url="git@github.com:acme/thing.git", cwd=tmp_path
+    )
+
+    assert seen
+    for kwargs in seen:
+        assert kwargs["encoding"] == "utf-8"

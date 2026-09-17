@@ -72,7 +72,17 @@ class CliGitBackend:
                 command,
                 input=stdin,
                 capture_output=True,
-                text=True,
+                # **UTF-8, not the machine's locale.** git writes paths and messages as
+                # UTF-8 — `core.quotePath=false` above is what gets them unescaped — but
+                # `text=True` alone decodes with the locale encoding, which on Windows is
+                # a code page. `ünïcode näme.txt` came back `Ã¼nÃ¯code nÃ¤me.txt`: not a
+                # path anything can act on, and not a name anybody can read. lane exists
+                # partly to handle names typed in whatever language somebody thinks in,
+                # so this is not a nicety. `replace` rather than `strict` because a path
+                # that is not valid UTF-8 is a reason to show it oddly, never a reason
+                # for lane to stop working.
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 env=self._env(),
                 check=False,

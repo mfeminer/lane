@@ -130,7 +130,11 @@ class GhClient:
                 ],
                 cwd=cwd,
                 capture_output=True,
-                text=True,
+                # UTF-8 for the reason the git backend gives: a pull request title is
+                # prose somebody wrote, `gh --json` answers in UTF-8, and `text=True`
+                # alone would decode it with the machine's code page.
+                encoding="utf-8",
+                errors="replace",
                 timeout=_TIMEOUT,
                 check=False,
             )
