@@ -7,6 +7,7 @@ on PATH that prints what a real `gh` would.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,16 +22,39 @@ from lane.github.client import (
     PullRequest,
     found,
 )
-from lane.github.gh_client import GhClient
+from lane.github.gh_client import GhClient, install_remedy
 from lane.state import State, StateStore
 
 
 def _fake_gh(tmp_path: Path, *, stdout: str = "", stderr: str = "", code: int = 0) -> str:
-    """A stand-in `gh` on disk. Never contacts GitHub."""
-    script = tmp_path / "fake-gh"
-    script.write_text(
-        f"#!/bin/sh\ncat <<'OUT'\n{stdout}\nOUT\ncat >&2 <<'ERR'\n{stderr}\nERR\nexit {code}\n"
+    """A stand-in `gh` on disk. Never contacts GitHub.
+
+    Python with a launcher rather than `/bin/sh` with a shebang: a shebang is a POSIX
+    convention, and Windows answers `[WinError 193] %1 is not a valid Win32 application`
+    to being asked to execute one — so every test here used to fail there for a reason
+    that had nothing to do with what it was asserting.
+
+    What the shim should say is written to files beside it rather than quoted into the
+    script, which keeps a JSON payload full of braces and quotation marks out of two
+    different escaping regimes.
+    """
+    out, err = tmp_path / "fake-gh.out", tmp_path / "fake-gh.err"
+    out.write_text(f"{stdout}\n", encoding="utf-8")
+    err.write_text(f"{stderr}\n", encoding="utf-8")
+    body = (
+        "import sys, pathlib\n"
+        f"sys.stdout.write(pathlib.Path(r'{out}').read_text(encoding='utf-8'))\n"
+        f"sys.stderr.write(pathlib.Path(r'{err}').read_text(encoding='utf-8'))\n"
+        f"raise SystemExit({code})\n"
     )
+    if sys.platform == "win32":
+        script = tmp_path / "fake-gh.py"
+        script.write_text(body, encoding="utf-8")
+        launcher = tmp_path / "fake-gh.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        return str(launcher)
+    script = tmp_path / "fake-gh"
+    script.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
     return str(script)
 
@@ -163,7 +187,7 @@ def test_dependents_that_cannot_be_asked_about_are_cannot_tell(tmp_path: Path) -
     )
 
     assert isinstance(answer, CannotTell)
-    assert answer.remedy == "brew install gh"
+    assert answer.remedy == install_remedy()
 
 
 def test_a_detached_lane_has_no_branch_for_anything_to_be_based_on(tmp_path: Path) -> None:
@@ -185,7 +209,7 @@ def test_gh_missing_says_how_to_install_it(tmp_path: Path) -> None:
 
     assert isinstance(answer, CannotTell)
     assert answer.reason == "gh-missing"
-    assert answer.remedy == "brew install gh"
+    assert answer.remedy == install_remedy()
 
 
 def test_gh_logged_out_says_how_to_log_in(tmp_path: Path) -> None:
@@ -302,6 +326,8 @@ def test_the_work_landed_only_when_something_merged_and_nothing_is_open(
 
 
 def test_state_remembers_the_last_project(xdg: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("a mode says nothing here — see config.keep_private")
     store = StateStore()
 
     store.remember_project("Acme.Widgets")

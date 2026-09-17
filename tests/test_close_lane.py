@@ -7,7 +7,6 @@ separately. That is what makes one stub sufficient.
 
 from __future__ import annotations
 
-import os
 import signal
 import time
 from collections.abc import Callable, Sequence
@@ -1158,7 +1157,11 @@ class InterruptingUi(FakeUi):
 
     def progress[T](self, text: str, work: Callable[[], T]) -> T:
         if self._at in text.lower():
-            os.kill(os.getpid(), signal.SIGINT)
+            # `signal.raise_signal`, not `os.kill(os.getpid(), SIGINT)`: on Windows
+            # `os.kill` understands only the two console control events and anything
+            # else there is a `TerminateProcess` — so the POSIX spelling would not
+            # deliver a signal, it would kill the test runner. See tests/test_interrupts.py.
+            signal.raise_signal(signal.SIGINT)
             time.sleep(0.01)
         return super().progress(text, work)
 

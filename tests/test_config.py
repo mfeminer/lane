@@ -27,6 +27,8 @@ def test_config_lives_under_xdg_config_home(xdg: Path) -> None:
 def test_config_falls_back_to_dot_config_when_xdg_is_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("the fallback there is %APPDATA% — see the Windows tests below")
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
 

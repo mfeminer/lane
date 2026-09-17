@@ -15,6 +15,7 @@ from lane.actions import doctor, open_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
+from lane.github.gh_client import install_remedy
 from lane.lanes import LaneStore
 from lane.prefixes import DEFAULT_PREFIXES, BranchPrefixStore
 from lane.prepare import Candidate, Step, Verb, apply
@@ -91,7 +92,7 @@ def test_doctor_says_how_to_install_gh_and_that_everything_else_still_works(
 
     doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root, environment=no_gh))
 
-    assert ui.said("brew install gh")
+    assert ui.said(install_remedy())
     assert ui.said("Everything else")
 
 

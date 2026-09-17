@@ -315,19 +315,26 @@ def test_clonefile_is_not_even_looked_for_off_macos(monkeypatch: pytest.MonkeyPa
 
 def test_clonefile_is_still_looked_for_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """And the gate must not be so tight that macOS stops asking — which would turn
-    every clone into a real copy without a word about it."""
+    every clone into a real copy without a word about it.
+
+    The library is stood in for rather than opened: `CDLL(None)` is the very call that
+    raises on Windows, so really making it here would fail this test for the reason the
+    gate exists to avoid."""
     asked: list[object] = []
-    real = ctypes.CDLL
+
+    class _NoSuchSymbol:
+        def __getattr__(self, name: str) -> object:
+            raise AttributeError(name)
 
     def watching(*args: object, **kwargs: object) -> object:
+        del kwargs
         asked.append(args)
-        return real(*args, **kwargs)  # type: ignore[arg-type]
+        return _NoSuchSymbol()
 
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(ctypes, "CDLL", watching)
 
-    apply._load_clonefile()
-
+    assert apply._load_clonefile() is None, "this stand-in has no clonefile"
     assert asked, "macOS must still look for the symbol"
 
 

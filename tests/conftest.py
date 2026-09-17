@@ -24,12 +24,24 @@ _IDENTITY = (
     ("user.name", "lane tests"),
     ("commit.gpgsign", "false"),
     ("gc.auto", "0"),
+    # Git for Windows installs with `core.autocrlf=true`, so a file committed with
+    # LF is checked out with CRLF and then differs from its own blob — every file in
+    # a fresh clone reads as modified, and a fixture repository that is dirty the
+    # moment it exists is not the repository these tests think they are asserting
+    # against. Set on the repository so the worktrees lane adds inherit it.
+    ("core.autocrlf", "false"),
+    ("core.eol", "lf"),
 )
+
+# The same two, forced on every fixture invocation — including `clone` and `init`,
+# which do their checkout *before* there is a repository to configure.
+_FORCED = ("core.autocrlf=false", "core.eol=lf")
 
 
 def git(args: list[str], cwd: Path | None = None) -> str:
+    forced = [flag for setting in _FORCED for flag in ("-c", setting)]
     done = subprocess.run(
-        ["git", *args],
+        ["git", *forced, *args],
         cwd=cwd,
         capture_output=True,
         text=True,

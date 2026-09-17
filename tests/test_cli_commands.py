@@ -156,7 +156,7 @@ def test_list_as_json_is_one_array_carrying_what_the_table_shows(
         "url": None,
         "detail": "origin is not a GitHub remote",
     }
-    assert one["path"].endswith("demo/pager")
+    assert one["path"].endswith(str(Path("demo") / "pager"))
 
 
 def test_list_with_no_lanes_is_an_empty_array_and_a_clean_exit(
@@ -338,7 +338,7 @@ def test_open_as_json_reports_the_outcome_and_keeps_stdout_to_itself(
     assert opened["lane"] == "fix-the-pager"
     assert opened["branch"] == "feature/fix-the-pager"
     assert opened["detached"] is False
-    assert opened["path"].endswith("demo/fix-the-pager")
+    assert opened["path"].endswith(str(Path("demo") / "fix-the-pager"))
     assert len(opened["start"]) == 40
     assert opened["editor"]["launched"] is False
 
