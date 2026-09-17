@@ -821,12 +821,15 @@ Rules for the implementation:
 lane runs on macOS and on Windows. Linux is not built or tested, and nothing here
 assumes it never will be.
 
-**The differences live in four places and nowhere else**, which is the property worth
-protecting: `environment.py` (spawning a child, launching an editor), `config.py`
-(where files go, and what keeps them private), `prepare/apply.py` (copy-on-write) and
-the two workflows. Everything else in lane is one code path. Where a platform branch was
-avoidable it was avoided — `measure()` lost its `du` subprocess rather than growing a
-branch around it.
+**The differences live in a short list of named places**, which is the property worth
+protecting. Three of them *do* something differently — `environment.py` (spawning a
+child, launching an editor), `config.py` (where files go and what keeps them private),
+`prepare/apply.py` (copy-on-write, and how a configured command is split). Three only
+*say* something differently, because a sentence has to be true on the machine it is
+shown on (docs/CONVENTIONS.md §11) — `actions/doctor.py`, `actions/config.py` and
+`github/gh_client.py`. The workflows are the seventh. Everything else in lane is one
+code path, and where a platform branch was avoidable it was avoided: `measure()` lost
+its `du` subprocess rather than growing a branch around it.
 
 **Every branch is spelled `sys.platform == "win32"` or `== "darwin"`, literally.** Not
 `os.name`, not a helper returning a string. mypy narrows on exactly that form, which is

@@ -14,7 +14,14 @@ wanted it is its own decision, made on its own merits.
 
 [pkgs]: https://github.com/microsoft/winget-pkgs
 
-## Why the manifests live here
+## Why the generator lives here and the manifests do not
+
+`generate.py` is committed; `manifests/` is gitignored. Same reasoning as
+`src/lane/_version.py`: the manifest carries a version number and a hash, and a second
+copy of a version number in the tree is only ever wrong later. What is worth keeping is
+the thing that can rewrite them correctly from the release.
+
+## Why the generator lives here at all
 
 Same reason the Homebrew formula does not: winget's catalogue is not ours to hold.
 The files in `manifests/` are the **source** for what gets submitted, kept beside the

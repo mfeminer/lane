@@ -10,3 +10,9 @@ dist/
 
 # Generated from the git tag by hatch-vcs at install/build time.
 src/lane/_version.py
+
+# Written by `make winget` from a published release, and carrying that release's
+# version and the asset's sha256. Generated for the same reason `_version.py` is:
+# a second copy of a version number in the tree is only ever wrong later. The
+# published copy lives in microsoft/winget-pkgs.
+packaging/winget/manifests/
