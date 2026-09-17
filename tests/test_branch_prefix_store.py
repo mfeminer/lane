@@ -10,7 +10,10 @@ no environment override and no validation of its own.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
+
+import pytest
 
 from lane.config import ConfigStore
 from lane.prefixes import DEFAULT_PREFIXES, BranchPrefixStore
@@ -56,6 +59,8 @@ def test_a_customised_list_round_trips_and_replaces_the_seed(tmp_path: Path) -> 
 
 def test_the_file_is_private_in_a_private_directory(tmp_path: Path) -> None:
     """Same modes as the config and `prepare.toml`, in the same 0700 directory."""
+    if sys.platform == "win32":
+        pytest.skip("a mode says nothing here — see config.keep_private")
     store = _store(tmp_path)
     store.save(("feature",))
 

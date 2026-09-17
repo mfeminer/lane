@@ -17,6 +17,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+from lane.environment import detached_child
 from lane.git.backend import BranchRef, FetchResult, GitError, WorktreeStatus
 from lane.paths import same_directory
 
@@ -71,17 +72,26 @@ class CliGitBackend:
                 command,
                 input=stdin,
                 capture_output=True,
-                text=True,
+                # **UTF-8, not the machine's locale.** git writes paths and messages as
+                # UTF-8 — `core.quotePath=false` above is what gets them unescaped — but
+                # `text=True` alone decodes with the locale encoding, which on Windows is
+                # a code page. `ünïcode näme.txt` came back `Ã¼nÃ¯code nÃ¤me.txt`: not a
+                # path anything can act on, and not a name anybody can read. lane exists
+                # partly to handle names typed in whatever language somebody thinks in,
+                # so this is not a nicety. `replace` rather than `strict` because a path
+                # that is not valid UTF-8 is a reason to show it oddly, never a reason
+                # for lane to stop working.
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 env=self._env(),
                 check=False,
                 # Out of lane's process group, so the terminal's Ctrl-C reaches lane
-                # and nothing else. Otherwise a removal in flight is killed half-way
-                # whatever lane decides to do with its own copy of the signal, and
-                # deferring it (`lane.interrupts`) would buy nothing. lane still owns
-                # the child's lifetime: an interrupt lane does not defer unwinds
-                # `subprocess.run`, which kills it on the way out.
-                start_new_session=True,
+                # and nothing else. `lane.environment` owns the spelling because the
+                # two platforms do not share one — and because Windows takes the POSIX
+                # keyword without complaint and ignores it, which would leave this
+                # looking correct while isolating nothing.
+                **detached_child(),
             )
         except FileNotFoundError as exc:
             raise GitError(f"git is not installed: {exc}") from exc

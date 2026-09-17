@@ -5,22 +5,41 @@ name: CD
 # requests merged since the previous tag — so a release needs nothing committed
 # and nothing edited, and there is no second copy of the version to disagree.
 #
-# It **rebuilds** rather than publishing the artifact `build.yml` already made for
+# It **rebuilds** rather than publishing the artifacts `build.yml` already made for
 # this commit, and that is not an oversight to tidy up: the version is derived from
 # `git describe`, so a binary built on main before the tag existed reports
 # `0.0.2.post1.dev0+g1a2b3c4` and not the version being released. Reusing it would
 # ship every release labelled as an unreleased development build. Two minutes of
 # rebuild is the price of the tag check below meaning anything at all.
+#
+# **Two jobs, because there are now two assets.** Building is per-platform and
+# publishing is not: a matrix that also published would have each runner racing to
+# create the same release, and whichever lost would have to adopt what the other made.
+# So each platform builds, checks and hands its binary over as an artifact, and one
+# job afterwards attaches both to one release.
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write # to create the release
+  contents: read
 
 jobs:
-  release:
-    runs-on: macos-14
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            binary: dist/lane
+            asset: lane-macos-arm64
+          - runner: windows-latest
+            binary: dist/lane.exe
+            asset: lane-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
         with:
@@ -37,25 +56,11 @@ jobs:
         run: uv sync --locked
 
       - name: Make the build reproducible
-        # Two builds of the same commit must produce a byte-identical binary, because
-        # a published Homebrew formula pins that binary's sha256. `cd.yml` re-uploads
-        # with --clobber when a release already exists, and that re-upload comes from
-        # a rebuild — so a rerun against an already-pinned tag would otherwise change
-        # the hash and break `brew install` for everyone, with no version change to
-        # explain it.
-        #
-        # PYTHONHASHSEED is the one that does the work, and it was not the obvious
-        # suspect. Python randomises string hashing per process, PyInstaller walks a
-        # *set* of modules when it writes base_library.zip, so the zip's member order
-        # changed between runs — same 155 members, same contents, same timestamps,
-        # different order, therefore a different archive and a different sha256.
-        #
-        # SOURCE_DATE_EPOCH is the documented knob for this and is set too, but
-        # measured on macOS it changes nothing on its own: two builds with it set and
-        # PYTHONHASHSEED unset still differed. It is kept because it costs nothing,
-        # it covers the timestamp path PyInstaller fixed in 4.8, and it is what a
-        # future toolchain change is most likely to start honouring. `make repro`
-        # checks the pair actually still holds.
+        # The reasoning, and what it is and is not worth on each platform, is in
+        # `build.yml` beside the same step. Short version: PYTHONHASHSEED is what makes
+        # macOS byte-identical between builds, Windows is not byte-identical even with
+        # both set, and the rule that protects a published asset's pinned sha256 on
+        # either platform is that a released tag is never rebuilt.
         run: |
           {
             echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct)"
@@ -63,13 +68,14 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build the binary
+        # See `build.yml` beside the same step: `make build` on both platforms.
         run: make build
 
       - name: Smoke test the binary
         run: |
-          ./dist/lane --version
-          ./dist/lane --help
-          if ./dist/lane < /dev/null; then
+          "./${{ matrix.binary }}" --version
+          "./${{ matrix.binary }}" --help
+          if "./${{ matrix.binary }}" < /dev/null; then
             echo "expected a non-zero exit without a TTY" >&2
             exit 1
           fi
@@ -78,24 +84,47 @@ jobs:
         # `--version` prints "lane <version> (build <fingerprint>)". If this ever
         # disagrees with the tag, the version derivation is broken and every
         # published binary would be mislabelled — which is invisible until
-        # someone reports a bug against the wrong version.
+        # someone reports a bug against the wrong version. Asked of **each**
+        # platform's binary: they are built by different toolchains from the same
+        # tag, and one of them getting it wrong is exactly what this catches.
         run: |
           version="${GITHUB_REF_NAME#v}"
-          built="$(./dist/lane --version | awk '{print $2}')"
+          built="$("./${{ matrix.binary }}" --version | awk '{print $2}')"
           if [ "$built" != "$version" ]; then
-            echo "::error::binary reports $built, tag says $version" >&2
+            echo "::error::${{ matrix.asset }} reports $built, tag says $version" >&2
             exit 1
           fi
-          echo "binary reports $built, matching $GITHUB_REF_NAME"
-          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "${{ matrix.asset }} reports $built, matching $GITHUB_REF_NAME"
 
       - name: Name the asset for the platform it was built for
-        run: cp dist/lane "lane-macos-arm64"
+        run: cp "${{ matrix.binary }}" "${{ matrix.asset }}"
+
+      - name: Hand the binary to the publishing job
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    # Only after **every** platform has built and matched the tag. A release carrying
+    # one of its two binaries is worse than a release that failed: the missing one is
+    # what a user's install command asks for, and nothing says why it is not there.
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release
+    steps:
+      - name: Collect every platform's binary
+        uses: actions/download-artifact@v7
+        with:
+          path: assets
+          merge-multiple: true
 
       - name: Publish the release
-        # The binary is the whole point of the release, so this step's job is to make
-        # sure it is attached — not to insist on being the thing that created the
-        # release.
+        # The binaries are the whole point of the release, so this step's job is to
+        # make sure they are attached — not to insist on being the thing that created
+        # the release.
         #
         # A release can already exist for this tag by the time this runs, in two ways
         # that both used to fail here. **Publishing a release from GitHub's web UI
@@ -108,20 +137,23 @@ jobs:
         #
         # Adopting an existing release is therefore the correct behaviour rather than a
         # workaround: it makes this step idempotent, and the tag check above is still
-        # what guarantees the binary being attached is the right one. Notes and title
-        # are left alone — whoever created the release chose them, and clobbering
+        # what guarantees the binaries being attached are the right ones. Notes and
+        # title are left alone — whoever created the release chose them, and clobbering
         # hand-written notes to impose the generated ones would destroy the more
         # considered of the two.
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          ls -la assets
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "A release for $GITHUB_REF_NAME exists already — attaching the binary to it."
-            gh release upload "$GITHUB_REF_NAME" "lane-macos-arm64" --clobber
+            echo "A release for $GITHUB_REF_NAME exists already — attaching the binaries to it."
+            gh release upload "$GITHUB_REF_NAME" assets/* --clobber
             if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
               # A draft is somebody's deliberate "not yet", so it is not published from
               # here — but a draft nobody notices is a release nobody can download.
-              echo "::warning::$GITHUB_REF_NAME is still a draft. Publish it to make the binary downloadable."
+              echo "::warning::$GITHUB_REF_NAME is still a draft. Publish it to make the binaries downloadable."
             fi
             exit 0
           fi
@@ -129,6 +161,6 @@ jobs:
           # --generate-notes asks GitHub for the pull requests merged since the
           # previous tag, grouped by the labels in .github/release.yml.
           gh release create "$GITHUB_REF_NAME" \
-            "lane-macos-arm64" \
-            --title "lane $VERSION" \
+            assets/* \
+            --title "lane ${GITHUB_REF_NAME#v}" \
             --generate-notes

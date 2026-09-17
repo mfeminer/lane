@@ -1,10 +1,10 @@
 name: Build
 
-# Every merge to main produces a binary, and this is the only workflow that runs
-# on main. It deliberately does **not** run the test suite: the pull request that
-# produced the commit ran lint, types and tests before it was allowed to merge,
-# and a second pass over the same tree can only ever fail for a reason the merge
-# did not introduce.
+# Every merge to main produces a binary for each platform lane ships, and this is the
+# only workflow that runs on main. It deliberately does **not** run the test suite: the
+# pull request that produced the commit ran lint, types and tests before it was allowed
+# to merge, and a second pass over the same tree can only ever fail for a reason the
+# merge did not introduce.
 on:
   push:
     branches: [main]
@@ -14,7 +14,25 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    # One job description, two platforms. A matrix rather than two copies because
+    # everything below except the runner and the two names is identical, and the way
+    # these drift is somebody fixing one of them.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            binary: dist/lane
+            asset: lane-macos-arm64
+          - runner: windows-latest
+            binary: dist/lane.exe
+            asset: lane-windows-x86_64.exe
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        # Explicit, because Windows would otherwise use PowerShell and these steps are
+        # written once for both. `bash` is on the Windows runner as Git's.
+        shell: bash
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,25 +49,25 @@ jobs:
         run: uv sync --locked
 
       - name: Make the build reproducible
-        # Two builds of the same commit must produce a byte-identical binary, because
-        # a published Homebrew formula pins that binary's sha256. `cd.yml` re-uploads
-        # with --clobber when a release already exists, and that re-upload comes from
-        # a rebuild — so a rerun against an already-pinned tag would otherwise change
+        # Two builds of the same commit produce a byte-identical binary **on macOS**,
+        # because a published Homebrew formula pins that binary's sha256, `cd.yml`
+        # re-uploads with --clobber when a release already exists, and that re-upload
+        # comes from a rebuild — so a rerun against an already-pinned tag would change
         # the hash and break `brew install` for everyone, with no version change to
-        # explain it.
+        # explain it. A winget manifest pins a sha256 the same way.
         #
-        # PYTHONHASHSEED is the one that does the work, and it was not the obvious
+        # PYTHONHASHSEED is the one that does the work there, and it was not the obvious
         # suspect. Python randomises string hashing per process, PyInstaller walks a
         # *set* of modules when it writes base_library.zip, so the zip's member order
         # changed between runs — same 155 members, same contents, same timestamps,
         # different order, therefore a different archive and a different sha256.
         #
-        # SOURCE_DATE_EPOCH is the documented knob for this and is set too, but
-        # measured on macOS it changes nothing on its own: two builds with it set and
-        # PYTHONHASHSEED unset still differed. It is kept because it costs nothing,
-        # it covers the timestamp path PyInstaller fixed in 4.8, and it is what a
-        # future toolchain change is most likely to start honouring. `make repro`
-        # checks the pair actually still holds.
+        # **On Windows it is measured and it does not hold**, with both settings on: the
+        # same 155 members come out in a different order anyway. SOURCE_DATE_EPOCH does
+        # do its documented job there — the PE header timestamp is identical between
+        # builds — so both are set on both platforms, and what protects the Windows
+        # asset is the standing rule that a published tag is never rebuilt. See
+        # AGENTS.md, *Reproducibility is one platform's guarantee, not two*.
         run: |
           {
             echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct)"
@@ -57,6 +75,9 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build the binary
+        # `make build` on both, so there is one definition of how lane is built.
+        # GNU Make is on the windows-latest image and picks up Git's `sh`, which was
+        # measured before this was written rather than assumed.
         run: make build
 
       - name: Smoke test the binary
@@ -65,28 +86,28 @@ jobs:
         # already passed it; it is repeated here because the thing being built is
         # the merge commit, which no pull request ever built.
         run: |
-          ./dist/lane --version
-          ./dist/lane --help
+          "./${{ matrix.binary }}" --version
+          "./${{ matrix.binary }}" --help
           # And it must still refuse cleanly when there is no terminal.
-          if ./dist/lane < /dev/null; then
+          if "./${{ matrix.binary }}" < /dev/null; then
             echo "expected a non-zero exit without a TTY" >&2
             exit 1
           fi
 
       - name: Name the asset for the platform it was built for
-        run: cp dist/lane "lane-macos-arm64"
+        run: cp "${{ matrix.binary }}" "${{ matrix.asset }}"
 
       - name: Publish the artifact
         # An unreleased build of main, for trying something that has landed but
         # not shipped. GitHub serves artifacts as zips, which do not carry the
-        # executable bit — a download needs `chmod +x` before it will run. This is
-        # not what a release publishes: a release rebuilds from the tag, because
+        # executable bit — a macOS download needs `chmod +x` before it will run. This
+        # is not what a release publishes: a release rebuilds from the tag, because
         # the version is derived from the tag and a binary built before the tag
         # existed cannot report it. See *Releasing* in AGENTS.md.
         uses: actions/upload-artifact@v7
         with:
-          name: lane-macos-arm64
-          path: lane-macos-arm64
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
           # 90 days is also the default; stated so that a change to the
           # repository-wide default cannot quietly shorten it.
           retention-days: 90

@@ -47,11 +47,8 @@ from pathlib import Path
 
 import tomli_w
 
-from lane.config import CONFIG_VERSION, config_home
+from lane.config import CONFIG_VERSION, config_home, keep_private, keep_private_directory
 from lane.prepare import Step, Verb
-
-_DIR_MODE = 0o700
-_FILE_MODE = 0o600
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,13 +99,13 @@ class PrepareStore:
     # -- writing -------------------------------------------------------------
     def save(self, steps: Sequence[Step]) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._dir.chmod(_DIR_MODE)
+        keep_private_directory(self._dir)
         body: dict[str, object] = {"version": CONFIG_VERSION}
         recorded = [_write_step(step) for step in steps if step.usable]
         if recorded:
             body["step"] = recorded
         self.path.write_text(tomli_w.dumps(body), encoding="utf-8")
-        self.path.chmod(_FILE_MODE)
+        keep_private(self.path)
 
     def remember(self, project: str, steps: Sequence[Step]) -> None:
         """Replace one project's answers, leaving every other project's alone."""

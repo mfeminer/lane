@@ -702,7 +702,8 @@ already solved that.
 - **Enforced where it is used, not at startup.** Closing a lane is the only thing
   that needs `gh`, and only for lanes that actually have a GitHub remote and a
   branch. If such a lane cannot be checked because `gh` is missing or logged out,
-  that close is refused with exactly how to fix it (`brew install gh`,
+  that close is refused with exactly how to fix it (`brew install gh` — `winget install
+  GitHub.cli` on Windows, because a remedy nobody can run is worse than none;
   `gh auth login`). Everything else — including closing a lane whose remote is not
   GitHub — carries on unaffected. Doctor reports the state up front so it is never
   a surprise.
@@ -815,6 +816,190 @@ Rules for the implementation:
   a genuine last resort — and if all of that fails, **say so rather than guessing
   `main`**.
 
+## The three platforms, and where they differ
+
+lane runs on macOS and on Windows. Linux is not built or tested, and nothing here
+assumes it never will be.
+
+**The differences live in a short list of named places**, which is the property worth
+protecting. Three of them *do* something differently — `environment.py` (spawning a
+child, launching an editor), `config.py` (where files go and what keeps them private),
+`prepare/apply.py` (copy-on-write, and how a configured command is split). Three only
+*say* something differently, because a sentence has to be true on the machine it is
+shown on (docs/CONVENTIONS.md §11) — `actions/doctor.py`, `actions/config.py` and
+`github/gh_client.py`. The workflows are the seventh. Everything else in lane is one
+code path, and where a platform branch was avoidable it was avoided: `measure()` lost
+its `du` subprocess rather than growing a branch around it.
+
+**Every branch is spelled `sys.platform == "win32"` or `== "darwin"`, literally.** Not
+`os.name`, not a helper returning a string. mypy narrows on exactly that form, which is
+what lets it type-check `subprocess.CREATE_NEW_PROCESS_GROUP` on a machine that has
+never heard of it. Two consequences worth knowing before writing one:
+
+- Write the branch so the platform mypy is checking for is the **fall-through**. With
+  `warn_unreachable` on, `if sys.platform == "darwin": return x` makes everything after
+  it unreachable when mypy runs on macOS, and that is an error. `if sys.platform !=
+  "darwin": return y` is the same logic with the check suppressed instead.
+- A test that fakes the platform runs the other branch for real, so anything that
+  branch *names* must exist on both. `environment._CREATE_NEW_PROCESS_GROUP` is written
+  out as `0x200` for exactly that reason, with a Windows-only test asserting it is the
+  value `subprocess` actually defines.
+
+### A child process the terminal's Ctrl-C cannot reach
+
+`start_new_session=True` is **accepted and silently ignored on Windows** — CPython's
+`_execute_child` there names its parameter `unused_start_new_session`. It does not
+raise, it does not warn, and the isolation lane's whole Ctrl-C story rests on simply
+does not happen. The Windows equivalent is a different keyword,
+`creationflags=CREATE_NEW_PROCESS_GROUP`, and a process created with it does not
+receive the console's Ctrl-C.
+
+`environment.detached_child()` owns that choice and **every spawn asks it** — the git
+backend, `prepare/apply.py`'s configured command, `tool_version`, and both editor
+launches. Forgetting one call site is how a `git worktree remove` in flight gets killed
+half-way, which is the one thing `interrupts.py` exists to prevent, so the tests assert
+the keywords each of those actually passes rather than trusting a reading.
+
+`interrupts.py` itself needed nothing: Windows Python has caught console Ctrl-C as
+`SIGINT` on the main thread for a long time, and `signal.signal`, `default_int_handler`
+and the deferral all behave the same. Its **test** did need something — `os.kill(pid,
+SIGINT)` on Windows is a `TerminateProcess`, so the POSIX spelling would not have
+delivered a signal, it would have killed the test runner. `signal.raise_signal` is the C
+`raise()` on both.
+
+### File permissions are not one thing on two platforms
+
+`config.toml`, `prepare.toml`, `branch_prefixes.toml` and `state.toml` are written
+`0600` in a `0700` directory because they describe where a project keeps things it
+deliberately kept out of git. That is a stated security property, so what happens to it
+on Windows is a decision rather than a detail.
+
+**Measured on a real Windows runner: `chmod` does nothing.** After `chmod(0o600)` the
+mode reads back `0o666` and the file is still writable. `Path.chmod` there toggles a
+read-only attribute at best; Windows' real access control is the ACL.
+
+**The decision: accept it, rely on the profile, and say so.** `%APPDATA%` and
+`%LOCALAPPDATA%` live under `C:\Users\<you>`, whose ACL grants that user, SYSTEM and
+Administrators and nothing to other standard users. That is the same guarantee `0600`
+gives on macOS, where root reads everything too — so the protection is real, it is just
+**inherited** rather than set. lane therefore does not call `chmod` on Windows (code
+that looks like a safeguard and is not is worse than no code) and does not take on
+`pywin32` or shell out to `icacls` to impose a DACL of its own: a new dependency, or a
+subprocess on every save, to duplicate what the profile already provides.
+
+What lane does instead is **say which of the two is doing the work**. doctor reports it,
+and warns when the config directory is outside the profile — the one way the Windows
+answer actually stops holding, and reachable by pointing `XDG_CONFIG_HOME` at something
+like `C:\lane`, which inherits the drive's permissions instead.
+
+`config.keep_private` / `keep_private_directory` are the only place that decides this,
+and `test_only_one_place_in_lane_decides_how_a_written_file_is_protected` counts it: a
+fifth store should inherit the decision rather than rediscover it, and a `chmod` added
+back to any of them is a Windows no-op wearing a safeguard's clothes.
+
+### Where the files go on Windows
+
+**`%APPDATA%\lane` for configuration, `%LOCALAPPDATA%\lane` for state.** The XDG
+fallback works on Windows — it is only a folder under the profile — but no native
+Windows software uses it, so a user going to look for lane's settings would not find
+them where everything else on their machine keeps them. The Roaming/Local split is
+exactly the split `XDG_CONFIG_HOME` and `XDG_STATE_HOME` already make: settings follow
+the user between machines, the last project they opened a lane in does not.
+
+**An explicitly set `XDG_CONFIG_HOME` or `XDG_STATE_HOME` still wins, on every
+platform.** That is what keeps this one code path with a fallback rather than two paths
+that can drift — the test suite is its first user, and a Windows user who has one set
+has said where they want it. `APPDATA` is ignored off Windows: a shell config shared
+between machines can set it, and it must not quietly become a macOS convention.
+
+### Copy-on-write, and saying the right thing about it
+
+`clonefile(2)` is macOS's. `cloning_available()` already answered `False` everywhere
+else, so nothing was broken — but the **message** was: "your two folders are on
+different volumes" is a misdiagnosis of a Windows machine that is set up perfectly well,
+and it sends somebody off rearranging disks for nothing.
+`actions/config.copy_on_write_unavailable()` is a function now rather than a constant,
+returning the sentence *and* the remedy, still shared by doctor and config so the two
+cannot say it differently. On macOS it names the volumes; elsewhere it names the
+platform.
+
+Windows' ReFS can block-clone and Linux's btrfs and XFS can reflink. Neither is wired
+up, both need a filesystem most people are not on, and "not available" is the honest
+word rather than "impossible".
+
+One thing that *was* broken: `_load_clonefile()` called `ctypes.CDLL(None)`, which
+raises **`TypeError`** on Windows — not the `OSError` or `AttributeError` it caught —
+at **import time**, so lane did not start there at all. It now asks only on macOS.
+
+### lane's own output is UTF-8, and says so
+
+`lane doctor > report.txt` on Windows died with `UnicodeEncodeError: 'charmap' codec
+can't encode character '\u2713'` — the tick doctor puts in front of every healthy line.
+Python encodes a **redirected** stream with the locale encoding; on Windows that is a
+code page with no `✓`, no `◐` and none of the box glyphs the splash and the tables are
+made of. A console is fine, because Python writes to one through a wide-character API. A
+pipe or a file is not, and a pipe or a file is what a script gets — so every `lane
+doctor > out`, every `lane list | …`, ended in a traceback.
+
+`cli.main` now reconfigures `stdout` and `stderr` to `utf-8` with `errors="replace"`
+before anything else happens. **Not a Windows branch**: a POSIX machine with a `C`
+locale has the same hole, and Python's UTF-8-mode coercion for it is a default somebody
+can turn off. `replace` is the backstop — a terminal that genuinely cannot carry a glyph
+should show a question mark, never end lane in a traceback, and doctor of all things is
+the command that has to work on a machine where nothing else does. A stream with no
+`reconfigure` (pytest's capture, a wrapped pipe, an embedding) is skipped rather than
+being a reason to refuse to start.
+
+### What comes back from git and gh is UTF-8, and has to be read that way
+
+`subprocess`'s `text=True` decodes with the **locale** encoding. On macOS and Linux that
+is UTF-8 and nobody notices; on Windows it is a code page, and `ünïcode näme.txt` came
+back from `git status` as `Ã¼nÃ¯code nÃ¤me.txt` — not a path anything can act on, and not
+a name anybody can read. lane exists partly to handle names typed in whatever language
+somebody thinks in, so this is a defect at the centre of the thing rather than an edge.
+
+Both `git/cli_backend.py` and `github/gh_client.py` now pass `encoding="utf-8",
+errors="replace"`: git writes paths and messages as UTF-8 (which is what forcing
+`core.quotePath=false` is for), and `gh --json` answers in UTF-8. `replace` rather than
+`strict` because a path that is not valid UTF-8 is a reason to show it oddly, never a
+reason for lane to stop working.
+
+**A user's configured command is deliberately left alone.** `prepare/apply.run` captures
+whatever some tool printed, and on Windows that really is the console's code page — so
+`text=True` is the right guess there and UTF-8 would be the wrong one. The rule is: read
+UTF-8 where the format says UTF-8, and read the platform's where the platform's is what
+was written.
+
+### Splitting a configured command
+
+`shlex.split` defaults to POSIX rules, where a **backslash escapes the next
+character**. On Windows a backslash is a path separator, so a configured
+`C:\tools\thing.exe --flag` came apart into `C:toolsthing.exe` — silently, and the
+error the user then saw was "that command is not there" about a path they could read
+with their own eyes. `apply.split_command` uses `posix=False` there, which treats a
+backslash as ordinary and still keeps a quoted run together, and strips the quotation
+marks that mode leaves on the token. An unbalanced quote still raises and is still
+refused rather than guessed at.
+
+This is not one of the platform differences the port set out to fix; it was found by
+reading `run()` while porting, and it is a silent corruption of something the user
+typed, which is the kind that gets reported as "lane is broken".
+
+### Launching the editor
+
+`shutil.which` is already cross-platform and `PATHEXT`-aware, so the common case needs
+no new code: every editor lane names offers to put its command on PATH when it installs.
+The `/Applications/<X>.app` + `open -a` fallback is macOS's and is gated to it.
+
+**There is deliberately no Windows equivalent, and that is a decision.** A table of
+`%LOCALAPPDATA%\Programs\<X>` guesses would have to be right about each editor, each
+install scope (per-user, machine-wide, Microsoft Store) and each version — and a wrong
+guess produces exactly the message lane already gives (`'cursor' is not on your PATH`)
+after more code. **This is a real gap**, not a non-issue: an editor installed without
+its shell command will not launch, and the user has to add it to PATH themselves. If it
+turns out to bite, the fix is a table, and this paragraph is the record that it was
+considered rather than missed.
+
 ## The four seams
 
 The application reaches the outside world through four interfaces. Three are faked
@@ -838,6 +1023,15 @@ rewording silently re-route a flag.
 
 `GitBackend` exists so the implementation can be **swapped**, not so tests can
 avoid git. Tests use the real one against temporary repositories.
+
+**`environment.py` holds one thing that is not part of the seam**, and it is the only
+such thing: `detached_child()`, a module-level function returning the `subprocess`
+keywords that put a child outside lane's signal group. It lives there because that
+module is already where "how does this operating system say it" lives, and because the
+git backend and `prepare/apply.py` both need the same answer — a second copy of a
+platform branch is how one of them stops isolating anything. It is deliberately not a
+method on the protocol: a seam is something tests replace, and a test that replaced this
+would be asserting its own arithmetic instead of what lane asks the OS for.
 
 **`prepare/apply.py` is not a fifth seam.** It clones, links, runs a configured command
 and measures a path — the only place any of those happens — and it is exercised for real,
@@ -1224,8 +1418,12 @@ for accented letters (Turkish dotless/dotted i and ligatures stay explicit becau
 decomposition gets those wrong), validated with `git check-ref-format`. Lane names
 cap at 40 characters.
 
-**Configuration** — `${XDG_CONFIG_HOME:-~/.config}/lane/`, directory mode 0700,
-config file mode 0600, TOML (`tomllib` to read, `tomli-w` to write). Migrating a
+**Configuration** — `${XDG_CONFIG_HOME:-~/.config}/lane/` on macOS and Linux,
+`%APPDATA%\lane\` on Windows (an explicitly set `XDG_CONFIG_HOME` wins on every
+platform), directory mode 0700 and config file mode 0600 **where modes mean anything**
+— on Windows they do not, and what protects these files there is the user profile's own
+permissions; see *File permissions are not one thing on two platforms*. TOML
+(`tomllib` to read, `tomli-w` to write). Migrating a
 config in the old shell-sourced format on first run is **required, not optional**.
 Three settings — `projects_root`, `lanes_root`, `editor` — plus a version stamp.
 `LANE_PROJECTS_ROOT`, `LANE_LANES_ROOT` and `LANE_EDITOR` override the file; when
@@ -1234,8 +1432,8 @@ environment is currently winning. A config written by a different version is
 rewritten in place, carrying values over and keeping a backup, announcing itself
 in one short line.
 
-**The preparation answers** — `${XDG_CONFIG_HOME:-~/.config}/lane/prepare.toml`, mode
-0600 in the same 0700 directory, a **flat array of `[[step]]` records** keyed by project
+**The preparation answers** — `prepare.toml` beside the config, same modes and the same
+platform caveat, a **flat array of `[[step]]` records** keyed by project
 *name*. Deliberately **not** three more keys in `config.toml`: `ConfigStore.save()`
 rebuilds the file from the three settings it knows about, so anything else in there is
 dropped the first time a version bump rewrites it — and that migration code is the one
@@ -1247,8 +1445,8 @@ staying one short line is an invariant and a second file having something to say
 serve it. An unreadable file means **nothing is remembered** — never a crash, never a
 rewrite; the screen asking again is itself the signal, and doctor names the file.
 
-**The branch prefixes** — `${XDG_CONFIG_HOME:-~/.config}/lane/branch_prefixes.toml`,
-mode 0600 in the same 0700 directory, a flat `prefix = [...]` array of strings.
+**The branch prefixes** — `branch_prefixes.toml` beside the config, same modes and the
+same platform caveat, a flat `prefix = [...]` array of strings.
 Deliberately **not** a fourth key in `config.toml`, for `prepare.toml`'s reason and one
 more of its own: `ConfigStore.save()` rebuilds the file from the three settings it knows
 about, so anything else is dropped by the first version bump — and `config.py` is explicit
@@ -1281,7 +1479,8 @@ wrong key finds nothing — it never finds somebody else's answers.
 
 **Convenience state** — anything lane remembers for convenience rather than
 configuration (the last project used, for instance) lives in
-`${XDG_STATE_HOME:-~/.local/state}/lane/state.toml`, mode 0600, **never** in the
+`${XDG_STATE_HOME:-~/.local/state}/lane/state.toml` — `%LOCALAPPDATA%\lane\state.toml`
+on Windows, which is the same Roaming/Local split XDG makes — mode 0600, **never** in the
 config file. Adding to that file is not a new configuration key and does not need
 asking; it is also disposable, so lane must behave correctly when it is missing or
 corrupt. **Adding a new _configuration_ key does need asking.**
@@ -1562,9 +1761,9 @@ strictness on is the fix.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | pull request | lint, types, tests, build, smoke — the required check |
-| `build.yml` | push to main | builds and uploads `lane-macos-arm64`. **No tests** |
-| `cd.yml` | `v*` tag | rebuilds, verifies the tag, publishes the release |
+| `ci.yml` | pull request | `check`: lint, types, tests, build, smoke — the required check. Plus `windows`: tests, build, smoke on a real Windows runner |
+| `build.yml` | push to main | builds and uploads `lane-macos-arm64` and `lane-windows-x86_64.exe`. **No tests** |
+| `cd.yml` | `v*` tag | rebuilds both, verifies each reports the tag, publishes one release with both attached |
 
 `build.yml` runs no tests because the pull request that produced the commit already
 ran them. It still builds and smoke-tests, because the thing it is building is the
@@ -1607,20 +1806,47 @@ stay compatible with. Do not raise the floor to a pre-release Python version.
 
 ### Packaging
 
-PyInstaller, one-file, macOS arm64 first. `make build` produces `dist/lane`. CI
-runs the built binary's `--version` as a smoke test: it is the one path guaranteed
-to work without a TTY, and it catches missing hidden imports at build time rather
-than later. The build fingerprint is a **hash of the running executable** — that is
-what answers "did this file change", the question doctor exists to settle.
-Stamping the git commit as well is fine, but the hash is the part that must work.
-Room is left for macOS x86_64 and Linux later; that matrix is not built yet.
+PyInstaller, one-file, **two platforms**: macOS arm64 and Windows x86_64. `make build`
+produces `dist/lane`, or `dist/lane.exe` on Windows — the Makefile picks the name from
+`$(OS)`, which Windows sets and nothing else does. CI runs the built binary's
+`--version` as a smoke test: it is the one path guaranteed to work without a TTY, and
+it catches missing hidden imports at build time rather than later. The build
+fingerprint is a **hash of the running executable** — that is what answers "did this
+file change", the question doctor exists to settle. Stamping the git commit as well is
+fine, but the hash is the part that must work. Room is left for macOS x86_64 and Linux
+later; those are not built yet.
 
-**The build is reproducible, and must stay that way.** Two builds of the same commit
-produce a byte-identical binary. `build.yml` and `cd.yml` both set `SOURCE_DATE_EPOCH`
-from the commit and `PYTHONHASHSEED=0` before `make build`, and **`make repro` is what
-proves it still holds** — it builds twice and compares. Run it after changing
-`build.yml`, `cd.yml` or `lane.spec`. It is not part of `check`: two full builds is too
-slow for something meant to run constantly.
+`lane.spec` is genuinely platform-agnostic and was confirmed so rather than assumed —
+it carries no macOS-only PyInstaller options, and PyInstaller appends `.exe` itself.
+Both `build.yml` and `cd.yml` are matrices over the two runners, and both call
+`make build`, so there is one definition of how lane is built. GNU Make is on the
+`windows-latest` image and finds Git's `sh`; that was measured before it was relied on.
+
+**`cd.yml` has two jobs now, and that is structural.** Building is per-platform;
+publishing is not. A matrix that also published would have each runner racing to create
+the same release, and whichever lost would have to adopt what the other made. So each
+platform builds, smoke-tests, checks that its own binary reports the tag, and hands the
+asset over; one job afterwards attaches both to one release. **A release carrying one
+of its two binaries is worse than a release that failed** — the missing one is what
+somebody's install command asks for, and nothing anywhere says why it is not there.
+
+**`ci.yml` has a second job, `windows`, and it is not the required check.** `check` is,
+by that string, and that has not changed — see *Landing a change*. The Windows job runs
+the suite, the build and the smoke test, because there are things only a real Windows
+machine can answer: whether a child process actually leaves lane's console group,
+whether Ctrl-C lands where `signal` says it will, and whether the binary starts at all.
+The first attempt at this port crashed at **import time** on Windows and every one of
+those would have caught it. It runs no lint and no types on purpose: both are
+platform-independent and `check` already runs them, and mypy narrows `sys.platform` to
+whatever it is running on — so a second run there would report the *other* half of every
+platform branch as unreachable. One answer, from one place.
+
+**The build is reproducible on macOS, and must stay that way.** Two builds of the same
+commit produce a byte-identical binary. `build.yml` and `cd.yml` both set
+`SOURCE_DATE_EPOCH` from the commit and `PYTHONHASHSEED=0` before `make build`, and
+**`make repro` is what proves it still holds** — it builds twice and compares. Run it
+after changing `build.yml`, `cd.yml` or `lane.spec`. It is not part of `check`: two full
+builds is too slow for something meant to run constantly.
 
 `PYTHONHASHSEED` is the setting that does the work, which is worth writing down because
 it is not the one you would reach for. Python randomises string hashing per process;
@@ -1637,11 +1863,74 @@ honouring. Do not remove it on the grounds that the hash seed is doing the work 
 do not assume it is *sufficient* either.
 
 **Why this is an invariant and not a nicety:** a Homebrew formula pins the release
-asset's `sha256`. `cd.yml` adopts an existing release and re-uploads with `--clobber`,
-and that re-upload comes from a **rebuild**. Without reproducibility, re-running CD
-against a tag a published formula already points at would change the asset's hash and
-break `brew install` and `brew upgrade` for everyone on that version — with no change
-to lane's own version number to explain why.
+asset's `sha256`, and so does a winget manifest. `cd.yml` adopts an existing release
+and re-uploads with `--clobber`, and that re-upload comes from a **rebuild**. Without
+reproducibility, re-running CD against a tag a published formula already points at
+would change the asset's hash and break `brew install` and `brew upgrade` for everyone
+on that version — with no change to lane's own version number to explain why.
+
+### Reproducibility is one platform's guarantee, not two
+
+**Measured on a `windows-latest` runner, with both settings on: it does not hold
+there.** Two builds of the same commit produce different binaries. The cause is the
+same defect `PYTHONHASHSEED=0` fixes on macOS, and the setting does not fix it there:
+`base_library.zip` comes out with the same 155 members, byte-identical contents and
+identical timestamps, **in a different order**. `SOURCE_DATE_EPOCH` does do its
+documented job on Windows — the PE header's `TimeDateStamp` is identical between builds,
+which is the timestamp path PyInstaller added it for in the first place — and the
+difference is entirely the archive's member order and what that does to the appended
+`PKG` and the PE checksum.
+
+This is written down because the obvious readings are both wrong. It is not that the
+settings are missing (they are set, and PyInstaller sees them — verified). It is not
+that Windows needs *more* than macOS in general: it needs less for the timestamps and
+the ordering happens to survive there anyway. Chasing it further means reading
+PyInstaller's module-graph walk, and the walk itself is deterministic given the same
+edge-insertion order, so the remaining suspect is above it.
+
+**What stands in for it.** AGENTS.md already says a tag a published formula points at
+is frozen and must not be re-run through `cd.yml`. That rule was described as the
+braces and reproducibility as the belt; on Windows there is only the rule, so it is not
+optional there. `packaging/winget/README.md` says the same thing where somebody bumping
+a manifest will read it.
+
+**`make repro` tells the truth on Windows, and fails.** It used to *pass* there while
+proving nothing: `shasum` is not on a Windows machine, both hashes came back empty, and
+empty equals empty. It now falls back to `sha256sum`, compares `dist/lane.exe`, and
+refuses to claim anything when it has no hash. Do not make it skip the comparison on
+Windows — a target that says nothing is what it was just fixed from being.
+
+### Distribution — winget, and only winget
+
+`winget install mfeminer.lane` is the Windows half of "easy to install", and winget is
+the only Windows package manager lane targets. The reason is narrow and it is the whole
+reason: **winget ships with Windows 10 and 11**, so a user installs nothing before the
+install command works. A Scoop bucket or a Chocolatey package cannot offer that — each
+has to be installed first, which is one more thing to explain to somebody who only
+wanted lane. Listing is free and public: a manifest submitted as a pull request to
+`microsoft/winget-pkgs`, no paid tier, and that low bar is why its catalogue is now the
+largest of the three.
+
+**There is deliberately no Scoop bucket and no Chocolatey package.** If either is ever
+wanted it is its own decision on its own merits, not something a winget change quietly
+also does.
+
+The manifests live in `packaging/winget/`, generated by `make winget VERSION=x.y.z`,
+which hashes the **published** asset rather than a local build — a manifest must never
+describe a binary nobody can download. They are the source; the published copy lives in
+`microsoft/winget-pkgs`. Every release needs them regenerated and submitted by hand,
+exactly as the Homebrew formula's `url` and `sha256` do, and for the same reason: a
+moving `releases/latest/download/...` pointer has no checksum that can stay true.
+
+### An unsigned Windows binary has its own Gatekeeper
+
+The macOS binary is unnotarised and needs its quarantine flag cleared, which the README
+documents. The Windows binary is unsigned, and SmartScreen will very likely show
+*"Windows protected your PC"* the first time it is run from a download — the direct
+analogue, and not something to leave a user to discover cold. The README documents the
+*More info → Run anyway* path next to the Windows install instructions, with the same
+honesty the quarantine note has. A code-signing certificate would remove it; that is a
+purchase and a decision, not an oversight.
 
 ### Distribution — the Homebrew tap
 
@@ -1687,10 +1976,20 @@ Releasing is one step:
 git tag -a vX.Y.Z -m "..." && git push --tags
 ```
 
-`.github/workflows/cd.yml` does the rest: it builds the binary, **refuses the
-release if the binary's `--version` does not match the tag**, and publishes a
-GitHub release with the binary attached. The refusal exists because a wrong
-version number is invisible until someone reports a bug against it.
+`.github/workflows/cd.yml` does the rest: it builds **each platform's** binary,
+**refuses the release if that binary's `--version` does not match the tag**, and
+publishes one GitHub release with both attached. The refusal exists because a wrong
+version number is invisible until someone reports a bug against it, and it is asked of
+each binary separately — they come from different toolchains, and one of them getting it
+wrong is exactly what this catches.
+
+**Two things still have to be done by hand after a release**, and neither is
+`cd.yml`'s to automate without giving it a write token for somebody else's repository:
+bump the Homebrew formula's `url` and `sha256` in
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap), and run
+`make winget VERSION=x.y.z` and submit the manifests to `microsoft/winget-pkgs`. Both
+pin a `sha256`, both freeze that release's asset once published, and
+`packaging/winget/README.md` carries the second one's steps.
 
 **There is a second door, and it is GitHub's rather than ours: publishing a release
 from the web UI creates the tag as a side effect**, which triggers this workflow. So
@@ -1707,13 +2006,14 @@ is not.**
 The tag command above is still the route to prefer, for one concrete reason beyond
 habit: it makes an **annotated** tag, and the UI makes a lightweight one.
 
-**A tag a published Homebrew formula points at is frozen.** Do not re-run `cd.yml`
-against it once its `sha256` is committed to
-[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap) — a genuine need to
-rebuild becomes a new patch tag instead. The build being reproducible means a re-run
-*should* be harmless, and that is the belt; this is the braces, because the guarantee
-only holds as long as the toolchain keeps cooperating and nothing reports it when it
-stops.
+**A tag a published Homebrew formula or winget manifest points at is frozen.** Do not
+re-run `cd.yml` against it once its `sha256` is committed to
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap) or to
+`microsoft/winget-pkgs` — a genuine need to rebuild becomes a new patch tag instead. The
+build being reproducible means a re-run *should* be harmless on macOS, and that is the
+belt; this is the braces, because the guarantee only holds as long as the toolchain
+keeps cooperating and nothing reports it when it stops. **On Windows it is measured not
+to hold at all**, so there this rule is not braces — it is the only thing there is.
 
 **It rebuilds, and must keep rebuilding.** `build.yml` has already produced a binary
 for that exact commit, and publishing it instead looks like free speed — but the
@@ -1769,7 +2069,24 @@ All of it arrived at test-first:
 - Ctrl-C during a spinner quitting lane, Ctrl-C inside an action being reported with
   what might be half-done and *then* quitting, Ctrl-C at a bare menu prompt still
   quitting, and the boundary exiting `130` rather than tracing back
-- git running outside lane's process group, so the terminal's Ctrl-C cannot reach it
+- a non-ASCII path coming back from git readable rather than mojibake, and both git and
+  gh being asked for UTF-8 explicitly rather than the machine's code page
+- lane's own stdout and stderr being reconfigured to UTF-8 before anything is printed,
+  and a stream that cannot be reconfigured not being an error
+- git running outside lane's process group, so the terminal's Ctrl-C cannot reach it —
+  and, on Windows, a detached child really founding its own process group, asserted by
+  addressing a console control event to it; plus every spawn in lane passing whichever
+  keywords this platform uses, asserted on the arguments rather than read
+- `measure()` adding up exactly the bytes a tree holds, never following a symlink out of
+  it, and answering what it could reach when one directory is unreadable
+- `clonefile` not being looked for at all off macOS, and still being looked for on it
+- the config landing under `%APPDATA%` on Windows and under XDG everywhere else, with an
+  explicit `XDG_CONFIG_HOME` winning on both and `APPDATA` meaning nothing off Windows
+- `chmod` not being called on Windows, still being called everywhere else, and exactly
+  one module in lane deciding either — counted, not eyeballed
+- doctor naming the platform rather than the volumes where the platform is the reason,
+  saying what keeps the config private on Windows, warning when it is outside the
+  profile, and offering no macOS advice about an editor off macOS
 - a non-TTY invocation refusing cleanly while `--version` still works
 - the version reaching the build from the tag, and the config stamp being the
   release rather than the moving version of a development checkout

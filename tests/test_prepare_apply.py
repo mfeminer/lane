@@ -13,8 +13,12 @@ demonstrate honestly.
 
 from __future__ import annotations
 
+import ctypes
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from lane.prepare import apply
 
@@ -148,13 +152,67 @@ def test_run_reports_a_missing_directory_rather_than_raising(tmp_path: Path) -> 
 
 
 def test_run_leaves_the_command_out_of_lanes_process_group(tmp_path: Path) -> None:
-    """The same reason git gets `start_new_session`: the terminal's Ctrl-C reaches
-    lane and nothing else, so lane decides what happens to the child rather than the
-    terminal killing it out from under a spinner."""
+    """The same reason git is detached: the terminal's Ctrl-C reaches lane and nothing
+    else, so lane decides what happens to the child rather than the terminal killing it
+    out from under a spinner.
+
+    POSIX only — `getpgrp` is. The Windows half of the same property is asserted for
+    real in `test_environment.py`."""
+    if sys.platform == "win32":
+        pytest.skip("POSIX process groups — see tests/test_environment.py")
     outcome = apply.run("sh -c 'ps -o pgid= -p $$'", tmp_path)
 
     assert outcome.ok
     assert int(outcome.detail.strip()) != os.getpgrp()
+
+
+def test_a_windows_path_in_a_configured_command_survives_being_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`shlex.split` is POSIX-mode: a backslash escapes the next character. On Windows a
+    backslash is a path separator, so `C:\\tools\\thing.exe` came apart into
+    `C:toolsthing.exe` — and the failure a user sees is "that command is not there",
+    about a path they can see with their own eyes."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert apply.split_command(r"C:\tools\thing.exe --flag") == [
+        r"C:\tools\thing.exe",
+        "--flag",
+    ]
+
+
+def test_a_quoted_windows_path_with_a_space_stays_one_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`C:\\Program Files` is where half of Windows lives, so quoting has to work — and
+    the quotes must not survive into the argument, or the program named is a file whose
+    name begins with a quotation mark."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert apply.split_command(r'"C:\Program Files\node\npm.cmd" install') == [
+        r"C:\Program Files\node\npm.cmd",
+        "install",
+    ]
+
+
+def test_elsewhere_a_command_is_split_exactly_as_it_always_was(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented escape hatch is `sh -c '…'`, and it has to keep working."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    assert apply.split_command("sh -c 'echo hi'") == ["sh", "-c", "echo hi"]
+
+
+def test_an_unbalanced_quote_is_still_refused_rather_than_guessed_at(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    outcome = apply.run('thing "unbalanced', tmp_path)
+
+    assert not outcome.ok
+    assert "could not be read" in outcome.detail
 
 
 # -- measuring -------------------------------------------------------------------
@@ -170,12 +228,114 @@ def test_measure_reports_a_size_for_a_tree_and_nothing_for_a_missing_path(
     assert apply.measure(tmp_path / "nope") is None
 
 
+def test_measure_adds_up_exactly_the_bytes_the_files_hold(tmp_path: Path) -> None:
+    """An exact number, and the same one on every platform — which `du -sk` never was:
+    it answers in block-rounded kilobytes, and it does not exist on Windows at all."""
+    tree = tmp_path / "tree"
+    (tree / "deep" / "deeper").mkdir(parents=True)
+    (tree / "a.bin").write_bytes(b"\0" * 1_000)
+    (tree / "deep" / "b.bin").write_bytes(b"\0" * 2_345)
+    (tree / "deep" / "deeper" / "c.bin").write_bytes(b"\0" * 7)
+
+    assert apply.measure(tree) == 1_000 + 2_345 + 7
+
+
+def test_measure_answers_for_a_single_file_too(tmp_path: Path) -> None:
+    """The screen asks about paths, and `.env` is a path."""
+    one = tmp_path / ".env"
+    one.write_bytes(b"\0" * 42)
+
+    assert apply.measure(one) == 42
+
+
+def test_measure_never_follows_a_link_out_of_the_path(tmp_path: Path) -> None:
+    """A linked `node_modules` points into the main clone. Following it would report the
+    main clone's size as the lane's, and this number exists to stop somebody bringing in
+    twenty gigabytes by accident — the one thing it must never understate by walking
+    somewhere else."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "huge.bin").write_bytes(b"\0" * 500_000)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "small.bin").write_bytes(b"\0" * 10)
+    (tree / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert apply.measure(tree) == 10
+
+
+def test_measure_reports_what_it_could_reach_rather_than_giving_up(tmp_path: Path) -> None:
+    """One unreadable directory in a tree of hundreds is not a reason to answer `—` for
+    the whole path. A short number is more use than no number.
+
+    POSIX only, because making a directory unreadable is: `chmod` on Windows sets a
+    read-only attribute at best and cannot take read access away, which is the same
+    measured fact `config.keep_private` is built on."""
+    if sys.platform == "win32":
+        pytest.skip("a mode cannot remove read access on Windows")
+    tree = tmp_path / "tree"
+    shut = tree / "shut"
+    shut.mkdir(parents=True)
+    (tree / "readable.bin").write_bytes(b"\0" * 64)
+    (shut / "hidden.bin").write_bytes(b"\0" * 1_000)
+    shut.chmod(0o000)
+    try:
+        assert apply.measure(tree) == 64
+    finally:
+        shut.chmod(0o700)
+
+
 def test_size_phrase_reads_like_a_size() -> None:
     assert apply.size_phrase(None) == "—"
     assert apply.size_phrase(0) == "0 B"
     assert apply.size_phrase(1_400) == "1.4 KB"
     assert apply.size_phrase(340 * 1000**2) == "340 MB"
     assert apply.size_phrase(1_200 * 1000**2) == "1.2 GB"
+
+
+# -- loading clonefile at all ----------------------------------------------------
+
+
+def test_clonefile_is_not_even_looked_for_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`clonefile(2)` is a macOS system call, and looking for it elsewhere is not free:
+    `ctypes.CDLL(None)` — the form that keeps this working inside a PyInstaller bundle —
+    raises **TypeError** on Windows, which is neither of the errors this used to catch.
+    That happens at import time, so lane did not start at all; the fix is to ask the
+    question only where it has an answer."""
+
+    def refuse(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("no library should be opened off macOS")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "CDLL", refuse)
+
+    assert apply._load_clonefile() is None
+
+
+def test_clonefile_is_still_looked_for_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """And the gate must not be so tight that macOS stops asking — which would turn
+    every clone into a real copy without a word about it.
+
+    The library is stood in for rather than opened: `CDLL(None)` is the very call that
+    raises on Windows, so really making it here would fail this test for the reason the
+    gate exists to avoid."""
+    asked: list[object] = []
+
+    class _NoSuchSymbol:
+        def __getattr__(self, name: str) -> object:
+            raise AttributeError(name)
+
+    def watching(*args: object, **kwargs: object) -> object:
+        del kwargs
+        asked.append(args)
+        return _NoSuchSymbol()
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ctypes, "CDLL", watching)
+
+    assert apply._load_clonefile() is None, "this stand-in has no clonefile"
+    assert asked, "macOS must still look for the symbol"
 
 
 # -- whether cloning can happen at all -------------------------------------------

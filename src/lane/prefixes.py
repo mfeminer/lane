@@ -45,13 +45,10 @@ from pathlib import Path
 
 import tomli_w
 
-from lane.config import CONFIG_VERSION, config_home
+from lane.config import CONFIG_VERSION, config_home, keep_private, keep_private_directory
 
 DEFAULT_PREFIXES = ("feature", "bugfix", "hotfix", "chore", "refactor", "docs")
 """What lane has always offered, and what an untouched installation still offers."""
-
-_DIR_MODE = 0o700
-_FILE_MODE = 0o600
 
 
 class BranchPrefixStore:
@@ -83,11 +80,11 @@ class BranchPrefixStore:
     # -- writing -------------------------------------------------------------
     def save(self, prefixes: Sequence[str]) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        self._dir.chmod(_DIR_MODE)
+        keep_private_directory(self._dir)
         body: dict[str, object] = {"version": CONFIG_VERSION}
         body["prefix"] = list(prefixes)
         self.path.write_text(tomli_w.dumps(body), encoding="utf-8")
-        self.path.chmod(_FILE_MODE)
+        keep_private(self.path)
 
 
 def _read(path: Path) -> tuple[str, ...]:

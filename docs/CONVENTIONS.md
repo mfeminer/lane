@@ -457,6 +457,23 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   menu. *Why: this asymmetry is defensible but was previously unstated — this is
   now the stated rule a new failure mode should be checked against.*
 
+- **A message must be true on the machine it is shown on, and a remedy has to be one
+  that machine can carry out.** lane runs on more than one platform now, so a sentence
+  naming a cause can name the wrong one somewhere else: "your two folders are on
+  different volumes" is the real diagnosis on macOS and a misdiagnosis of a perfectly
+  healthy Windows machine, where copy-on-write is unavailable everywhere. Likewise
+  `open -a Cursor` is advice a Windows user cannot take. The test is not "is this
+  sentence accurate here" but **"what does this say to somebody on the other platform"**
+  — and the fix is the sentence, not a second one bolted on: `copy_on_write_unavailable()`
+  returns the diagnosis *and* its remedy as one pair, so the two cannot be made to
+  disagree by fixing only one of them. *Why: a wrong cause is worse than no cause — it
+  sends somebody off rearranging disks for nothing.*
+- **Say which of two mechanisms is actually doing the work, where they differ by
+  platform and the difference is a stated property.** lane writes its files `0600`; on
+  Windows that mode does nothing and the user profile's permissions are what keep them
+  private. doctor says so rather than letting a user carry the guide's `0600` in their
+  head. *Why: silence here reads as the property holding.*
+
 ## 12. Empty states
 
 - **One line, in the same `ui.detail`/`ui.error` shape as everything else, naming

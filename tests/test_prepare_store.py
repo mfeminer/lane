@@ -9,7 +9,10 @@ of the config that must never be wrong, and it does not need a second job.
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
+
+import pytest
 
 from lane.config import ConfigStore
 from lane.prepare import Step, Verb
@@ -79,6 +82,8 @@ def test_a_verb_this_version_does_not_know_is_dropped_rather_than_breaking(
 def test_the_file_is_private_in_a_private_directory(tmp_path: Path) -> None:
     """It records which paths a project keeps outside git, which is a description of
     where that project's secrets are. Same modes as the config for the same reason."""
+    if sys.platform == "win32":
+        pytest.skip("a mode says nothing here — see config.keep_private")
     store = _store(tmp_path)
     store.save((Step(project="acme", verb=Verb.CLONE, path="node_modules"),))
 

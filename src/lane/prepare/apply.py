@@ -42,9 +42,12 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from lane.environment import detached_child
 
 _STAGED_SUFFIX = ".lane-partial"
 _RUN_TIMEOUT = 1800
@@ -74,11 +77,21 @@ def staged_path(target: Path) -> Path:
 
 
 def _load_clonefile() -> Callable[[bytes, bytes, int], int] | None:
-    """`clonefile(2)`, or None where there is no such call (anything but macOS)."""
+    """`clonefile(2)`, or None where there is no such call — which is anywhere but macOS.
+
+    **The platform is checked before the library is opened, and that is not tidiness.**
+    `CDLL(None)` — the form that keeps this working inside a PyInstaller one-file bundle
+    — raises `TypeError` on Windows, because there is no "the process's own symbols" to
+    ask for: `LoadLibrary` wants a name. That is neither of the errors caught below, and
+    this runs at **import time**, so lane did not start at all on Windows. Asking only
+    where the question has an answer is both the fix and the honest shape.
+    """
+    if sys.platform != "darwin":
+        return None
     try:
         library = ctypes.CDLL(None, use_errno=True)
         entry = library.clonefile
-    except OSError, AttributeError:  # pragma: no cover - platform dependent
+    except OSError, AttributeError:  # pragma: no cover - a macOS without the symbol
         return None
     entry.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
     entry.restype = ctypes.c_int
@@ -202,21 +215,49 @@ def _copy(source: Path, staged: Path) -> None:
 # -- running ---------------------------------------------------------------------
 
 
+def split_command(command: str) -> list[str]:
+    """A configured command, split into argv the way this platform quotes.
+
+    `shlex.split` defaults to POSIX rules, where **a backslash escapes the next
+    character** — so on Windows `C:\\tools\\thing.exe --flag` came apart into
+    `C:toolsthing.exe`, and the failure the user saw was "that command is not there"
+    about a path they could read with their own eyes.
+
+    `posix=False` treats a backslash as the ordinary character it is there, and still
+    keeps a quoted run together — which is what `C:\\Program Files\\...` needs. It also
+    leaves the quotation marks *on* the token, so they are stripped here: handed
+    through, they would name a program whose filename begins with a quotation mark. An
+    unbalanced quote still raises, and is still refused rather than guessed at.
+    """
+    if sys.platform == "win32":
+        return [_unquoted(part) for part in shlex.split(command, posix=False)]
+    return shlex.split(command)
+
+
+def _unquoted(part: str) -> str:
+    """One layer of matching quotes off a token `posix=False` left them on."""
+    if len(part) >= 2 and part[0] == part[-1] and part[0] in {'"', "'"}:
+        return part[1:-1]
+    return part
+
+
 def run(command: str, directory: Path) -> Outcome:
     """Run a configured command, wait for it, and report what it said if it failed.
 
-    `shlex.split` rather than a shell: the command comes from lane's own
+    Split rather than handed to a shell: the command comes from lane's own
     configuration, and handing it to a shell would make quoting part of the interface
     for no gain. A command that genuinely wants a shell writes `sh -c '…'`, which
-    reads as the deliberate thing it is.
+    reads as the deliberate thing it is. `split_command` above is what does the
+    splitting, and the two platforms do not agree about what a backslash is.
 
-    `start_new_session` for the reason the git backend has it: the terminal's Ctrl-C
-    reaches lane and nothing else, so lane decides what happens to the child instead
-    of the terminal killing it out from under a spinner. lane still owns its lifetime
-    — an interrupt unwinds `subprocess.run`, which kills it on the way out.
+    Detached for the reason the git backend is: the terminal's Ctrl-C reaches lane and
+    nothing else, so lane decides what happens to the child instead of the terminal
+    killing it out from under a spinner. lane still owns its lifetime — an interrupt
+    unwinds `subprocess.run`, which kills it on the way out. `lane.environment` owns
+    how each platform spells that, because they do not spell it the same.
     """
     try:
-        parts = shlex.split(command)
+        parts = split_command(command)
     except ValueError as exc:
         return Outcome(ok=False, detail=f"{command} could not be read: {exc}")
     if not parts:
@@ -230,7 +271,7 @@ def run(command: str, directory: Path) -> Outcome:
             text=True,
             timeout=_RUN_TIMEOUT,
             check=False,
-            start_new_session=True,
+            **detached_child(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return Outcome(ok=False, detail=f"{command} could not run: {_reason(exc)}")
@@ -246,32 +287,70 @@ def run(command: str, directory: Path) -> Outcome:
 
 
 def measure(path: Path) -> int | None:
-    """How much this path holds, in bytes, or None when it cannot be measured.
+    """How much this path holds, in bytes, or None when there is nothing there.
 
-    `du -sk` in one process rather than a walk in Python: the trees this is asked
-    about have hundreds of thousands of files, and `du` is a C loop. Slow enough to
-    belong in the table's `fill` either way — measured at 23 ms for 136 MB warm, and
-    seconds for a large dependency tree cold.
+    `os.scandir` rather than `du -sk` in a subprocess. `du` was the faster loop and it
+    was also a Unix binary: on Windows it is simply absent, and `measure` was written to
+    answer None when the command cannot be found — so every size on the screen would
+    have read `—`, silently removing the one thing standing between a user and cloning
+    twenty gigabytes by accident. A walk in Python is the same code on all three
+    platforms and removes a spawn rather than adding a branch.
+
+    The speed argument the subprocess was written for did not survive being measured
+    again: on a real `node_modules` of 77,868 entries, `du -sk` takes 0.27-0.30 s warm
+    and this walk takes 0.31 s. Both belong on the table's `fill` thread, which is where
+    this has always been called from, and neither is close to blocking a paint.
+
+    **Apparent size, not disk blocks.** `du` answered in allocated blocks, rounded up
+    per file and de-duplicated by inode; this sums `st_size`. The same tree reads
+    990 MB to `du` and 783 MB here — the difference is per-file rounding across 78k
+    small files, and the bytes are the honest answer to what the screen actually asks:
+    how much is about to be copied in. They are also the same number on every
+    filesystem, which the block count never was.
+
+    **A symlink holds nothing**, and is never followed. A linked `node_modules` points
+    into the main clone: following it would report the main clone's size as the lane's,
+    and counting the link itself would put a hundred-odd bytes of target path into a
+    number that is supposed to mean "this much is about to be copied in". Nothing is,
+    so it is zero.
     """
     if not _exists(path):
         return None
-    try:
-        done = subprocess.run(
-            ["du", "-sk", str(path)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            start_new_session=True,
-        )
-    except OSError, subprocess.SubprocessError:
-        return None
-    if done.returncode != 0 and not done.stdout.strip():
-        return None
-    try:
-        return int(done.stdout.split(maxsplit=1)[0]) * 1024
-    except IndexError, ValueError:
-        return None
+    if path.is_symlink():
+        return 0
+    if not path.is_dir():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return None
+    return _tree_size(path)
+
+
+def _tree_size(directory: Path) -> int:
+    """Sum every file under `directory`, reporting what it could reach.
+
+    An unreadable subdirectory is skipped rather than failing the whole measurement: a
+    short number is more use than no number, and `—` on a path the user is deciding
+    about is the answer this function exists to avoid.
+    """
+    total = 0
+    stack = [directory]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
 
 
 _UNITS = ("B", "KB", "MB", "GB", "TB")

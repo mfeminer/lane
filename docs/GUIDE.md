@@ -348,12 +348,17 @@ it, cursor included.
 
 ### What answering a path *in* actually does
 
-A path answered *in* is copied in from your main clone. On APFS that's a copy-on-write clone: a
-64 MB tree takes about a third of a millisecond and no extra disk until something writes to
-it. That's what makes this cheap rather than merely automatic. If your projects and lanes
-folders are on **different** volumes it can't be a clone at all and becomes a real copy —
-slow, and real disk. `doctor` tells you which you've got, and config warns you when you
-bring something in and the answer is no.
+A path answered *in* is copied in from your main clone. **On macOS**, where both folders sit
+on one APFS volume, that's a copy-on-write clone: a 64 MB tree takes about a third of a
+millisecond and no extra disk until something writes to it. That's what makes this cheap
+rather than merely automatic. On different volumes it can't be a clone at all and becomes a
+real copy — slow, and real disk.
+
+**On Windows it is always a real copy.** lane's copy-on-write is `clonefile(2)`, a macOS
+system call; ReFS has block cloning and lane does not use it, and most machines aren't on
+ReFS anyway. Nothing breaks — bringing a path in works exactly the same, it just costs what
+a copy costs. `doctor` tells you which of the two you're getting and names the real reason,
+and config warns you when you bring something in and the answer is no.
 
 There's one other kind of step, and it isn't a path: a **command** to run when a lane
 opens. A command isn't something lane can discover, so it's added from **config →
@@ -775,7 +780,16 @@ yourself — whether bringing a path in can actually be a copy-on-write clone:
 ```
 ! Copy-on-write is not available: /Users/you/Projects and /Volumes/Work/Lanes are on
   different volumes, so bringing a path in is a real copy — slow, and it uses real disk.
-  Put both roots on one volume, or leave the large paths out.
+  Put both roots on one volume, or use 'link' or 'run' for large paths.
+```
+
+On Windows the same warning names the platform rather than your two folders, because
+that is the real reason there and moving them would change nothing:
+
+```
+! Copy-on-write is not available on this platform, so bringing a path in is a real copy
+  — slow, and it uses real disk.
+  Use 'link' or 'run' for large paths, or leave them out.
 ```
 
 If no projects turn up, lane says how many subfolders it looked at, and if your
@@ -788,6 +802,18 @@ folder you should use instead.
 
 `~/.config/lane/config.toml` (XDG — honours `XDG_CONFIG_HOME`), mode `0600` in a
 `0700` directory.
+
+**On Windows it is `%APPDATA%\lane\config.toml`** — where Windows software keeps its
+settings, rather than a Linux convention that would technically work and that nothing
+else on your machine uses. Setting `XDG_CONFIG_HOME` still wins, on every platform.
+
+**And on Windows the modes above are not what keeps it private.** `chmod` there sets a
+read-only attribute at best; Windows' real access control is the ACL, and the one doing
+the work is your user profile's — `%APPDATA%` lives under `C:\Users\<you>`, which grants
+you, SYSTEM and Administrators and nothing to other standard users. That is the same
+guarantee `0600` gives on macOS, where root reads everything too. `doctor` says which of
+the two is protecting your files, and warns if you have pointed `XDG_CONFIG_HOME` at
+somewhere outside your profile, which is the one way it stops being true.
 
 ```toml
 version = "0.0.2"                       # managed by lane, don't edit
@@ -864,8 +890,10 @@ to TOML automatically on first run.
 ### State
 
 Things lane remembers for convenience — the last project you used — live in
-`~/.local/state/lane/state.toml`, separate from your configuration. That file is
-disposable: delete it and lane carries on.
+`~/.local/state/lane/state.toml`, or `%LOCALAPPDATA%\lane\state.toml` on Windows,
+separate from your configuration. The Roaming/Local split is the same one XDG makes:
+settings follow you between machines, the last project you opened a lane in does not.
+That file is disposable: delete it and lane carries on.
 
 ---
 
@@ -1011,7 +1039,8 @@ terminal it would simply have asked you.
 **`--version` shows a build I don't recognise** — an older copy is earlier on your
 PATH. Check with `which -a lane`.
 
-**"Cannot verify the pull request"** — run `brew install gh` or `gh auth login`, as
+**"Cannot verify the pull request"** — run `brew install gh` (`winget install
+GitHub.cli` on Windows) or `gh auth login`, as
 the message says. Or close a lane whose remote isn't GitHub, which never needs `gh`.
 
 **"Could not determine the default branch"** — lane won't guess, because basing a
@@ -1038,9 +1067,23 @@ branched from an older base that predates the `.gitignore` entry ignores nothing
 nothing is offered. And if the path was **already there**, answering it *in* does nothing
 on purpose: lane never overwrites what your lane changed.
 
-**Bringing paths in is slow and eating disk** — your projects and lanes folders are on
-different volumes, so it can't be a copy-on-write clone. `doctor` says so explicitly; leave
-the big paths out and use a `run` command instead, or put both folders on one volume.
+**Bringing paths in is slow and eating disk** — on macOS, your projects and lanes folders
+are on different volumes, so it can't be a copy-on-write clone: put both on one volume, or
+leave the big paths out and use a `run` command instead. **On Windows there is no
+copy-on-write to lose** — it is always a real copy — so the answer is the second half only.
+`doctor` says which of the two you are in.
+
+**"Windows protected your PC" when I run lane** — lane isn't code-signed, so SmartScreen
+holds a downloaded copy the first time. **More info → Run anyway**; you're asked once per
+downloaded copy. Installing with `winget install mfeminer.lane` usually avoids it, because
+winget checks the hash its manifest pins instead.
+
+**My editor doesn't launch on Windows** — lane finds an editor by its command on `PATH`
+(`cursor`, `code`, `zed`, `subl`, `idea`), and most editors' installers offer to put it
+there. If yours didn't, add its folder to `PATH` yourself; lane has no Windows equivalent
+of the macOS `.app` fallback, on purpose — guessing install locations per editor and per
+install scope would be wrong often enough to be no better than this message. The lane still
+opens; only the launch is missed.
 
 ---
 
@@ -1051,8 +1094,9 @@ the big paths out and use a `run` command instead, or put both folders on one vo
 - **Python 3.14** and [`uv`](https://docs.astral.sh/uv/) — `uv` will fetch the
   interpreter if you don't have it. Users of the built binary need no Python at
   all.
-- **macOS on Apple silicon** to produce a working `dist/lane` — that's the only
-  target `make build` and CI/CD build for today.
+- **macOS on Apple silicon or Windows on x86-64** — the two targets `make build` and
+  CI/CD build for today. `make build` produces `dist/lane`, or `dist/lane.exe` on
+  Windows. Linux is not built or tested.
 - `git` on PATH. The test suite runs against real temporary repositories, so it
   also needs a `git config user.email`/`user.name` set (locally or via CI).
 
@@ -1088,12 +1132,28 @@ Two rules erode first, so they're worth stating here too:
 
 ### CI/CD
 
-- **CI** (`.github/workflows/ci.yml`) runs on every push and pull request:
-  lint, types, tests, then `make build` and a smoke test of the binary — for
-  verification only. It never publishes anything.
-- **CD** (`.github/workflows/cd.yml`) runs only on a pushed tag matching `v*`:
-  it builds the binary and publishes a GitHub release with the binary attached.
-  It does not run the test suite — CI already gates every push.
+- **CI** (`.github/workflows/ci.yml`) runs on every pull request. `check` is the
+  required job: lint, types, tests, then `make build` and a smoke test of the binary.
+  `windows` runs the suite, the build and the smoke test on a real Windows runner —
+  the things only a Windows machine can answer. Neither publishes anything.
+- **Build** (`.github/workflows/build.yml`) runs on every push to main and uploads an
+  unreleased binary for each platform as a workflow artifact.
+- **CD** (`.github/workflows/cd.yml`) runs only on a pushed tag matching `v*`: each
+  platform builds its binary and checks that it reports the tag, then one job publishes
+  a GitHub release with both attached. It does not run the test suite — CI already gates
+  every pull request.
+
+Two things are done by hand after a release, because neither belongs to a repository
+this one can write to: bump the Homebrew formula's `url` and `sha256` in
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap), and run
+`make winget VERSION=x.y.z` and submit the manifests to `microsoft/winget-pkgs`.
+`packaging/winget/README.md` has the steps.
+
+`make repro` proves two builds of the same commit are byte-identical. **That holds on
+macOS and is measured not to hold on Windows** — PyInstaller writes `base_library.zip`'s
+155 members in a different order there even with `SOURCE_DATE_EPOCH` and
+`PYTHONHASHSEED=0` set. What protects a published asset's pinned hash on either platform
+is the rule that a released tag is never rebuilt; AGENTS.md has the long version.
 
 ### Releasing a new version
 

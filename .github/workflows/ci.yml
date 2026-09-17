@@ -60,3 +60,62 @@ jobs:
             echo "expected a non-zero exit without a TTY" >&2
             exit 1
           fi
+
+  windows:
+    # Not the required check — `check` above is, and the ruleset names it by that
+    # string. This job runs the things that are only true on a real Windows machine:
+    # a child process actually leaving lane's console group, a Ctrl-C landing where
+    # `signal` says it will, and a binary that starts at all. None of those can be
+    # faked on macOS, and the first version of the Windows port shipped a crash at
+    # import time that every one of these would have caught.
+    #
+    # It runs no lint and no types. Both are platform-independent, `check` already
+    # runs them, and mypy answers differently per platform — it narrows `sys.platform`
+    # to whatever it is running on, so a second run here would report the *other* half
+    # of every platform branch as unreachable. One answer, from one place.
+    runs-on: windows-latest
+    defaults:
+      run:
+        # The shell every other job here is written in. It is on the runner, and using
+        # it keeps these steps the same shape as the macOS ones rather than a second
+        # dialect to keep in step.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Tests
+        # The suite runs against real temporary git repositories, so git must be
+        # configured enough to commit. It never reaches the network.
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "lane CI"
+          uv run pytest -q
+
+      - name: Build the binary
+        run: make build
+
+      - name: Smoke test the binary
+        # Everything the macOS smoke test does, plus doctor — because doctor is the
+        # one command that prints its whole report through `rich` without a terminal,
+        # which is where a console encoding that cannot hold lane's glyphs would show
+        # up. Redirected on purpose: that is the encoding-hostile case on Windows.
+        run: |
+          ./dist/lane.exe --version
+          ./dist/lane.exe --help
+          ./dist/lane.exe doctor > doctor.txt
+          ./dist/lane.exe doctor --json > doctor.json
+          uv run python -c "import json,pathlib; json.loads(pathlib.Path('doctor.json').read_text('utf-8'))"
+          if ./dist/lane.exe < /dev/null; then
+            echo "expected a non-zero exit without a TTY" >&2
+            exit 1
+          fi

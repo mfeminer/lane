@@ -5,6 +5,7 @@ The listing moved to `test_listing.py` when it became a screen of its own.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from lane.actions import doctor, open_lane
 from lane.config import Config, ConfigStore
 from lane.context import Context
 from lane.git.cli_backend import CliGitBackend
+from lane.github.gh_client import install_remedy
 from lane.lanes import LaneStore
 from lane.prefixes import DEFAULT_PREFIXES, BranchPrefixStore
 from lane.prepare import Candidate, Step, Verb, apply
@@ -90,7 +92,7 @@ def test_doctor_says_how_to_install_gh_and_that_everything_else_still_works(
 
     doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root, environment=no_gh))
 
-    assert ui.said("brew install gh")
+    assert ui.said(install_remedy())
     assert ui.said("Everything else")
 
 
@@ -862,6 +864,7 @@ def test_doctor_says_cloning_is_a_real_copy_across_volumes(
     projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(apply, "cloning_available", _never)
+    monkeypatch.setattr(sys, "platform", "darwin")
     ui = FakeUi([])
 
     doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
@@ -869,6 +872,167 @@ def test_doctor_says_cloning_is_a_real_copy_across_volumes(
     assert ui.said("different volumes")
     assert ui.said("real disk")
     assert any(told.kind == "warn" and "Copy-on-write" in told.text for told in ui.told)
+
+
+def test_doctor_does_not_blame_the_volumes_where_the_platform_is_the_reason(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lane's copy-on-write is `clonefile(2)`, which only macOS has. Telling a Windows
+    user their two folders are on different volumes is a misdiagnosis of a machine that
+    is set up perfectly well, and it sends them off rearranging disks for nothing."""
+    monkeypatch.setattr(apply, "cloning_available", _never)
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    assert ui.said("real disk"), "the consequence is the same and still has to be said"
+    assert not ui.said("different volumes")
+    assert not ui.said("one volume"), "and no advice about moving them"
+    assert any(told.kind == "warn" and "Copy-on-write" in told.text for told in ui.told)
+
+
+def test_config_does_not_blame_the_volumes_either(
+    xdg: Path, projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two say it in the same words, which is the whole reason it is written once."""
+    config_dir = _configured(xdg, projects_root, lanes_root, "cfgW1")
+    monkeypatch.setattr(apply, "cloning_available", _never)
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi(["preparation", ["acme/vendor"], "back"])
+    context = _context(
+        ui, projects_root=projects_root, lanes_root=lanes_root, config_dir=config_dir
+    )
+    context.prepare_store().save((Step(project="acme", verb=Verb.SKIP, path="vendor"),))
+
+    config_action.run(context)
+
+    assert ui.said("copy-on-write")
+    assert not ui.said("different volumes")
+
+
+def test_doctor_offers_no_mac_advice_about_a_missing_editor_off_macos(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`open -a Cursor` is not a thing a Windows user can do, and an .app bundle is not
+    a thing their machine has."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=FakeEnvironment(
+                tools={"git": "/g"}, app_dirs=[Path("/Applications/Cursor.app")]
+            ),
+        )
+    )
+
+    assert ui.said("Editor not found")
+    assert not ui.said("open -a")
+
+
+def test_doctor_names_an_installer_the_machine_actually_has(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`brew install gh` is not a thing a Windows user can run, and a remedy nobody can
+    carry out is worse than none — see docs/CONVENTIONS.md §11."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=FakeEnvironment(tools={}),
+        )
+    )
+
+    assert not ui.said("brew install")
+    assert ui.said("winget install"), "the installer Windows ships with"
+
+
+def test_doctor_still_names_brew_on_macos(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            environment=FakeEnvironment(tools={}),
+        )
+    )
+
+    assert ui.said("brew install gh")
+
+
+# -- doctor on what actually protects the config -----------------------------------
+
+
+def test_doctor_says_what_protects_the_config_on_windows(
+    tmp_path: Path, projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`0600` is a stated security property and Windows does not have it — measured, the
+    mode reads back `0o666`. What does protect the file there is the user profile's own
+    permissions, so doctor says which of the two is doing the work rather than leaving a
+    user to assume the mode they read about in the guide."""
+    profile = tmp_path / "profile"
+    monkeypatch.setenv("HOME", str(profile))
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            config_dir=profile / "AppData" / "Roaming" / "lane",
+        )
+    )
+
+    assert ui.said("Kept private by your Windows user profile")
+    assert not ui.said("outside your user profile")
+
+
+def test_doctor_warns_when_the_config_has_been_put_outside_the_profile(
+    tmp_path: Path, projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one way the Windows answer actually stops holding: point `XDG_CONFIG_HOME`
+    somewhere like `C:\\lane`, which inherits the drive's permissions, and every other
+    user on the machine can read where this project keeps its secrets."""
+    monkeypatch.setenv("HOME", str(tmp_path / "profile"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    ui = FakeUi([])
+
+    doctor.run(
+        _context(
+            ui,
+            projects_root=projects_root,
+            lanes_root=lanes_root,
+            config_dir=tmp_path / "somewhere-else" / "lane",
+        )
+    )
+
+    assert any(told.kind == "warn" and "outside your user profile" in told.text for told in ui.told)
+
+
+def test_doctor_says_nothing_about_profiles_anywhere_else(
+    projects_root: Path, lanes_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On POSIX the mode is the answer and there is nothing extra to explain."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ui = FakeUi([])
+
+    doctor.run(_context(ui, projects_root=projects_root, lanes_root=lanes_root))
+
+    assert not ui.said("Windows user profile")
 
 
 def test_doctor_still_renders_when_the_roots_are_unset(lanes_root: Path) -> None:
