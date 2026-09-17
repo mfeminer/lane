@@ -15,6 +15,9 @@ from lane.lanes import Lane
 from lane.projects import Project, diagnose, list_projects
 from lane.ui.seam import Choice
 
+PROJECT = "project"
+"""The key `--project` answers. Named here because both `open` and settings ask it."""
+
 
 def choose_project(context: Context, title: str = "Which project?") -> Project | None:
     """Pick a project, offering the last one used first."""
@@ -36,7 +39,7 @@ def choose_project(context: Context, title: str = "Which project?") -> Project |
         )
         for project in ordered
     ]
-    return context.ui.choose(title, options)
+    return context.ui.choose(title, options, key=PROJECT)
 
 
 def explain_no_projects(context: Context) -> None:

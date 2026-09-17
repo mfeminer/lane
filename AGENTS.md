@@ -24,28 +24,76 @@ lane is touched at **the two ends only**. It is not part of the edit-test loop.
 This is the single most important thing to keep in mind when judging whether a
 feature belongs: if it would be used mid-loop, it does not.
 
-## The interaction model — no subcommands
+## The interaction model — a menu for a person, subcommands for everything else
 
-`lane` accepts exactly two arguments: `--version` / `-V` and `--help` / `-h`.
-Anything else is an error that says so. **There are no subcommands and no command
-aliases.** Running `lane` bare starts an interactive session:
+Running `lane` bare starts an interactive session:
 
 - it shows a menu of everything lane can do
 - you choose an action and lane walks you through it with prompts
 - when the action finishes you are back at the menu
 - the session ends when you choose to quit
 
-**Do not reintroduce subcommands**, however convenient a `lane open` shortcut
-looks: two entry points would mean two things to keep in step, and the menu is the
-one that matches how the tool is actually used (twice a day, from a shell you are
-not scripting). `--version` and `--help` are flags rather than menu entries
-because they exist for people who have not started the app yet.
+**And `lane` takes subcommands: `open`, `list`, `enter`, `close`, `doctor`.** This
+file used to say, at length, that it never would. That was reasoned from a premise
+which has since changed, so the reasoning is replaced rather than quietly dropped.
+
+**What the old rule said, and why it was right at the time.** Two entry points mean
+two things to keep in step, and the menu matched how lane was actually used: twice a
+day, from a shell nobody was scripting. Every other decision on this page followed
+from a person sitting at a terminal — a TTY is required, there is no machine-readable
+output, the help text is a paragraph explaining that there is nothing else to type.
+
+**What changed.** lane is now driven by scripts and by AI agents as well as by a
+person. Neither can move a cursor over a table, and neither can answer a prompt it
+cannot see. A tool that can only be used by hand is, for them, a tool that cannot be
+used at all — and "run lane and click through the menu" is not something a script can
+be told to do. That is a change of premise, not a change of taste, and the old rule
+does not survive it.
+
+**What has not changed, and is the whole of why this is safe.** A subcommand does
+not *do* anything. It answers, in advance, the questions the interactive flow was
+going to ask, and then runs **that same action** — `open_lane.open_a_lane`,
+`enter_lane.enter`, `close_lane.close`, `doctor.checks`. The device that makes this
+possible is `cli/answers.py`: a `Ui` that sits exactly where the real one sits, hands
+back the answers it already has, and falls through to the real prompt for the rest.
+So there is one implementation of what opening a lane means, and the second entry
+point is a second *caller*, never a second copy. `tests/test_cli_commands.py` asserts
+that — a subcommand growing its own version of a flow fails there rather than in a
+bug report a year later.
+
+**Subcommands, not top-level flags.** `lane open`, not `lane --open`: the noun/verb
+shape every tool in this space uses (`git`, `gh`, `docker`, `kubectl`; clig.dev).
+Introducing both would be the drift the old rule feared, for real this time.
+
+**Two tables, and the difference between them is the point.** The menu is still
+generated from `ACTIONS` and nothing else, so it cannot drift from what the app can
+do. The subcommands come from `cli/parser.COMMANDS`. They overlap without being the
+same list, and both of the differences are deliberate:
+
+- `enter` and `close` are subcommands but **not** menu entries. They are the two verbs
+  the listing offers for the row under the cursor, and that is still the better route
+  by hand — see below. A script has no cursor, so it names the lane instead.
+- `settings` is a menu entry and **not** a subcommand, yet. Configuring lane from a
+  script is a real want and is its own piece of work; until then the absence is stated
+  rather than half-built.
+
+What the two tables share is the action function. What they do not share is the list
+itself, and a new action is not automatically scriptable — that is a decision to take
+per action, not a gap to fill in reflexively.
+
+**A `<project>/<lane>` names a lane, and nothing else does.** `lane enter demo/pager`,
+`lane close demo/pager` — the same slug the listing prints on every row. This does not
+contradict *looking and acting are the same widget*: the cursor is what a person uses
+to say *which lane*, and a script has no cursor, so it has to say the one thing the
+interactive session never had to ask. A bare lane name is refused rather than guessed
+at: a lane name is unique inside its project and nowhere else.
 
 There is no `where` action to print a lane's path for shell integration
-(`cd "$(lane where)"`). The four-step day above never needs it. Do not reintroduce
-it as a shell-integration hook or a clipboard action.
+(`cd "$(lane where)"`). The four-step day never needs it. Do not reintroduce
+it as a shell-integration hook or a clipboard action — and note that `lane list
+--json` is not that: it reports where lanes are, it does not move anybody's shell.
 
-Actions: open a lane, lanes, settings, doctor.
+Actions: open a lane, list, settings, doctor.
 
 There is no `changelog` action. It was one until the release notes became
 generated from the merged pull requests rather than written by hand: keeping the
@@ -56,26 +104,180 @@ in a release is on its GitHub release page. Do not reintroduce it — see
 lists the menu with `changelog` in it; it is a record of that decision, not the
 current menu.)
 
-**`enter` and `close` are not menu entries.** They are the two verbs the `lanes`
-screen offers for the row under the cursor — see **`docs/adr/0002-lane-listing.md`**
+**`enter` and `close` are not menu entries.** They are the two verbs the listing
+offers for the row under the cursor — see **`docs/adr/0002-lane-listing.md`**
 and *The lanes screen* below. Do not put them back as separate menu entries: both
 used to begin by asking *which lane* from a picker showing the same names with none
 of the status, which is a worse route to the same place. This is not the same thing
-as hiding an entry behind an unmet prerequisite, which stays forbidden.
+as hiding an entry behind an unmet prerequisite, which stays forbidden. Their
+existence as *subcommands* is not a reversal of this: the reason they are not menu
+entries is that the listing answers "which lane" better than a picker does, and that
+reason has nothing to say about a caller with no screen at all.
+
+### The listing's entry is `list`, in both places
+
+It was `lanes`. The menu entry, the subcommand and every mention in the docs are now
+one word, and the rename is not an alias: `lanes` is gone.
+
+This is in tension with §4 of `docs/CONVENTIONS.md` — *a noun for a destination, a
+verb for an action* — which `lanes` satisfied and `list` does not. Resolved, rather
+than left looking like a violation:
+
+- **§14 outranks §4 here.** One term per concept is the stronger rule, because two
+  names for one screen is a fault a reader meets every time, while a verb-shaped
+  destination is a fault they meet once. The subcommand has to be `list`: it is what
+  `git`, `gh`, `docker` and `kubectl` all call it, and `lane lanes` reads as a typo.
+  Having settled that, the menu either matches it or the tool calls one screen two
+  things.
+- **`open` was already the precedent**, and it is the strongest argument here: it is a
+  verb, it is a menu entry, and it takes you to a screen. Nobody has ever found that
+  confusing.
+- The **screen** is still "the lanes table" or "the listing" in prose, and the
+  `lanes_root` setting is untouched. What renamed is the entry you choose, not the
+  thing it shows you.
+
+### Machine-readable output: `--json`, on every subcommand
+
+This file used to say there was none — "no JSON, no parseable listings, no careful
+stdout/stderr split". That went with the premise above and goes with it.
+
+- **`--json` exists on every subcommand**, before or after it (`lane --json list`,
+  `lane list --json`), modelled on `gh`'s own convention since agent integration is a
+  named goal here rather than an afterthought.
+- **With `--json`, stdout is one JSON document and nothing else.** Not "mostly JSON":
+  `lane list --json | jq` has to work every time, so everything lane would otherwise
+  say — a spinner, a `✓`, a refusal, and any prompt it still has to draw — moves to
+  **stderr**. It is moved, never suppressed: a script that cannot see why something
+  was refused is worse off than one that has to redirect. The mechanism is one
+  constructor argument (`ConsoleUi(to_stderr=True)`), not a flag checked in twenty
+  places.
+- **The fields are additive-only.** A field is added, never removed, never renamed,
+  and never changed in meaning — clig.dev's rule, and the only promise that makes the
+  output worth parsing. If a field turns out to be wrong, add the right one beside it.
+- **`lane list --json` waits for `gh`, and that is not a breach of *the listing never
+  blocks on `gh`*.** That rule is about the first paint; there is no paint here. The
+  screen still fills the `pr` column in behind itself, because the screen still has a
+  reader looking at it.
+- Doctor's JSON carries a `status` per check **and** a small `facts` object per check.
+  The prose may be reworded; the facts are the part a script reads, and they are the
+  part the additive-only promise is about.
+- **A field is never a glyph.** `lane list`'s `pr` cell says `—` and `checking…`,
+  which are right on a screen and useless in a pipe, so the JSON carries
+  `{"state": "not-applicable" | "open" | "merged" | "closed" | "none" | "unknown",
+  "number", "url"}` instead. The rule generalises: if a value only makes sense to
+  somebody looking at it, it is presentation, and the machine-readable form needs the
+  fact underneath it.
+- **Without `--json` nothing moves.** lane's own prose is the output of the command, so
+  it stays on stdout exactly as it always has; only the usage errors the command line
+  itself produces go to stderr in both modes.
+
+### Missing input is TTY-gated, and lane never waits for an answer nothing can give
+
+The old rule was *lane requires a TTY, full stop*. The new one is narrower and is the
+same principle applied to a caller that has half the answers already:
+
+- A subcommand **given every flag it needs runs with no prompt**, anywhere.
+- Missing something, **with a terminal**: it asks, exactly as the session would —
+  same wording, same validation, same re-ask loop. It is the real `Ui`, reached
+  through the same seam.
+- Missing something, **with no terminal**: it refuses, naming the question and the
+  flag that would have answered it, and exits `3`. **It never blocks on stdin.**
+- A **bare `lane`** still requires a terminal, unchanged, and still refuses with the
+  same message. There is no half-working non-interactive menu.
+- `--version` and `--help` are answered before any prerequisite is consulted and work
+  anywhere, including CI.
+
+Two consequences worth stating because they are easy to get wrong:
+
+- **A flag value that names nothing on the screen is refused, not re-asked.** The user
+  said which project they meant; quietly prompting would be answering a different
+  question from the one they asked.
+- **A supplied answer is spent when it is used.** Several prompts re-ask when an
+  answer will not do — a branch name git rejects, a lane name already taken. Replaying
+  the same flag into the same prompt would loop for ever, so the second time round
+  says the value was not accepted.
+
+**`--launch-editor` is opt-in from the command line, and only from there.** A script or
+an agent has no use for a GUI window appearing on somebody's screen. The session still
+launches the editor by default, because a person entering a lane is on their way to it
+— that is what entering a lane *is*.
+
+**Entering a lane with an unanswered ignored path, and no terminal, refuses** — before
+applying anything, naming where the answer belongs. This is the one place the gate had
+a real choice, so the reasoning is recorded: bringing the path in silently copies what
+nobody asked for, and a `.env` is exactly the kind of path that turns up unanswered;
+leaving it out silently exits `0` on a lane that is not ready, which is a lie a script
+cannot detect. Refusing before the first step also keeps the command atomic and
+re-runnable.
+
+### Closing from the command line: row flags say what, `--yes` says do it
+
+The close screen's rows are facts about *this* lane — whether anything would be
+stranded, which branches it wandered through and left work on. So the flags cannot be
+checked against a list written down anywhere: they are checked against the rows the
+screen **would have drawn**, at the moment it would have drawn them, and a flag naming
+something it does not offer is refused before anything is removed.
+
+- **`--yes` accepts the screen**, taking the defaults it would have opened with: rescue
+  what would be stranded, delete what goes anyway, keep what holds unique work.
+- **Row flags change those defaults** — `--rescue`/`--no-rescue`,
+  `--delete-branch`/`--keep-branch`, `--delete-others a,b`/`--keep-others`.
+- **A row flag without `--yes` is a usage error.** Accepting a close is its own
+  decision and no amount of detail about the rows amounts to having taken it. The
+  alternative — pre-answering the rows and still drawing the screen — reads well until
+  you are in a pipe, where the screen cannot be drawn and the same flags would then
+  have to mean something else. One meaning each.
+- **`lane close <lane>` with neither** shows the screen where there is a terminal, and
+  refuses naming `--yes` where there is not.
+
+Which flags must name a row, and which may name nothing, is not arbitrary: **a flag
+asking for what closing already does is redundant where there is no row; a flag asking
+to deviate needs something to deviate from.** So `--delete-branch` is accepted silently
+when the branch goes anyway (deleting every branch it can is what closing *is*), while
+`--keep-branch` is refused; `--delete-others` must name a row, because it names
+specific branches and a name that is not there is a typo or a stale assumption; and
+`--rescue` must have a row either way, because rescue exists to keep something, and
+asking to keep what is not at risk means the lane is not the one the caller thinks.
+
+### Exit codes — a public interface
+
+A script branches on these, so they are a documented table, and **an existing code is
+never renumbered**.
+
+| Code | Name | Means |
+|---|---|---|
+| 0 | `EXIT_OK` | it did what was asked |
+| 1 | `EXIT_REFUSED` | lane ran, and would not or could not: a close `gh` cannot verify, a worktree git would not create, a preparation step that failed, an unreadable config |
+| 2 | `EXIT_USAGE` | the command line itself is wrong: unknown, contradictory, or inapplicable flags |
+| 3 | `EXIT_NO_TTY` | an answer is needed and there is no terminal to ask in |
+| 4 | `EXIT_NOT_FOUND` | a named project, lane or branch does not exist |
+| 130 | `EXIT_INTERRUPTED` | what a shell reports for a process killed by SIGINT |
+
+`3` is the old "lane is interactive and this is not a terminal" code, widened to
+"an answer is needed and cannot be asked for" — the same fact about the same
+situation, which is why it kept its number rather than being retired beside a new one.
+
+### `--help` is generated, and is no longer written by hand
+
+It was a hand-written paragraph, deliberately, and the reasoning was sound: there were
+two flags, and the useful half of the text was the sentence explaining that there was
+nothing else to type. That reasoning does not survive five subcommands with their own
+flags each — a hand-maintained list of them is exactly the kind of prose that drifts
+from the code and is never noticed. `argparse` (still stdlib; **Typer and Click are
+still refused**) generates both `lane --help` and `lane <command> --help` from the one
+definition that also parses them, and the tests assert against `parser.format_help()`
+itself rather than against a second string kept beside it.
+
+One thing this gave up, and it is worth naming: argparse's own wording now reaches the
+user on a bad flag (`unrecognized arguments: --wat`) where lane used to answer in its
+own prose. With five subcommands argparse's wording is the *consistent* one, and what
+still matters — that a refusal says nothing at all on stdout — is asserted.
 
 Consequences that are load-bearing:
 
 - The menu is generated from **one table**, so it cannot drift from what the app
   can actually do. The menu is always the full list: prerequisites are enforced
   where they are used, never by hiding or greying out entries.
-- lane **requires a TTY**. If stdin or stdout is not a terminal, print a clear
-  message saying lane is interactive and exit non-zero. No half-working
-  non-interactive fallback. `--version` and `--help` are the exceptions and must
-  work anywhere, including CI.
-- There is **no machine-readable output**: no JSON, no parseable listings, no
-  careful stdout/stderr split. Write for a human sitting in front of the session.
-  Exit codes are the one exception and stay meaningful — 0 for a clean exit,
-  non-zero for a refusal or failure.
 - Long-running steps (fetching origin, asking GitHub about a pull request,
   removing a worktree) show that something is happening — **including the ones
   after the last question**, which are the slowest a close has.
@@ -483,6 +685,14 @@ all — runs for real.**
 | `Environment` | TTY-ness, tool presence on PATH, launching the editor | Yes — this is what lets the suite run under pytest without a TTY and without opening an editor |
 | The prompt layer (`Ui`) | everything that asks the user something, and everything it tells them | Yes — replays scripted answers, records what was said |
 
+**There are three implementations of `Ui`, and the third is production code.**
+`ConsoleUi` asks a terminal, `FakeUi` replays a script in tests, and
+`cli.answers.Prefilled` answers from the command line and falls through to a real one
+for whatever the flags did not cover. Every asking method therefore takes a `key` —
+a name for the question, which the two real implementations ignore — because a flag
+has to find its prompt, and finding it by the prompt's *title* would make a §8
+rewording silently re-route a flag.
+
 `GitBackend` exists so the implementation can be **swapped**, not so tests can
 avoid git. Tests use the real one against temporary repositories.
 
@@ -709,11 +919,27 @@ These must never regress. Each is one line of behaviour and one line of why.
   the action that explains missing prerequisites.
 - **The rest of the menu is never gated behind a missing `gh`** — only closing a
   GitHub-backed lane needs it.
-- **A TTY is required**, `--version` and `--help` excepted — there is no
-  half-working non-interactive mode to maintain.
+- **A bare `lane` requires a TTY**, `--version` and `--help` excepted — there is no
+  half-working non-interactive menu to maintain. A **subcommand** runs anywhere and
+  refuses by name the moment it needs an answer no flag gave it; what it never does is
+  wait on stdin for one.
+- **A subcommand answers an action's questions; it never answers them itself** — one
+  implementation of opening or closing a lane, reached by two callers. The moment a
+  subcommand decides something for itself, the two entry points can disagree, which is
+  the entire hazard the no-subcommands rule used to avoid by not having a second caller
+  at all.
+- **With `--json`, stdout carries one JSON document and nothing else** — everything
+  lane says moves to stderr rather than being suppressed, because a script that cannot
+  see a refusal is worse off than one that has to redirect.
+- **A `--json` field is added, never removed, renamed or redefined** — it is the only
+  promise that makes parsing the output worth doing.
+- **An exit code is never renumbered** — it is a public interface a script branches on.
 - **Going back is a visible entry, never only a key** — `← Back` in every choice
   prompt, a `← Back to the menu` row at the end of the lanes table, `quit` at the
   menu. A key a user has to be taught is a key that should not exist.
+- **The editor launches from a session and not from a subcommand** — a script or an
+  agent has no use for a GUI window appearing; a person entering a lane is on their way
+  to one. `--launch-editor` asks for it back.
 - **Looking at a lane and acting on it are the same widget** — a table you read
   followed by a prompt that re-lists the same lanes makes the reader match a row to
   an action by eye, and grows as lanes × verbs.
@@ -1222,8 +1448,11 @@ Change both or neither.
 
 **Python 3.14** (`requires-python = ">=3.14"`, ruff `target-version = "py314"`,
 mypy `python_version = "3.14"`), `uv` for dependencies and the virtualenv,
-`pyproject.toml`, `src/lane/` layout. stdlib `argparse` for the two flags — **do
-not** pull in Typer or Click to parse `--version` and `--help`. Prompt and
+`pyproject.toml`, `src/lane/` layout. stdlib `argparse` for the command line,
+subparsers included — **do not** pull in Typer or Click. That rule was written when
+there were two flags to parse and is unaffected by there now being five subcommands:
+`argparse` also generates `--help` from the same definition, which is the whole reason
+the help text is no longer written by hand. Prompt and
 rendering libraries are confined to the presentation layer. Full type hints,
 `mypy --strict` clean, `ruff` for lint and format. `pytest`, `pre-commit`, and CI
 running lint, types and tests.
@@ -1401,6 +1630,27 @@ All of it arrived at test-first:
   is what makes it one rule
 - the branch table surviving 40 columns with `state` intact, and an adopted lane's
   panel drawing its branch once rather than twice
+- a subcommand given every flag producing the **same lane** as the menu given the same
+  answers — same worktree, same branch, same metadata — which is the test that would
+  notice a second implementation appearing
+- every subcommand running the very action the session runs, asserted by replacing
+  those functions and watching each one be called
+- a missing flag with no terminal refusing by name, with its flag, and **not hanging**;
+  the same missing flag with a terminal falling through to the real prompt, driven
+  through the existing `FakeUi`
+- a flag value that names nothing on the screen refused rather than re-asked, and
+  refused with a terminal present too
+- `--json` parsing on every subcommand, with **stdout carrying nothing else** — and a
+  refusal in `--json` mode leaving stdout empty rather than half a document
+- `close --delete-others` keeping one abandoned branch and dropping another, which is
+  the one thing the command line can do that a single question never could
+- a close flag naming a branch this close never offered refused **before** anything is
+  removed, and a row flag without `--yes` refused rather than half-applied
+- entering a lane with an unanswered ignored path and no terminal refusing without
+  applying anything
+- `lane --help` and `lane <command> --help` asserted against `argparse`'s own
+  rendering of the parser, never against a second string
+- the documented exit codes, pinned as a table
 - the branch prompt offering the **configured** prefixes and not the ones that were
   forgotten, with the bare name and `other…` surviving either way, and `other…`'s default
   following the first configured prefix rather than a hard-coded `feature/`

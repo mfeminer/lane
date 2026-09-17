@@ -15,9 +15,13 @@ from rich.console import Console
 from rich.markup import escape as _escape
 
 
-def make_console() -> Console:
+def make_console(*, stderr: bool = False) -> Console:
     # `soft_wrap=False` keeps long paths from being silently truncated mid-word.
-    return Console(highlight=False, soft_wrap=False)
+    #
+    # `stderr` is for `--json`, where stdout carries one JSON document and nothing
+    # else. Nothing is suppressed there — a refusal a script cannot see is worse than
+    # one it has to redirect — it is only moved off the channel the machine reads.
+    return Console(highlight=False, soft_wrap=False, stderr=stderr)
 
 
 def escape(text: str) -> str:

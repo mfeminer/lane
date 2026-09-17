@@ -15,14 +15,16 @@ Both accept Esc everywhere, and Ctrl-C behaves like Esc inside a prompt.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Sequence
 
 from prompt_toolkit.input import Input
-from prompt_toolkit.output import Output
+from prompt_toolkit.output import Output, create_output
 from rich.console import Console
 from rich.text import Text
 
 from lane.ui import render, splash
+from lane.ui import table as layout
 from lane.ui.checklist import check as check_list
 from lane.ui.picker import confirm as confirm_widget
 from lane.ui.picker import pick, prompt_text
@@ -47,10 +49,25 @@ _BACK = object()
 
 
 class ConsoleUi:
-    """Asks and tells, on a real terminal."""
+    """Asks and tells, on a real terminal.
 
-    def __init__(self, console: Console | None = None) -> None:
-        self._console = console if console is not None else render.make_console()
+    `key` is accepted and ignored by every asking method here: naming a question is
+    only of interest to something that might already know the answer (`cli.answers`).
+    """
+
+    def __init__(self, console: Console | None = None, *, to_stderr: bool = False) -> None:
+        self._console = console if console is not None else render.make_console(stderr=to_stderr)
+        self._to_stderr = to_stderr
+        """Draw on stderr, prompts included. `--json` sets it, so that a prompt lane
+        still has to ask cannot land in the middle of the document a script is reading.
+        Nothing about *what* is asked changes."""
+
+    def _where(self, given: Output | None) -> Output | None:
+        """Which terminal a widget draws on. Made on demand: building one costs a real
+        file descriptor, and a run that never prompts must never need one."""
+        if given is not None or not self._to_stderr:
+            return given
+        return create_output(stdout=sys.stderr)
 
     # -- asking --------------------------------------------------------------
     def choose[T](
@@ -60,6 +77,7 @@ class ConsoleUi:
         *,
         back: str | None = BACK_LABEL,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
         input: Input | None = None,
         output: Output | None = None,
     ) -> T:
@@ -68,6 +86,9 @@ class ConsoleUi:
         Doing it here rather than in every action means no action can forget it, and
         the label stays in one place.
         """
+        # `key` names the question for something that might already know the answer
+        # (`cli.answers`). A real prompt always asks, so it has no use for it.
+        del key
         offered: list[Choice[T | object]] = [Choice(o.label, o.value, o.hint) for o in options]
         tail = 0
         if back is not None and len(options) > 1:
@@ -82,7 +103,7 @@ class ConsoleUi:
             for option in offered:
                 on_render(option.label)
 
-        chosen = pick(title, offered, tail=tail, input=input, output=output)
+        chosen = pick(title, offered, tail=tail, input=input, output=self._where(output))
         if chosen is _BACK:
             raise Abandoned
         return chosen  # type: ignore[return-value]
@@ -97,6 +118,7 @@ class ConsoleUi:
         fill: Fill | None = None,
         cursor: int = 0,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
         input: Input | None = None,
         output: Output | None = None,
     ) -> tuple[T, int]:
@@ -105,6 +127,9 @@ class ConsoleUi:
         Same reason as `choose`: doing it at this layer means no action can forget
         it, and the label stays in one place.
         """
+        # `key` names the question for something that might already know the answer
+        # (`cli.answers`). A real prompt always asks, so it has no use for it.
+        del key
         return browse_table(
             title,
             columns,
@@ -114,7 +139,7 @@ class ConsoleUi:
             cursor=cursor,
             on_render=on_render,
             input=input,
-            output=output,
+            output=self._where(output),
         )
 
     def check[T](
@@ -128,12 +153,16 @@ class ConsoleUi:
         fill: Fill | None = None,
         finish: Finish = FINISH,
         on_render: Callable[[str], None] | None = None,
+        key: str = "",
         input: Input | None = None,
         output: Output | None = None,
     ) -> Answers[T]:
         """Hand off to the checklist widget. No rows to supply: it draws its own —
         `← Back` on every level that has one to go back to, and the two `finish` names
         on all of them."""
+        # `key` names the question for something that might already know the answer
+        # (`cli.answers`). A real prompt always asks, so it has no use for it.
+        del key
         return check_list(
             title,
             columns,
@@ -144,7 +173,7 @@ class ConsoleUi:
             finish=finish,
             on_render=on_render,
             input=input,
-            output=output,
+            output=self._where(output),
         )
 
     def text(
@@ -152,20 +181,28 @@ class ConsoleUi:
         title: str,
         *,
         default: str = "",
+        key: str = "",
         input: Input | None = None,
         output: Output | None = None,
     ) -> str:
-        return prompt_text(title, default=default, input=input, output=output)
+        # `key` names the question for something that might already know the answer
+        # (`cli.answers`). A real prompt always asks, so it has no use for it.
+        del key
+        return prompt_text(title, default=default, input=input, output=self._where(output))
 
     def confirm(
         self,
         title: str,
         *,
         default: bool = False,
+        key: str = "",
         input: Input | None = None,
         output: Output | None = None,
     ) -> bool:
-        return confirm_widget(title, default=default, input=input, output=output)
+        # `key` names the question for something that might already know the answer
+        # (`cli.answers`). A real prompt always asks, so it has no use for it.
+        del key
+        return confirm_widget(title, default=default, input=input, output=self._where(output))
 
     # -- telling -------------------------------------------------------------
     # `render.clip_long_words`: a path has no spaces, so under rich's default
@@ -192,6 +229,41 @@ class ConsoleUi:
 
     def detail(self, text: str) -> None:
         self._console.print(f"[dim]{self._clipped(text)}[/dim]")
+
+    def table(
+        self,
+        title: str,
+        columns: Sequence[Column],
+        rows: Sequence[Row[object]],
+    ) -> None:
+        """A table **printed**, not one you stand in — `lane list` in a pipe.
+
+        Telling rather than asking, which is why it sits here beside `info` and not
+        beside `browse`. It draws no cursor, no way back and no footer, because there
+        is nothing to move and nowhere to go: what it shares with the screen version
+        is `table.fit`, so the two cannot disagree about what a narrow terminal keeps
+        (docs/CONVENTIONS.md §13). A second layout is exactly what that rule exists to
+        prevent.
+        """
+        width = self._console.width
+        kept, measured, leads, short = layout.fit(columns, rows, width, prefix=layout.CURSOR_WIDTH)
+
+        self._console.print(f"[bold]{render.escape(title)}[/bold]")
+        if not rows or not kept:
+            return
+        header = "  " + "".join(
+            columns[index].title.ljust(column + layout.GAP)
+            for index, column in zip(kept, measured, strict=True)
+        )
+        self._console.print(f"[dim]{render.escape(header.rstrip())}[/dim]")
+        for row in rows:
+            drawn = "  " + "".join(
+                layout.clip(layout.shown(row.cells[index], leads, short), column).ljust(
+                    column + layout.GAP
+                )
+                for index, column in zip(kept, measured, strict=True)
+            )
+            self._console.print(render.escape(drawn.rstrip()))
 
     def heading(self, text: str) -> None:
         self._console.print(f"\n[bold]{self._clipped(text)}[/bold]")

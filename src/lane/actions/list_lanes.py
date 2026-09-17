@@ -78,6 +78,19 @@ class PrCell:
     these are built on it.
     """
 
+    state: str = "unknown"
+    """What GitHub said, as a word rather than as the cell's own shorthand.
+
+    `open`, `merged`, `closed`, `none` (asked, there is none), `unknown` (could not
+    ask), `not-applicable` (nothing to ask about — a detached lane, or a remote that is
+    not GitHub), and `checking` before the fill lands. The cell's text is prose for a
+    reader; this is the same fact for `lane list --json`, which cannot do anything with
+    an em dash.
+    """
+
+    number: int | None = None
+    url: str | None = None
+
     after_merge: int | None = None
     """Commits made after the decisive pull request merged, when that is knowable.
 
@@ -89,7 +102,7 @@ class PrCell:
     """
 
 
-PENDING = PrCell("checking…", "dim", "Checking GitHub for a pull request…")
+PENDING = PrCell("checking…", "dim", "Checking GitHub for a pull request…", state="checking")
 """What `pr` says before `gh` has answered. Never what it settles on."""
 
 
@@ -159,6 +172,23 @@ class Table:
                 row.pr = cached
         with self._lock:
             self._rows = rows
+
+    def settle(self) -> None:
+        """Collect the status **and** wait for the pull request answers.
+
+        What the screen does behind your back, done in front of it, for a caller that
+        has no screen: `lane list --json` cannot paint a `checking…` cell and fill it
+        in later, so it waits. That is not the rule about never blocking the first
+        paint — there is no paint here — and it is the only place the two differ.
+        """
+        self.collect()
+        self.fill(lambda: None)
+
+    def surveyed(self) -> list[LaneRow]:
+        """The rows as data: what the cells were made from, for a caller that is not
+        drawing cells."""
+        with self._lock:
+            return list(self._rows)
 
     def rows(self) -> list[Row[Lane]]:
         with self._lock:
@@ -296,7 +326,7 @@ def _pr_cell(context: Context, lane: Lane, status: WorktreeStatus | None) -> PrC
     Never raises: an unavailable `gh` is a cell, not a failure to render.
     """
     if status is None:
-        return PrCell("—", "dim")
+        return PrCell("—", "dim", state="not-applicable")
 
     repo = lane.repo_path(context.projects_root)
     try:
@@ -347,7 +377,7 @@ def _own_pr_cell(
             branch=status.branch, remote_url=remote_url, cwd=lane.path
         )
     except Exception:
-        return PrCell("unknown", "bad", "Could not ask GitHub about this branch.")
+        return PrCell("unknown", "bad", "Could not ask GitHub about this branch.", state="unknown")
 
     match answer:
         case Found() as history:
@@ -359,15 +389,21 @@ def _own_pr_cell(
                 tone,
                 f"PR #{pr.number} {state} — {pr.url}{_earlier(history)}",
                 merged=history.landed,
+                state=state,
+                number=pr.number,
+                url=pr.url,
                 after_merge=_after_merge(context, lane, history),
             )
         case NoPullRequest():
-            return PrCell("none", "dim", "No pull request for this branch yet.")
+            return PrCell("none", "dim", "No pull request for this branch yet.", state="none")
         case CannotTell(remedy=remedy, detail=detail):
             # The one thing the close flow can never tell you, because for this
             # lane it refuses before it gets that far.
             return PrCell(
-                "unknown", "bad", f"Pull request state unknown — {detail}. Fix with: {remedy}"
+                "unknown",
+                "bad",
+                f"Pull request state unknown — {detail}. Fix with: {remedy}",
+                state="unknown",
             )
         case NotApplicable(reason=reason):
             note = (
@@ -375,7 +411,7 @@ def _own_pr_cell(
                 if reason == "not-github"
                 else "This lane is on a detached HEAD, so there is no branch to have one."
             )
-            return PrCell("—", "dim", note)
+            return PrCell("—", "dim", note, state="not-applicable")
 
 
 def _earlier(history: Found) -> str:

@@ -50,7 +50,7 @@ sit, where lanes should be parked, and which editor to open.
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ❯ open        New work, or a branch that already exists — your editor opens in it
-    lanes       Every open lane, where it stands, and what to do with it
+    list        Every open lane, where it stands, and what to do with it
     settings    Configure lane
     doctor      Check git, gh, the editor and your paths
     quit        Leave lane
@@ -67,7 +67,7 @@ A working day is four steps, and lane is only in two of them:
    opens in the new worktree.
 2. **Do all the work there.**
 3. **Quit the editor.**
-4. **Run `lane`, choose `lanes`, put the cursor on the row and press `Enter` →
+4. **Run `lane`, choose `list`, put the cursor on the row and press `Enter` →
    `close`.** It checks the pull requests, verifies nothing is left behind, and
    removes the worktree and every branch the lane used.
 
@@ -113,7 +113,31 @@ it, however deep. On a folder, `?` means there is still an unanswered path under
 
 `↑` `↓` move, `Enter` acts on the row under the cursor, and `Ctrl-C` quits lane — from
 anywhere, and always safely: every question comes before the first irreversible step.
-There are **no subcommands**; `--version` and `--help` are the only arguments.
+
+## Or drive it from a script
+
+Everything the menu does, a subcommand does — and it is the same code underneath, not a
+second implementation:
+
+```bash
+lane open --project acme --description "Fix the pager" --branch-name bugfix/pager
+lane list --json | jq -r '.[] | select(.merged) | .slug'
+lane enter acme/fix-the-pager
+lane close acme/fix-the-pager --yes --keep-branch
+lane doctor --json
+```
+
+`lane --help` lists them; `lane <command> --help` lists that command's flags. Three
+things worth knowing before you script it:
+
+- **`--json` puts one JSON document on stdout and nothing else** — every `✓`, spinner
+  and refusal goes to stderr, so a pipe is always parseable.
+- **A missing flag is asked for if you have a terminal, and refused by name if you do
+  not.** lane never sits waiting for an answer nothing can give it.
+- **The editor does not launch from a subcommand** unless you pass `--launch-editor`.
+
+Exit codes: `0` done · `1` refused · `2` bad flags · `3` needs an answer, no terminal ·
+`4` no such lane · `130` interrupted.
 
 ## Configure
 

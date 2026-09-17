@@ -142,7 +142,7 @@ def fit(
         return [
             max(
                 [len(columns[index].title)]
-                + [len(_shown(row.cells[index], leads, short)) for row in rows]
+                + [len(shown(row.cells[index], leads, short)) for row in rows]
             )
             for index in kept
         ]
@@ -181,7 +181,7 @@ def fit(
     return kept, measured, leads, short
 
 
-def _shown(cell: Cell, leads: bool, short: bool = False) -> str:
+def shown(cell: Cell, leads: bool, short: bool = False) -> str:
     text = cell.short if short and cell.short else cell.text
     return f"{cell.lead}{text}" if leads else text
 

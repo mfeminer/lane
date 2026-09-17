@@ -1225,7 +1225,7 @@ def test_the_removal_finishes_and_then_lane_exits_rather_than_returning_to_the_m
     ui = InterruptingUi(
         # menu → lanes → the row → close it → the close screen. Nothing after: the
         # session ends of its own accord, and a leftover answer would prove it had not.
-        ["lanes", "stopme", "close", CLOSE],
+        ["list", "stopme", "close", CLOSE],
         at="removing the worktree",
     )
     context = _context(ui, projects_root, lanes_root, StubGitHubClient(NoPullRequest()))

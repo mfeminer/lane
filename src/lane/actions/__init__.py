@@ -8,6 +8,12 @@ The menu is always the **full** list. Prerequisites are enforced where they are
 used, never by hiding or greying out entries — a user who cannot see an action
 cannot find out why it is unavailable, and doctor is what explains that.
 
+The listing's entry is `list`, and it is the same word the subcommand uses. §4 of
+docs/CONVENTIONS.md prefers a noun for a destination, which `lanes` was — but one
+concept with two names is the worse fault of the two (§14), and the subcommand has to
+be `list` because that is what every tool in this space calls it. AGENTS.md carries
+the argument. `open` was already a verb-shaped way into a destination.
+
 `enter` and `close` used to be entries here. They are not hidden: they are the two
 verbs the `lanes` screen offers for the row under the cursor. Both began by asking
 *which lane* from a picker that showed the same names with none of the status, so
@@ -47,8 +53,8 @@ ACTIONS: tuple[Action, ...] = (
         run=open_lane.run,
     ),
     Action(
-        key="lanes",
-        label="lanes",
+        key="list",
+        label="list",
         description="Every open lane, where it stands, and what to do with it",
         run=list_lanes.run,
     ),

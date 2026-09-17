@@ -40,6 +40,7 @@ the worktree, so the workflow never needs it.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from lane import prepare
@@ -50,28 +51,73 @@ from lane.prepare import Candidate, Effect, Step, Verb, apply
 from lane.prepare.sheet import Sheet, looks_like_secrets
 from lane.ui.seam import Quit
 
+PREPARATION = "preparation"
+"""The name of the one question entering a lane asks. No flag answers it — which paths
+come into a lane is a screen, and `cli.answers` refuses rather than guessing."""
+
 REMEMBERED = "Answers are remembered per project — change them in settings · preparation."
 
 
-def enter(context: Context, lane: Lane) -> None:
-    """Bring the lane up to date, then open the editor in it."""
-    _prepare(context, lane)
-    _launch(context, lane)
+@dataclass(frozen=True, slots=True)
+class Prepared:
+    """What preparation actually did, as opposed to what it said.
+
+    Every one of these is already on screen as a `✓` or a `✗`; this is the same facts
+    in a shape a script can read. Nothing decides from it — the decisions were taken
+    before any of it ran — so it cannot become a second opinion about the same lane.
+    """
+
+    cloned: tuple[str, ...] = ()
+    ran: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    """Steps that had nothing left to do — a `run` whose guard a clone above just
+    satisfied. Not a failure, and not silence either: a script asking *why did nothing
+    happen* gets an answer."""
+
+    failed: tuple[tuple[str, str], ...] = ()
+    """(what, why). A failed step leaves a usable lane, so this is never fatal to the
+    lane — only to the exit code."""
 
 
-def _launch(context: Context, lane: Lane) -> None:
+@dataclass(frozen=True, slots=True)
+class Entered:
+    """What entering a lane came to. Read by `--json`; ignored by the menu."""
+
+    launched: bool
+    editor: str
+    """What was said about the editor — that it opened, or why it did not."""
+
+    prepared: Prepared = Prepared()
+
+
+def enter(context: Context, lane: Lane, *, launch_editor: bool = True) -> Entered:
+    """Bring the lane up to date, then open the editor in it.
+
+    `launch_editor` is off only from the command line, and the reason is not about
+    lane: a script or an agent has no use for a window appearing on somebody's screen.
+    The session always launches, because a person entering a lane is on their way to
+    the editor — that is what entering a lane *is*.
+    """
+    prepared = _prepare(context, lane)
+    if not launch_editor:
+        return Entered(launched=False, editor="not asked for", prepared=prepared)
+    return _launch(context, lane, prepared)
+
+
+def _launch(context: Context, lane: Lane, prepared: Prepared) -> Entered:
     launch = context.environment.launch_editor(context.config.editor, lane.path)
     if launch.launched:
         context.ui.ok(launch.detail)
     else:
         context.ui.warn(f"{launch.detail} — open it yourself: {lane.path}")
         context.ui.detail("  Change the editor command in settings.")
+    return Entered(launched=launch.launched, editor=launch.detail, prepared=prepared)
 
 
 # -- preparation -----------------------------------------------------------------
 
 
-def _prepare(context: Context, lane: Lane) -> None:
+def _prepare(context: Context, lane: Lane) -> Prepared:
     """Ask about anything new, then apply everything that has something to do.
 
     The common case is a lane that is already ready, and it must cost nothing: one git
@@ -100,7 +146,7 @@ def _prepare(context: Context, lane: Lane) -> None:
         context.ui.warn(plan.problem)
 
     if not plan.anything_to_do:
-        return
+        return Prepared()
 
     context.ui.heading(f"Preparing {lane.slug}")
 
@@ -111,7 +157,7 @@ def _prepare(context: Context, lane: Lane) -> None:
         fresh = (prepare.needed(step, lane.path) for step in answered)
         effects = (*effects, *(effect for effect in fresh if effect is not None))
 
-    _apply(context, lane, repo, effects)
+    return _apply(context, lane, repo, effects)
 
 
 def _discover(context: Context, repo: Path) -> list[str]:
@@ -187,6 +233,7 @@ def _ask(context: Context, repo: Path, candidates: tuple[Candidate, ...]) -> tup
         answers=sheet.answers,
         summary=sheet.summary,
         fill=sheet.fill,
+        key=PREPARATION,
     )
     answered = sheet.steps(decided)
     _warn_about_secrets(context, answered)
@@ -218,7 +265,7 @@ def _warn_about_secrets(context: Context, answered: tuple[Step, ...]) -> None:
 # -- applying --------------------------------------------------------------------
 
 
-def _apply(context: Context, lane: Lane, repo: Path, effects: tuple[Effect, ...]) -> None:
+def _apply(context: Context, lane: Lane, repo: Path, effects: tuple[Effect, ...]) -> Prepared:
     """Every step that has something to do, in order, each under its own spinner.
 
     Paths before commands: a command usually depends on the paths being in place, and a
@@ -227,12 +274,18 @@ def _apply(context: Context, lane: Lane, repo: Path, effects: tuple[Effect, ...]
     ordered = [effect for effect in effects if effect.verb is not Verb.RUN]
     ordered += [effect for effect in effects if effect.verb is Verb.RUN]
 
+    cloned: list[str] = []
+    ran: list[str] = []
+    skipped: list[str] = []
+    failed: list[tuple[str, str]] = []
+
     for effect in ordered:
         if effect.verb is Verb.RUN and prepare.needed(effect.step, lane.path) is None:
             # A guard path one of the steps above has just satisfied. Asked again here
             # rather than only when the plan was built, which is what makes the ordering
             # mean anything: `clone node_modules` is exactly what
             # `run … unless node_modules` was waiting for.
+            skipped.append(effect.subject)
             continue
         try:
             outcome = context.ui.progress(effect.phrase(), _work(lane, repo, effect))
@@ -245,6 +298,16 @@ def _apply(context: Context, lane: Lane, repo: Path, effects: tuple[Effect, ...]
             context.ui.detail("  Entering the lane again finishes the job.")
             raise
         _report(context, effect, outcome)
+        if not outcome.ok:
+            failed.append((effect.subject, outcome.detail))
+        elif effect.verb is Verb.RUN:
+            ran.append(effect.subject)
+        else:
+            cloned.append(effect.subject)
+
+    return Prepared(
+        cloned=tuple(cloned), ran=tuple(ran), skipped=tuple(skipped), failed=tuple(failed)
+    )
 
 
 def _work(lane: Lane, repo: Path, effect: Effect) -> Callable[[], apply.Outcome]:

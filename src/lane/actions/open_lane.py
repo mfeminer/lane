@@ -36,6 +36,21 @@ from lane.ui.seam import Cell, Choice, Column, Row
 
 KIND_QUESTION = "What is this lane for?"
 NAME_QUESTION = "Lane name"
+DESCRIPTION_QUESTION = "What are you working on"
+MODE_QUESTION = "How should this lane start?"
+BRANCH_NAME_QUESTION = "Branch name"
+
+# What each question is *called*, so a flag can answer it before it is drawn. Names,
+# not titles: the titles above are prose, and docs/CONVENTIONS.md §8 expects them to be
+# reworded — a reword must not silently re-route a flag (`cli.answers`).
+KIND = "kind"
+DESCRIPTION = "description"
+MODE = "mode"
+BRANCH_NAME = "branch-name"
+BRANCH_NAME_TYPED = "branch-name-typed"
+BRANCH = "branch"
+LANE_NAME = "lane-name"
+ENTER_INSTEAD = "enter-that-lane"
 
 BRANCH_COLUMNS = (
     Column("branch"),
@@ -45,10 +60,32 @@ BRANCH_COLUMNS = (
     Column("age", drop=1),
 )
 
-_OTHER = "\x00other\x00"
+OTHER = "\x00other\x00"
+"""The escape from the branch menu into typing one. Public because `--branch-name`
+means *that* choice followed by *that* answer: one flag, the two keystrokes a person
+would have made. The alternative — teaching the seam that this picker has a free-text
+escape — would put a screen's shape into the thing that answers screens."""
 _BARE = "\x00bare\x00"
-_NEW = "\x00new\x00"
-_EXISTING = "\x00existing\x00"
+NEW = "\x00new\x00"
+EXISTING = "\x00existing\x00"
+
+
+@dataclass(frozen=True, slots=True)
+class Opened:
+    """What opening a lane came to. Read by `--json`; ignored by the menu."""
+
+    project: str
+    lane: str
+    path: Path
+    branch: str | None
+    """None means detached."""
+
+    base: str
+    start: str
+    adopted: bool
+    """The branch was already there and this lane took it up."""
+
+    entered: enter_lane.Entered
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,10 +111,21 @@ class _Plan:
 
 
 def run(context: Context) -> None:
+    """The menu's way in. It ignores the outcome, because it has a screen to go back to."""
+    open_a_lane(context)
+
+
+def open_a_lane(context: Context, *, launch_editor: bool = True) -> Opened | None:
+    """Open a lane and say what came of it. `None` means it was refused, having said why.
+
+    The return value exists for `lane open --json`, which cannot recover an outcome
+    from prose. It is the same decision either way — one code path, rendered twice —
+    and the menu simply drops it.
+    """
     plan = _gather(context)
     if plan is None:
-        return
-    _execute(context, plan)
+        return None
+    return _execute(context, plan, launch_editor=launch_editor)
 
 
 def _gather(context: Context) -> _Plan | None:
@@ -94,11 +142,12 @@ def _gather(context: Context) -> _Plan | None:
     kind = ui.choose(
         KIND_QUESTION,
         [
-            Choice("new work", _NEW, "describe the task; lane makes the branch"),
-            Choice("existing branch", _EXISTING, "pick up a branch that is already there"),
+            Choice("new work", NEW, "describe the task; lane makes the branch"),
+            Choice("existing branch", EXISTING, "pick up a branch that is already there"),
         ],
+        key=KIND,
     )
-    if kind == _EXISTING:
+    if kind == EXISTING:
         return _gather_existing(context, project)
     return _gather_new(context, project)
 
@@ -107,7 +156,7 @@ def _gather_new(context: Context, project: Project) -> _Plan | None:
     """New work: the flow lane has always had, unchanged from here down."""
     ui = context.ui
 
-    description = ui.text("What are you working on")
+    description = ui.text(DESCRIPTION_QUESTION, key=DESCRIPTION)
     if not description.strip():
         ui.error("A lane needs a description.")
         return None
@@ -141,11 +190,12 @@ def _gather_new(context: Context, project: Project) -> _Plan | None:
     ui.blank()
 
     mode = ui.choose(
-        "How should this lane start?",
+        MODE_QUESTION,
         [
             Choice("branch", "branch", "start on a new branch now"),
             Choice("detached", "detached", f"sit at {start_point} with no branch"),
         ],
+        key=MODE,
     )
 
     branch: str | None = None
@@ -231,7 +281,7 @@ def _pick_branch(context: Context, project: Project) -> BranchRef | None:
 
     cursor = 0
     while True:
-        chosen, cursor = ui.browse(title, BRANCH_COLUMNS, rows, cursor=cursor)
+        chosen, cursor = ui.browse(title, BRANCH_COLUMNS, rows, cursor=cursor, key=BRANCH)
 
         holder = held.get(chosen.name)
         if holder is None:
@@ -252,7 +302,7 @@ def _pick_branch(context: Context, project: Project) -> BranchRef | None:
             continue
 
         ui.error(f"'{chosen.name}' is open in the lane {lane.slug}.")
-        if not ui.confirm("Enter that lane instead?"):
+        if not ui.confirm("Enter that lane instead?", key=ENTER_INSTEAD):
             continue
         # A better answer than an error: the lane the user is looking for already
         # exists. Nothing has been created, so this is a clean way out of `open`.
@@ -336,7 +386,7 @@ def _ask_lane_name(context: Context, project: Project, branch: BranchRef) -> str
         return None
 
     while True:
-        name = slugify(ui.text(NAME_QUESTION, default=default))
+        name = slugify(ui.text(NAME_QUESTION, default=default, key=LANE_NAME))
         if not name:
             ui.error("Could not derive a lane name from that.")
             continue
@@ -388,16 +438,18 @@ def _choose_branch(context: Context, lane_name: str) -> str | None:
         Choice(f"{prefix}/{lane_name}", f"{prefix}/{lane_name}") for prefix in prefixes
     ]
     options.append(Choice(lane_name, _BARE, "no prefix"))
-    options.append(Choice("other…", _OTHER, "type a branch name"))
+    options.append(Choice("other…", OTHER, "type a branch name"))
 
     while True:
-        chosen = ui.choose("Branch name", options)
+        chosen = ui.choose(BRANCH_NAME_QUESTION, options, key=BRANCH_NAME)
         if chosen == _BARE:
             candidate = lane_name
-        elif chosen == _OTHER:
+        elif chosen == OTHER:
             # Something the menu itself would have offered — offering `feature/` to
             # somebody who has just forgotten `feature` is the one wrong default.
-            candidate = ui.text("Branch name", default=f"{prefixes[0]}/{lane_name}")
+            candidate = ui.text(
+                BRANCH_NAME_QUESTION, default=f"{prefixes[0]}/{lane_name}", key=BRANCH_NAME_TYPED
+            )
         else:
             candidate = chosen
 
@@ -438,7 +490,7 @@ def _starting_commit(context: Context, lane_path: Path, base: str) -> str:
         return ""
 
 
-def _execute(context: Context, plan: _Plan) -> None:
+def _execute(context: Context, plan: _Plan, *, launch_editor: bool = True) -> Opened | None:
     """The first irreversible step, and everything after it."""
     ui = context.ui
     store: LaneStore = context.lane_store()
@@ -463,7 +515,7 @@ def _execute(context: Context, plan: _Plan) -> None:
             context.git.add_worktree_new_branch(repo, lane_path, plan.branch, plan.start_point)
     except GitError as exc:
         ui.error(f"Could not create the worktree: {exc}")
-        return
+        return None
 
     start = _starting_commit(context, lane_path, plan.base)
 
@@ -497,7 +549,19 @@ def _execute(context: Context, plan: _Plan) -> None:
     # is not a breach of *every question comes before the first irreversible step*:
     # abandoning them leaves a complete lane that is merely unprepared, which the
     # listing shows, the close flow can act on, and the next enter repairs.
-    enter_lane.enter(
+    entered = enter_lane.enter(
         context,
         Lane(project=plan.project, name=plan.lane_name, path=lane_path, meta=meta),
+        launch_editor=launch_editor,
+    )
+
+    return Opened(
+        project=plan.project,
+        lane=plan.lane_name,
+        path=lane_path,
+        branch=plan.branch,
+        base=plan.base,
+        start=start,
+        adopted=plan.existing,
+        entered=entered,
     )

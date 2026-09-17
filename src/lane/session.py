@@ -83,7 +83,7 @@ def run(context: Context, *, git_available: bool = True) -> int:
             ui.blank()
             ui.error("Interrupted.")
             ui.detail(
-                "  A step already under way may be half-done — 'lanes' shows where things stand."
+                "  A step already under way may be half-done — 'list' shows where things stand."
             )
             ui.blank()
             ui.farewell()
