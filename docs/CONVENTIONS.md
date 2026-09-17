@@ -184,9 +184,17 @@ touched.*
 ## 4. Menu and list entry wording
 
 - **Lower-case, one word where possible, noun for a destination, verb for an
-  action** — `open`, `lanes`, `settings`, `doctor`, `quit`; `enter`,
-  `close` for the two things you can do to a lane. Already consistent; keep doing
-  this.
+  action** — `open`, `list`, `settings`, `doctor`, `quit`; `enter`,
+  `close` for the two things you can do to a lane. Keep doing this.
+- **`list` is the one entry that breaks the noun/verb half of that rule, and it was
+  decided rather than slipped in.** It was `lanes`, which was a perfectly good
+  destination-noun. It is now also a subcommand, and a subcommand has to be `list`
+  because that is what `git`, `gh`, `docker` and `kubectl` all call it — so the choice
+  was between one screen with two names and one entry that reads as a verb. §14 wins:
+  **one term per concept** is the rule a reader meets every time, and the part of
+  speech is a rule they meet once. `open` is the existing precedent — a verb-shaped
+  entry to a destination that has never confused anybody. The full argument is in
+  AGENTS.md; do not "fix" this back without reading it.
 - **The hint/description after an entry is a plain sentence fragment, not
   restating the entry's own word**: `"Every open lane, where it stands, and what to
   do with it"`, not `"Show the lanes"`.
@@ -429,6 +437,11 @@ ellipsis (`"Fetching origin…"`, `"Asking GitHub about the pull request…"`,
   menu."` is the reference. When something renamed, the empty-state text is one of
   the places to grep for the old name — it's exactly the kind of text that outlives
   what it describes.
+- **A subcommand's empty state names the subcommand, because it has no menu to point
+  at.** `lane list` with nothing open says `"No open lanes. Open one with: lane open"`.
+  Same rule, not an exception to it: name the next action *as this caller would reach
+  it*. Telling somebody in a pipe to choose something from a menu is the fault the rule
+  exists to stop, one layer out.
 - **No table, no header, no cursor for an empty list.** Already the rule for the
   lanes table (ADR 0002) and worth stating generally: a screen built around a list
   does not render the list's frame when the list is empty.
@@ -518,6 +531,8 @@ One term per concept. The list, and the survivor where two forms were found:
 | Ignored paths under one directory, shown as one row you can go into | a **folder** (of paths) | group (used in the source for the type, not on screen), bundle, batch, directory (git's word for the thing on disk, not for the row) |
 | A folder row whose paths are not all answered the same way | **mixed** (`◐`) | partial, some, indeterminate, half |
 | A path already in the lane, which a tick therefore leaves alone | **already there** | present, exists, installed |
+| The listing, as a thing you choose | **list** — the menu entry and the subcommand, one word | lanes (the old entry name; still the right word for *the lanes table* as a screen, and for `lanes_root`) |
+| Answering a prompt from the command line before it is drawn | the flag **answers** the question | pre-fill, inject, mock (a mock replaces; this answers) |
 | The two things opening a lane can mean | **new work** / **existing branch** | new/existing alone (they name nothing), fresh, scratch, checkout |
 | A branch that was already there when the lane opened | the lane **adopted** it (adjective: **adopted**) | borrowed, reused, attached, imported |
 | A branch that came into being with or during the lane | the lane **created** it | own, new, made |

@@ -28,7 +28,7 @@ under it:
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   ❯ open        New work, or a branch that already exists — your editor opens in it
-    lanes       Every open lane, where it stands, and what to do with it
+    list        Every open lane, where it stands, and what to do with it
     settings    Configure lane
     doctor      Check git, gh, the editor and your paths
     quit        Leave lane
@@ -36,18 +36,20 @@ under it:
   ↑↓ move · enter choose
 ```
 
-There's no `enter` or `close` here: **`lanes` is where you do both.** They used to be
+There's no `enter` or `close` here: **`list` is where you do both.** They used to be
 their own entries, and each of them started by asking you to pick a lane from a list
 that showed you the names and nothing else — while the listing right next door showed
 you the names *and* what state each one was in. Now you look and act in one place.
 
 Pick an action and lane walks you through it. Most drop you back at the menu when
-they're done; `lanes` keeps you until you leave it, because closing three lanes
+they're done; `list` keeps you until you leave it, because closing three lanes
 shouldn't mean three trips through here.
 
-> **There are no subcommands.** `lane open` is an error, not a shortcut. The menu is
-> the only way in, which means there's only one list of things lane can do and it
-> can't fall out of step with itself.
+> **There are subcommands, and they are for scripts.** `lane open --project acme
+> --description "Fix the pager"` does exactly what the menu does — it *is* the menu's
+> code, answered in advance rather than asked. Nothing is duplicated: if a flag does
+> not cover something, lane asks you the question the session would have asked, or
+> refuses by name when there is no terminal to ask in. See *Scripting lane* below.
 
 ### Keys
 
@@ -867,13 +869,76 @@ disposable: delete it and lane carries on.
 
 ---
 
+## Scripting lane
+
+The menu is for a person with a cursor. A script and an agent have neither, so
+everything the menu does is also a subcommand:
+
+```bash
+lane open --project acme --description "Fix the pager" --branch-name bugfix/pager
+lane list --json
+lane enter acme/fix-the-pager --launch-editor
+lane close acme/fix-the-pager --yes --delete-others feature/old-attempt
+lane doctor --json
+```
+
+**It is the same code.** A subcommand does not have its own idea of what opening a lane
+means: it answers the questions the interactive flow was going to ask, then runs that
+flow. So a lane opened from a script and one opened from the menu are the same lane,
+down to the metadata.
+
+**Missing flags are asked for, not assumed.** With a terminal, `lane open --project
+acme` asks you the rest exactly as a session would. In a pipe, it refuses and names the
+flag that would have answered it — it never sits there waiting for input that cannot
+come.
+
+**`--json` keeps stdout clean.** One JSON document, nothing else; every `✓`, spinner and
+refusal goes to stderr. So this is safe:
+
+```bash
+lane list --json | jq -r '.[] | select(.dirty == 0 and .merged) | .slug'
+```
+
+Fields are only ever added — never removed, renamed, or quietly redefined.
+
+**Closing takes `--yes`.** The close screen is a screen: rows for what closing does,
+and accepting it is its own decision. `--yes` accepts it with the defaults it would have
+opened with (rescue what would be stranded, delete what goes anyway, keep what holds
+unique work). The row flags — `--rescue`/`--no-rescue`, `--delete-branch`/`--keep-branch`,
+`--delete-others a,b`/`--keep-others` — change those defaults, and each one is checked
+against the rows this particular close actually has. Naming a branch it never offered is
+an error, before anything is removed.
+
+**The editor stays shut** unless you pass `--launch-editor`.
+
+**Entering a lane can refuse.** If some ignored path has never been answered — a new
+`node_modules` in a package that did not have one — lane cannot guess, so in a pipe it
+refuses and tells you to answer it once, in a terminal or in settings · preparation.
+Every lane afterwards remembers.
+
+| Exit | Means |
+|---|---|
+| `0` | it did what you asked |
+| `1` | lane ran and refused, or something failed |
+| `2` | the command line was wrong |
+| `3` | it needed an answer and there was no terminal |
+| `4` | no such lane, project or branch |
+| `130` | interrupted |
+
+---
+
 ## Troubleshooting
 
-**"lane is interactive and needs a terminal"** — you piped or redirected it. Only
-`--version` and `--help` work that way.
+**"lane is interactive and needs a terminal"** — you piped or redirected a bare
+`lane`, which is the menu. A **subcommand** works there: see *Scripting lane*.
 
-**"does not understand open"** — there are no subcommands. Run `lane` and pick from
-the menu.
+**"lane: unrecognized arguments"** — check `lane --help` for the subcommands, and
+`lane <command> --help` for one command's flags. Both are generated from the parser, so
+they cannot be out of date.
+
+**"no answer was given and there is no terminal to ask in"** — a subcommand needed
+something no flag gave it. The line under it names the flag that would have. In a
+terminal it would simply have asked you.
 
 **`--version` shows a build I don't recognise** — an older copy is earlier on your
 PATH. Check with `which -a lane`.
