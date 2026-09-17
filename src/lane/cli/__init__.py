@@ -40,7 +40,40 @@ EXIT_INTERRUPTED = 130
 """What a shell reports for a process killed by SIGINT."""
 
 
+def _output_in_utf8() -> None:
+    """Make lane's own output UTF-8, whatever the machine would otherwise have chosen.
+
+    `lane doctor > report.txt` on Windows died with `UnicodeEncodeError: 'charmap'
+    codec can't encode character '\u2713'` — the tick doctor puts in front of every
+    healthy line. Python encodes a redirected stream with the **locale** encoding, and
+    on Windows that is a code page that has no `✓`, no `◐` and none of the box glyphs
+    the splash and the tables are drawn with. A console is fine, because Python writes
+    to one through a wide-character API; a pipe or a file is not, and a pipe or a file
+    is what a script gets.
+
+    So lane states what its own output is rather than inheriting a guess. Not a Windows
+    branch: a POSIX machine with a `C` locale has the same hole, and Python's own
+    UTF-8-mode coercion for that case is a default somebody can turn off.
+
+    `errors="replace"` is the backstop. A terminal that genuinely cannot carry a glyph
+    should show a question mark; it should never end lane in a traceback — doctor of all
+    things is the command that has to work on a machine where nothing else does.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            # A capture object, a pipe somebody wrapped, an embedding. None of them owe
+            # lane a `reconfigure`, and refusing to start over it would be absurd.
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except OSError, ValueError:  # pragma: no cover - a stream that will not
+            continue
+
+
 def main(argv: list[str] | None = None, *, environment: Environment | None = None) -> int:
+    _output_in_utf8()
+
     from lane.cli import parser as parsing
 
     parser = parsing.build()
