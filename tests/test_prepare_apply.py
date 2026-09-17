@@ -217,7 +217,13 @@ def test_measure_never_follows_a_link_out_of_the_path(tmp_path: Path) -> None:
 
 def test_measure_reports_what_it_could_reach_rather_than_giving_up(tmp_path: Path) -> None:
     """One unreadable directory in a tree of hundreds is not a reason to answer `—` for
-    the whole path. A short number is more use than no number."""
+    the whole path. A short number is more use than no number.
+
+    POSIX only, because making a directory unreadable is: `chmod` on Windows sets a
+    read-only attribute at best and cannot take read access away, which is the same
+    measured fact `config.keep_private` is built on."""
+    if sys.platform == "win32":
+        pytest.skip("a mode cannot remove read access on Windows")
     tree = tmp_path / "tree"
     shut = tree / "shut"
     shut.mkdir(parents=True)
