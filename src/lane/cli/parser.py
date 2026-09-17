@@ -47,7 +47,18 @@ COMMANDS: tuple[Command, ...] = (
     Command("enter", "Bring a lane up to date, then open the editor in it", takes_lane=True),
     Command("close", "Safety checks, then remove the worktree", takes_lane=True),
     Command("doctor", "Check git, gh, the editor and your paths"),
+    Command("config", "Read and change what the config screen holds"),
 )
+
+SETTINGS = ("projects-root", "lanes-root", "editor")
+"""The three flat settings, spelled as the command line spells them.
+
+Kebab on the command line and `projects_root` underneath, which is the one place the
+two spellings meet: the underscore form is `Config`'s own field name, the key the
+override map uses and the value of the row on the screen, and renaming any of those to
+match a command-line convention would be the tail wagging the dog. `cli/configuring.py`
+converts, once.
+"""
 
 
 _JSON_HELP = "print the outcome as JSON on stdout, and nothing else there"
@@ -155,7 +166,56 @@ def _close_flags(one: argparse.ArgumentParser) -> None:
     one.set_defaults(rescue=None, delete_branch=None)
 
 
-_FLAGS = {"open": _open_flags, "enter": _enter_flags, "close": _close_flags}
+def _config_flags(one: argparse.ArgumentParser) -> None:
+    """`config`'s own subcommands, and the two that have subcommands of their own.
+
+    The only command with a second level, and it earns it: `config` is four unrelated
+    things — three flat settings, a list of prefixes, a per-project checklist and a
+    per-project list of commands — where every other subcommand is one. `git config` and
+    `gh config` are shaped this way for the same reason, and flattening it would give
+    names like `config-prefixes-add`, which is a namespace spelled badly.
+    """
+    groups = _level(one, "config", dest="config_command", metavar="<what>")
+
+    get = _under(groups, "config", "get", "print one setting's current value")
+    _setting(get)
+
+    changing = _under(
+        groups, "config", "set", "change one setting, validating it as the screen does"
+    )
+    _setting(changing)
+    changing.add_argument("value", metavar="<value>", nargs="?", help="what to set it to")
+
+    prefixes = _under(
+        groups, "config", "prefixes", "the branch prefixes offered when a lane names its branch"
+    )
+    verbs = _level(prefixes, "config prefixes", dest="config_prefixes_command", metavar="<verb>")
+    _under(verbs, "config prefixes", "list", "every prefix, in the order the prompt offers them")
+    for verb, description, extra in (
+        ("add", "offer one more, after the ones already there", ()),
+        ("change", "rename one, in place", ("<new>",)),
+        ("forget", "stop offering one", ()),
+    ):
+        parser = _under(verbs, "config prefixes", verb, description)
+        parser.add_argument("prefix", metavar="<prefix>", nargs="?", help="which prefix")
+        for name in extra:
+            parser.add_argument("to", metavar=name, nargs="?", help="what to call it instead")
+
+
+def _setting(one: argparse.ArgumentParser) -> None:
+    """Which of the three. Optional to argparse so `--help` is help, not a complaint;
+    its absence is refused where the refusal can name all three (`cli.configuring`)."""
+    one.add_argument(
+        "setting", metavar="<setting>", nargs="?", choices=SETTINGS, help="which setting"
+    )
+
+
+_FLAGS = {
+    "open": _open_flags,
+    "enter": _enter_flags,
+    "close": _close_flags,
+    "config": _config_flags,
+}
 
 
 class _Parser(argparse.ArgumentParser):
@@ -166,11 +226,19 @@ class _Parser(argparse.ArgumentParser):
         raise UsageError(message or "")
 
 
-def subparser(name: str) -> argparse.ArgumentParser:
-    """One subcommand's own parser, which is what `lane <command> --help` prints."""
-    found: argparse.ArgumentParser | None = _subparsers(build()).choices.get(name)
-    if found is None:  # pragma: no cover - every caller passes a name from COMMANDS
-        raise KeyError(name)
+def subparser(*path: str) -> argparse.ArgumentParser:
+    """The parser `lane <path…> --help` prints, at whatever depth the path reaches.
+
+    A path rather than a name, because `config` has a level under it and `lane config
+    prefixes --help` has to be that screen's help rather than `config`'s. Nothing here
+    knows how deep any particular command goes: it walks whatever subparsers it finds.
+    """
+    found = build()
+    for name in path:
+        nested: argparse.ArgumentParser | None = _subparsers(found).choices.get(name)
+        if nested is None:  # pragma: no cover - every caller passes a parsed name
+            raise KeyError(name)
+        found = nested
     return found
 
 
@@ -179,6 +247,33 @@ def _subparsers(parser: argparse.ArgumentParser) -> argparse._SubParsersAction[A
         if isinstance(action, argparse._SubParsersAction):
             return action
     raise AssertionError("the parser has no subcommands")  # pragma: no cover
+
+
+def _level(
+    parser: argparse.ArgumentParser, path: str, *, dest: str, metavar: str
+) -> argparse._SubParsersAction[Any]:
+    """Open a level of subcommands under `parser`, each `<prog>` naming its full path."""
+    return parser.add_subparsers(
+        dest=dest, metavar=metavar, parser_class=_Parser, prog=f"{buildinfo.APP} {path}"
+    )
+
+
+def _under(
+    groups: argparse._SubParsersAction[Any], path: str, name: str, description: str
+) -> argparse.ArgumentParser:
+    """One nested subcommand, with the two flags every one of them has.
+
+    `--help` and `--json` are added here rather than repeated per command, for the same
+    reason the top level adds them in a loop: a subcommand that forgot either would be a
+    hole nobody notices until somebody pipes it.
+    """
+    one: argparse.ArgumentParser = groups.add_parser(
+        name, help=description, description=description, add_help=False
+    )
+    one.add_argument("-h", "--help", action="store_true", help="print this message")
+    one.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=_JSON_HELP)
+    one.set_defaults(help_for=(*path.split(), name))
+    return one
 
 
 def build() -> argparse.ArgumentParser:

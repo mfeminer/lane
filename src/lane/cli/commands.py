@@ -27,6 +27,13 @@ class Unusable(Exception):
     """The command line contradicts itself. Refused before anything is asked or done."""
 
 
+class NotThere(Exception):
+    """A name the command line gave that nothing answers to. Exit 4.
+
+    The base of every "no such …" a subcommand can raise, so the dispatcher catches one
+    thing rather than growing a tuple that a new subcommand can forget to join."""
+
+
 def run(args: argparse.Namespace, environment: Environment) -> int:
     # In `--json` mode everything lane says moves to stderr — the spinner, the `✓`,
     # the refusal, and any prompt it still has to draw — so that stdout is one JSON
@@ -59,7 +66,10 @@ def run(args: argparse.Namespace, environment: Environment) -> int:
             said = "was not accepted" if exc.spent else "would answer it"
             return _refuse(exc, cli.EXIT_NO_TTY, f"{exc.flag} {said}.")
         return _refuse(exc, cli.EXIT_NO_TTY, exc.remedy)
-    except (NoSuchOption, NoSuchLane) as exc:
+    except (NoSuchOption, NoSuchLane, NotThere) as exc:
+        # One exit code for every "you named something that is not there", whether it is
+        # a lane, a project, a branch or a prefix. A script branches on 4 and reads the
+        # message for which; a code per kind would be a table nobody could remember.
         return _refuse(exc, cli.EXIT_NOT_FOUND)
 
 
@@ -76,7 +86,7 @@ def _refuse(exc: Exception, code: int, detail: str = "") -> int:
     return code
 
 
-def _prefilled(
+def prefilled(
     context: Context,
     script: dict[str, object],
     flags: dict[str, str],
@@ -137,7 +147,7 @@ def _open(context: Context, args: argparse.Namespace) -> int:
         script[open_lane.LANE_NAME] = args.lane_name
 
     _refuse_contradictions(args)
-    context.ui = _prefilled(context, script, _OPEN_FLAGS)
+    context.ui = prefilled(context, script, _OPEN_FLAGS)
 
     opened = open_lane.open_a_lane(context, launch_editor=args.launch_editor)
     if opened is None:
@@ -197,7 +207,7 @@ def _enter(context: Context, args: argparse.Namespace) -> int:
     from lane.actions import enter_lane
 
     lane = _find(context, args.lane)
-    context.ui = _prefilled(context, {}, {}, remedies=_PREPARATION_REMEDY)
+    context.ui = prefilled(context, {}, {}, remedies=_PREPARATION_REMEDY)
 
     entered = enter_lane.enter(context, lane, launch_editor=args.launch_editor)
     if _wants_json(args):
@@ -251,7 +261,7 @@ def _close(context: Context, args: argparse.Namespace) -> int:
     script: dict[str, object] = {}
     if args.yes:
         script[close_lane.SCREEN] = _decide_the_close(args)
-    context.ui = _prefilled(context, script, {}, remedies={close_lane.SCREEN: _CLOSE_REMEDY})
+    context.ui = prefilled(context, script, {}, remedies={close_lane.SCREEN: _CLOSE_REMEDY})
 
     closed = close_lane.close(context, lane)
     if _wants_json(args):
@@ -376,7 +386,7 @@ def _find(context: Context, slug: str | None) -> Lane:
     raise NoSuchLane(slug)
 
 
-class NoSuchLane(Exception):
+class NoSuchLane(NotThere):
     """No lane of that name is open."""
 
     def __init__(self, slug: str) -> None:
@@ -497,10 +507,18 @@ def _wants_json(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "json", False))
 
 
+def _config(context: Context, args: argparse.Namespace) -> int:
+    """`lane config …`, which lives in its own module — it is four groups, not one."""
+    from lane.cli import configuring
+
+    return configuring.run(context, args)
+
+
 _COMMANDS = {
     "open": _open,
     "list": _list,
     "enter": _enter,
     "close": _close,
     "doctor": _doctor,
+    "config": _config,
 }

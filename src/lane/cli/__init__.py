@@ -56,9 +56,12 @@ def main(argv: list[str] | None = None, *, environment: Environment | None = Non
         return EXIT_OK
 
     if args.help:
-        # `lane close --help` is that subcommand's own help, and both are argparse's
-        # rendering of the one definition rather than prose kept beside it.
-        printing = parsing.subparser(args.command) if args.command else parser
+        # `lane close --help` is that subcommand's own help, and `lane config prefixes
+        # --help` is that screen's — both argparse's rendering of the one definition
+        # rather than prose kept beside it. The path comes from the parser that matched,
+        # so nothing here knows how deep any particular command goes.
+        path = getattr(args, "help_for", (args.command,) if args.command else ())
+        printing = parsing.subparser(*path) if path else parser
         print(printing.format_help().rstrip())
         return EXIT_OK
 

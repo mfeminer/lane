@@ -69,6 +69,17 @@ class BranchPrefixStore:
         """The prefixes to offer — customised if there are any, the seed otherwise."""
         return _read(self.path) or DEFAULT_PREFIXES
 
+    def customised(self) -> bool:
+        """Whether `load()` is somebody's list or the seed.
+
+        `load()` deliberately cannot say: it answers "what is offered", and the whole
+        point of the seed is that offering it needs no file. This is the second question
+        — and a caller reporting to a script needs it, because "these are the six because
+        nobody has touched them" and "these are the six because somebody wrote them down"
+        are different facts about the same six.
+        """
+        return bool(_read(self.path))
+
     # -- writing -------------------------------------------------------------
     def save(self, prefixes: Sequence[str]) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)

@@ -360,6 +360,14 @@ under it, the back label and the module are all `config`. What did **not** renam
 `setting`, and `lane config get <setting>` is how the command line says it. The screen is
 `config`; the things on it are settings.
 
+**The screen has a second caller now, and it changed nothing about the screen.**
+`lane config get`/`set` and `lane config prefixes …` answer the questions on this screen
+before they are drawn and then run the screen's own functions — `change_setting`,
+`add_prefix`, `act_on_prefix`. What that needed was a `key` on each prompt, which is how
+every other prompt in lane is already reachable from the command line (AGENTS.md, *Missing
+input is TTY-gated*). A setting's key **is** its name everywhere else: `Config`'s field,
+the override map's key, and the value of its row here.
+
 Implementation: `src/lane/actions/config.py`. `run()` branches once on
 `context.config_store.path.exists()`; `_run_first_time()` is the old sequence,
 unchanged; `_run_list()` is the new screen, built on `Ui.browse()` exactly like
