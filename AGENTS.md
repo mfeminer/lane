@@ -1530,6 +1530,7 @@ make test     # pytest
 make lint     # ruff check + ruff format --check
 make types    # mypy --strict
 make build    # PyInstaller one-file -> dist/lane
+make repro    # build twice, prove the two binaries are byte-identical
 ```
 
 ### Landing a change — main is protected
@@ -1614,6 +1615,55 @@ what answers "did this file change", the question doctor exists to settle.
 Stamping the git commit as well is fine, but the hash is the part that must work.
 Room is left for macOS x86_64 and Linux later; that matrix is not built yet.
 
+**The build is reproducible, and must stay that way.** Two builds of the same commit
+produce a byte-identical binary. `build.yml` and `cd.yml` both set `SOURCE_DATE_EPOCH`
+from the commit and `PYTHONHASHSEED=0` before `make build`, and **`make repro` is what
+proves it still holds** — it builds twice and compares. Run it after changing
+`build.yml`, `cd.yml` or `lane.spec`. It is not part of `check`: two full builds is too
+slow for something meant to run constantly.
+
+`PYTHONHASHSEED` is the setting that does the work, which is worth writing down because
+it is not the one you would reach for. Python randomises string hashing per process;
+PyInstaller walks a **set** of modules when it writes `base_library.zip`; so the zip's
+member order changed from run to run. The 155 members were identical in name, content
+and timestamp — only their order differed, and that was enough to change the archive
+and therefore the binary's `sha256`.
+
+`SOURCE_DATE_EPOCH` is the documented knob and is set as well, but **measured, it does
+nothing here on its own**: two builds with it set and `PYTHONHASHSEED` unset still
+differed. It is kept because it costs nothing, it covers the timestamp path PyInstaller
+fixed in 4.8, and it is the setting a future toolchain is most likely to start
+honouring. Do not remove it on the grounds that the hash seed is doing the work — and
+do not assume it is *sufficient* either.
+
+**Why this is an invariant and not a nicety:** a Homebrew formula pins the release
+asset's `sha256`. `cd.yml` adopts an existing release and re-uploads with `--clobber`,
+and that re-upload comes from a **rebuild**. Without reproducibility, re-running CD
+against a tag a published formula already points at would change the asset's hash and
+break `brew install` and `brew upgrade` for everyone on that version — with no change
+to lane's own version number to explain why.
+
+### Distribution — the Homebrew tap
+
+The recommended install is `brew tap mfeminer/tap && brew install lane`, from
+**[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap)**. The `curl`
+install is still in the README, demoted to a fallback for anyone without Homebrew.
+
+**The tap is a separate repository, deliberately.** Homebrew only auto-resolves the
+short `brew tap user/repo` and `brew install user/tap/formula` forms when the
+repository is named `homebrew-<something>`, so a formula kept in *this* repository
+would force every user to type the long explicit-URL form forever. It also keeps a
+two-line version bump out of this repository's protected, CI-gated history. It is
+named `homebrew-tap` rather than `homebrew-lane` so that future projects land in the
+same tap instead of each needing one of their own.
+
+**The formula pins a specific release and its `sha256`**, never
+`releases/latest/download/...`: a moving pointer has no checksum that can stay true,
+and `brew audit --strict` rejects it. That means **every release needs the formula's
+`url` and `sha256` bumped by hand** — `cd.yml` does not do it, and teaching it to would
+need a personal access token with write access to the tap, stored as a repository
+secret here.
+
 ### Releasing
 
 **The tag is the version.** `hatch-vcs` derives it from `git describe` and writes
@@ -1648,6 +1698,14 @@ is not.**
 
 The tag command above is still the route to prefer, for one concrete reason beyond
 habit: it makes an **annotated** tag, and the UI makes a lightweight one.
+
+**A tag a published Homebrew formula points at is frozen.** Do not re-run `cd.yml`
+against it once its `sha256` is committed to
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap) — a genuine need to
+rebuild becomes a new patch tag instead. The build being reproducible means a re-run
+*should* be harmless, and that is the belt; this is the braces, because the guarantee
+only holds as long as the toolchain keeps cooperating and nothing reports it when it
+stops.
 
 **It rebuilds, and must keep rebuilding.** `build.yml` has already produced a binary
 for that exact commit, and publishing it instead looks like free speed — but the
