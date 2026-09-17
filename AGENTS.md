@@ -928,6 +928,21 @@ One thing that *was* broken: `_load_clonefile()` called `ctypes.CDLL(None)`, whi
 raises **`TypeError`** on Windows — not the `OSError` or `AttributeError` it caught —
 at **import time**, so lane did not start there at all. It now asks only on macOS.
 
+### Splitting a configured command
+
+`shlex.split` defaults to POSIX rules, where a **backslash escapes the next
+character**. On Windows a backslash is a path separator, so a configured
+`C:\tools\thing.exe --flag` came apart into `C:toolsthing.exe` — silently, and the
+error the user then saw was "that command is not there" about a path they could read
+with their own eyes. `apply.split_command` uses `posix=False` there, which treats a
+backslash as ordinary and still keeps a quoted run together, and strips the quotation
+marks that mode leaves on the token. An unbalanced quote still raises and is still
+refused rather than guessed at.
+
+This is not one of the platform differences the port set out to fix; it was found by
+reading `run()` while porting, and it is a silent corruption of something the user
+typed, which is the kind that gets reported as "lane is broken".
+
 ### Launching the editor
 
 `shutil.which` is already cross-platform and `PATHEXT`-aware, so the common case needs

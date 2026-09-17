@@ -215,13 +215,40 @@ def _copy(source: Path, staged: Path) -> None:
 # -- running ---------------------------------------------------------------------
 
 
+def split_command(command: str) -> list[str]:
+    """A configured command, split into argv the way this platform quotes.
+
+    `shlex.split` defaults to POSIX rules, where **a backslash escapes the next
+    character** — so on Windows `C:\\tools\\thing.exe --flag` came apart into
+    `C:toolsthing.exe`, and the failure the user saw was "that command is not there"
+    about a path they could read with their own eyes.
+
+    `posix=False` treats a backslash as the ordinary character it is there, and still
+    keeps a quoted run together — which is what `C:\\Program Files\\...` needs. It also
+    leaves the quotation marks *on* the token, so they are stripped here: handed
+    through, they would name a program whose filename begins with a quotation mark. An
+    unbalanced quote still raises, and is still refused rather than guessed at.
+    """
+    if sys.platform == "win32":
+        return [_unquoted(part) for part in shlex.split(command, posix=False)]
+    return shlex.split(command)
+
+
+def _unquoted(part: str) -> str:
+    """One layer of matching quotes off a token `posix=False` left them on."""
+    if len(part) >= 2 and part[0] == part[-1] and part[0] in {'"', "'"}:
+        return part[1:-1]
+    return part
+
+
 def run(command: str, directory: Path) -> Outcome:
     """Run a configured command, wait for it, and report what it said if it failed.
 
-    `shlex.split` rather than a shell: the command comes from lane's own
+    Split rather than handed to a shell: the command comes from lane's own
     configuration, and handing it to a shell would make quoting part of the interface
     for no gain. A command that genuinely wants a shell writes `sh -c '…'`, which
-    reads as the deliberate thing it is.
+    reads as the deliberate thing it is. `split_command` above is what does the
+    splitting, and the two platforms do not agree about what a backslash is.
 
     Detached for the reason the git backend is: the terminal's Ctrl-C reaches lane and
     nothing else, so lane decides what happens to the child instead of the terminal
@@ -230,7 +257,7 @@ def run(command: str, directory: Path) -> Outcome:
     how each platform spells that, because they do not spell it the same.
     """
     try:
-        parts = shlex.split(command)
+        parts = split_command(command)
     except ValueError as exc:
         return Outcome(ok=False, detail=f"{command} could not be read: {exc}")
     if not parts:

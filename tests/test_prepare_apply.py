@@ -166,6 +166,55 @@ def test_run_leaves_the_command_out_of_lanes_process_group(tmp_path: Path) -> No
     assert int(outcome.detail.strip()) != os.getpgrp()
 
 
+def test_a_windows_path_in_a_configured_command_survives_being_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`shlex.split` is POSIX-mode: a backslash escapes the next character. On Windows a
+    backslash is a path separator, so `C:\\tools\\thing.exe` came apart into
+    `C:toolsthing.exe` — and the failure a user sees is "that command is not there",
+    about a path they can see with their own eyes."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert apply.split_command(r"C:\tools\thing.exe --flag") == [
+        r"C:\tools\thing.exe",
+        "--flag",
+    ]
+
+
+def test_a_quoted_windows_path_with_a_space_stays_one_word(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`C:\\Program Files` is where half of Windows lives, so quoting has to work — and
+    the quotes must not survive into the argument, or the program named is a file whose
+    name begins with a quotation mark."""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert apply.split_command(r'"C:\Program Files\node\npm.cmd" install') == [
+        r"C:\Program Files\node\npm.cmd",
+        "install",
+    ]
+
+
+def test_elsewhere_a_command_is_split_exactly_as_it_always_was(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented escape hatch is `sh -c '…'`, and it has to keep working."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    assert apply.split_command("sh -c 'echo hi'") == ["sh", "-c", "echo hi"]
+
+
+def test_an_unbalanced_quote_is_still_refused_rather_than_guessed_at(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    outcome = apply.run('thing "unbalanced', tmp_path)
+
+    assert not outcome.ok
+    assert "could not be read" in outcome.detail
+
+
 # -- measuring -------------------------------------------------------------------
 
 

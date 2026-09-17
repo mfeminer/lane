@@ -121,7 +121,10 @@ def test_a_prepared_command_is_spawned_detached(
     from lane.prepare import apply
 
     seen = _capture(monkeypatch, "run")
-    apply.run(f"{sys.executable} -c pass", tmp_path)
+    # `as_posix` because this string goes through `apply.split_command`, and on Windows
+    # the interpreter's path is full of backslashes the test has no reason to exercise
+    # — `test_a_windows_path_in_a_configured_command_survives_being_split` does that.
+    apply.run(f"{Path(sys.executable).as_posix()} -c pass", tmp_path)
 
     assert seen, "the command was never spawned"
     for kwargs in seen:
