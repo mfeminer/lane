@@ -1115,6 +1115,14 @@ leaving your title and notes as you wrote them. Either door ends with the binary
 release, which is what the install instructions depend on. The tag command is still the
 one to prefer: it makes an annotated tag, where the UI makes a lightweight one.
 
+**Once a release is in the Homebrew formula, treat its tag as frozen.** The formula in
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap) pins that release
+asset's `sha256`, and re-running CD against the tag rebuilds and re-uploads the binary.
+The build is reproducible — `make repro` proves two builds of a commit are byte-identical
+— so a re-run should produce the same bytes and change nothing. But if that ever stops
+being true, nothing reports it: `brew install` simply starts failing its checksum check
+for everyone on that version. If you need to rebuild a release, cut a new patch tag.
+
 **The notes are generated from the pull requests** merged since the previous tag,
 grouped by the labels in [`.github/release.yml`](../.github/release.yml) —
 `enhancement` under *Added*, `bug` under *Fixed*, and `documentation` /

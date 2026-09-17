@@ -36,6 +36,32 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Make the build reproducible
+        # Two builds of the same commit must produce a byte-identical binary, because
+        # a published Homebrew formula pins that binary's sha256. `cd.yml` re-uploads
+        # with --clobber when a release already exists, and that re-upload comes from
+        # a rebuild — so a rerun against an already-pinned tag would otherwise change
+        # the hash and break `brew install` for everyone, with no version change to
+        # explain it.
+        #
+        # PYTHONHASHSEED is the one that does the work, and it was not the obvious
+        # suspect. Python randomises string hashing per process, PyInstaller walks a
+        # *set* of modules when it writes base_library.zip, so the zip's member order
+        # changed between runs — same 155 members, same contents, same timestamps,
+        # different order, therefore a different archive and a different sha256.
+        #
+        # SOURCE_DATE_EPOCH is the documented knob for this and is set too, but
+        # measured on macOS it changes nothing on its own: two builds with it set and
+        # PYTHONHASHSEED unset still differed. It is kept because it costs nothing,
+        # it covers the timestamp path PyInstaller fixed in 4.8, and it is what a
+        # future toolchain change is most likely to start honouring. `make repro`
+        # checks the pair actually still holds.
+        run: |
+          {
+            echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct)"
+            echo "PYTHONHASHSEED=0"
+          } >> "$GITHUB_ENV"
+
       - name: Build the binary
         run: make build
 

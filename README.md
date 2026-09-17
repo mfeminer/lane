@@ -17,11 +17,29 @@ macOS on Apple silicon, with `git`, [`gh`](https://cli.github.com) (logged in) a
 editor command on your PATH — `cursor`, `code`, `zed`, `idea`, `subl`.
 
 ```bash
+brew tap mfeminer/tap
+brew install lane
+```
+
+or `brew install mfeminer/tap/lane` to do both in one command. Either way
+**`brew upgrade lane` is how it updates from here on** — which the manual install below
+never had an answer for beyond running the same `curl` again and hoping you remembered
+to. The formula lives in [mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap).
+
+**Without Homebrew**, the binary is on the release and needs three things doing to it by
+hand — fetching, marking executable, and clearing the quarantine flag macOS puts on a
+download, because lane is not notarised:
+
+```bash
 mkdir -p ~/bin
 curl -fsSL -o ~/bin/lane https://github.com/mfeminer/lane/releases/latest/download/lane-macos-arm64
 chmod +x ~/bin/lane
 xattr -d com.apple.quarantine ~/bin/lane   # it is not notarised
 ```
+
+If you installed that way before and have since moved to Homebrew, delete `~/bin/lane`:
+whichever comes first on your `PATH` wins, and an old copy left there will quietly keep
+running instead of the one `brew upgrade` maintains.
 
 Then run `lane`, choose **config**, and answer three questions: where your projects
 sit, where lanes should be parked, and which editor to open.
