@@ -170,6 +170,57 @@ def test_measure_reports_a_size_for_a_tree_and_nothing_for_a_missing_path(
     assert apply.measure(tmp_path / "nope") is None
 
 
+def test_measure_adds_up_exactly_the_bytes_the_files_hold(tmp_path: Path) -> None:
+    """An exact number, and the same one on every platform — which `du -sk` never was:
+    it answers in block-rounded kilobytes, and it does not exist on Windows at all."""
+    tree = tmp_path / "tree"
+    (tree / "deep" / "deeper").mkdir(parents=True)
+    (tree / "a.bin").write_bytes(b"\0" * 1_000)
+    (tree / "deep" / "b.bin").write_bytes(b"\0" * 2_345)
+    (tree / "deep" / "deeper" / "c.bin").write_bytes(b"\0" * 7)
+
+    assert apply.measure(tree) == 1_000 + 2_345 + 7
+
+
+def test_measure_answers_for_a_single_file_too(tmp_path: Path) -> None:
+    """The screen asks about paths, and `.env` is a path."""
+    one = tmp_path / ".env"
+    one.write_bytes(b"\0" * 42)
+
+    assert apply.measure(one) == 42
+
+
+def test_measure_never_follows_a_link_out_of_the_path(tmp_path: Path) -> None:
+    """A linked `node_modules` points into the main clone. Following it would report the
+    main clone's size as the lane's, and this number exists to stop somebody bringing in
+    twenty gigabytes by accident — the one thing it must never understate by walking
+    somewhere else."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "huge.bin").write_bytes(b"\0" * 500_000)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "small.bin").write_bytes(b"\0" * 10)
+    (tree / "linked").symlink_to(outside, target_is_directory=True)
+
+    assert apply.measure(tree) == 10
+
+
+def test_measure_reports_what_it_could_reach_rather_than_giving_up(tmp_path: Path) -> None:
+    """One unreadable directory in a tree of hundreds is not a reason to answer `—` for
+    the whole path. A short number is more use than no number."""
+    tree = tmp_path / "tree"
+    shut = tree / "shut"
+    shut.mkdir(parents=True)
+    (tree / "readable.bin").write_bytes(b"\0" * 64)
+    (shut / "hidden.bin").write_bytes(b"\0" * 1_000)
+    shut.chmod(0o000)
+    try:
+        assert apply.measure(tree) == 64
+    finally:
+        shut.chmod(0o700)
+
+
 def test_size_phrase_reads_like_a_size() -> None:
     assert apply.size_phrase(None) == "—"
     assert apply.size_phrase(0) == "0 B"

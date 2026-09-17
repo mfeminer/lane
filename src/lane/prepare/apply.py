@@ -46,6 +46,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from lane.environment import detached_child
+
 _STAGED_SUFFIX = ".lane-partial"
 _RUN_TIMEOUT = 1800
 """Half an hour. A dependency install is slow; it is not infinite, and a step that
@@ -210,10 +212,11 @@ def run(command: str, directory: Path) -> Outcome:
     for no gain. A command that genuinely wants a shell writes `sh -c '…'`, which
     reads as the deliberate thing it is.
 
-    `start_new_session` for the reason the git backend has it: the terminal's Ctrl-C
-    reaches lane and nothing else, so lane decides what happens to the child instead
-    of the terminal killing it out from under a spinner. lane still owns its lifetime
-    — an interrupt unwinds `subprocess.run`, which kills it on the way out.
+    Detached for the reason the git backend is: the terminal's Ctrl-C reaches lane and
+    nothing else, so lane decides what happens to the child instead of the terminal
+    killing it out from under a spinner. lane still owns its lifetime — an interrupt
+    unwinds `subprocess.run`, which kills it on the way out. `lane.environment` owns
+    how each platform spells that, because they do not spell it the same.
     """
     try:
         parts = shlex.split(command)
@@ -230,7 +233,7 @@ def run(command: str, directory: Path) -> Outcome:
             text=True,
             timeout=_RUN_TIMEOUT,
             check=False,
-            start_new_session=True,
+            **detached_child(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return Outcome(ok=False, detail=f"{command} could not run: {_reason(exc)}")
@@ -246,32 +249,70 @@ def run(command: str, directory: Path) -> Outcome:
 
 
 def measure(path: Path) -> int | None:
-    """How much this path holds, in bytes, or None when it cannot be measured.
+    """How much this path holds, in bytes, or None when there is nothing there.
 
-    `du -sk` in one process rather than a walk in Python: the trees this is asked
-    about have hundreds of thousands of files, and `du` is a C loop. Slow enough to
-    belong in the table's `fill` either way — measured at 23 ms for 136 MB warm, and
-    seconds for a large dependency tree cold.
+    `os.scandir` rather than `du -sk` in a subprocess. `du` was the faster loop and it
+    was also a Unix binary: on Windows it is simply absent, and `measure` was written to
+    answer None when the command cannot be found — so every size on the screen would
+    have read `—`, silently removing the one thing standing between a user and cloning
+    twenty gigabytes by accident. A walk in Python is the same code on all three
+    platforms and removes a spawn rather than adding a branch.
+
+    The speed argument the subprocess was written for did not survive being measured
+    again: on a real `node_modules` of 77,868 entries, `du -sk` takes 0.27-0.30 s warm
+    and this walk takes 0.31 s. Both belong on the table's `fill` thread, which is where
+    this has always been called from, and neither is close to blocking a paint.
+
+    **Apparent size, not disk blocks.** `du` answered in allocated blocks, rounded up
+    per file and de-duplicated by inode; this sums `st_size`. The same tree reads
+    990 MB to `du` and 783 MB here — the difference is per-file rounding across 78k
+    small files, and the bytes are the honest answer to what the screen actually asks:
+    how much is about to be copied in. They are also the same number on every
+    filesystem, which the block count never was.
+
+    **A symlink holds nothing**, and is never followed. A linked `node_modules` points
+    into the main clone: following it would report the main clone's size as the lane's,
+    and counting the link itself would put a hundred-odd bytes of target path into a
+    number that is supposed to mean "this much is about to be copied in". Nothing is,
+    so it is zero.
     """
     if not _exists(path):
         return None
-    try:
-        done = subprocess.run(
-            ["du", "-sk", str(path)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            start_new_session=True,
-        )
-    except OSError, subprocess.SubprocessError:
-        return None
-    if done.returncode != 0 and not done.stdout.strip():
-        return None
-    try:
-        return int(done.stdout.split(maxsplit=1)[0]) * 1024
-    except IndexError, ValueError:
-        return None
+    if path.is_symlink():
+        return 0
+    if not path.is_dir():
+        try:
+            return path.lstat().st_size
+        except OSError:
+            return None
+    return _tree_size(path)
+
+
+def _tree_size(directory: Path) -> int:
+    """Sum every file under `directory`, reporting what it could reach.
+
+    An unreadable subdirectory is skipped rather than failing the whole measurement: a
+    short number is more use than no number, and `—` on a path the user is deciding
+    about is the answer this function exists to avoid.
+    """
+    total = 0
+    stack = [directory]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_symlink():
+                            continue
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
 
 
 _UNITS = ("B", "KB", "MB", "GB", "TB")

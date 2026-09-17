@@ -17,6 +17,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+from lane.environment import detached_child
 from lane.git.backend import BranchRef, FetchResult, GitError, WorktreeStatus
 from lane.paths import same_directory
 
@@ -76,12 +77,11 @@ class CliGitBackend:
                 env=self._env(),
                 check=False,
                 # Out of lane's process group, so the terminal's Ctrl-C reaches lane
-                # and nothing else. Otherwise a removal in flight is killed half-way
-                # whatever lane decides to do with its own copy of the signal, and
-                # deferring it (`lane.interrupts`) would buy nothing. lane still owns
-                # the child's lifetime: an interrupt lane does not defer unwinds
-                # `subprocess.run`, which kills it on the way out.
-                start_new_session=True,
+                # and nothing else. `lane.environment` owns the spelling because the
+                # two platforms do not share one — and because Windows takes the POSIX
+                # keyword without complaint and ignores it, which would leave this
+                # looking correct while isolating nothing.
+                **detached_child(),
             )
         except FileNotFoundError as exc:
             raise GitError(f"git is not installed: {exc}") from exc
