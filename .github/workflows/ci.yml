@@ -98,10 +98,11 @@ jobs:
           set +e
           git config --global user.email "ci@example.invalid"
           git config --global user.name "lane CI"
-          uv run pytest -q --tb=short tests/test_interrupts.py
-          echo "INTERRUPTS rc=$?"
-          uv run pytest -q --tb=short -rf --ignore=tests/test_interrupts.py
-          echo "REST rc=$?"
+          for f in tests/test_*.py; do
+            echo "=========== $f"
+            timeout 180 uv run pytest -q --tb=short -rf "$f"
+            echo "=========== $f rc=$?"
+          done
           exit 0
 
       - name: Build the binary
