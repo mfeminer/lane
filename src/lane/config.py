@@ -44,6 +44,30 @@ _DIR_MODE = 0o700
 _FILE_MODE = 0o600
 
 
+# Environment wins over the file. The names are part of lane's interface.
+ENV_PROJECTS_ROOT = "LANE_PROJECTS_ROOT"
+ENV_LANES_ROOT = "LANE_LANES_ROOT"
+ENV_EDITOR = "LANE_EDITOR"
+
+
+def home() -> Path:
+    """Read from the environment each time, so tests can redirect it."""
+    return Path(os.environ.get("HOME", str(Path.home())))
+
+
+def expand_path(text: str) -> Path:
+    """`~` and `$VAR` expansion for a path the user typed."""
+    stripped = text.strip()
+    if stripped == "~":
+        return home()
+    if stripped.startswith("~/"):
+        return home() / stripped[2:]
+    expanded = os.path.expandvars(stripped)
+    if expanded.startswith("~"):
+        return Path(expanded.replace("~", str(home()), 1))
+    return Path(expanded)
+
+
 def keep_private(path: Path) -> None:
     """Restrict a file lane wrote to the person who ran lane.
 
@@ -99,30 +123,6 @@ def inside_profile(path: Path) -> bool:
     root = os.path.normcase(str(profile_root()))
     candidate = os.path.normcase(str(path))
     return candidate == root or candidate.startswith(root + os.sep)
-
-
-# Environment wins over the file. The names are part of lane's interface.
-ENV_PROJECTS_ROOT = "LANE_PROJECTS_ROOT"
-ENV_LANES_ROOT = "LANE_LANES_ROOT"
-ENV_EDITOR = "LANE_EDITOR"
-
-
-def home() -> Path:
-    """Read from the environment each time, so tests can redirect it."""
-    return Path(os.environ.get("HOME", str(Path.home())))
-
-
-def expand_path(text: str) -> Path:
-    """`~` and `$VAR` expansion for a path the user typed."""
-    stripped = text.strip()
-    if stripped == "~":
-        return home()
-    if stripped.startswith("~/"):
-        return home() / stripped[2:]
-    expanded = os.path.expandvars(stripped)
-    if expanded.startswith("~"):
-        return Path(expanded.replace("~", str(home()), 1))
-    return Path(expanded)
 
 
 def config_home() -> Path:

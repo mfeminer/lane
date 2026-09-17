@@ -967,6 +967,15 @@ rewording silently re-route a flag.
 `GitBackend` exists so the implementation can be **swapped**, not so tests can
 avoid git. Tests use the real one against temporary repositories.
 
+**`environment.py` holds one thing that is not part of the seam**, and it is the only
+such thing: `detached_child()`, a module-level function returning the `subprocess`
+keywords that put a child outside lane's signal group. It lives there because that
+module is already where "how does this operating system say it" lives, and because the
+git backend and `prepare/apply.py` both need the same answer — a second copy of a
+platform branch is how one of them stops isolating anything. It is deliberately not a
+method on the protocol: a seam is something tests replace, and a test that replaced this
+would be asserting its own arithmetic instead of what lane asks the OS for.
+
 **`prepare/apply.py` is not a fifth seam.** It clones, links, runs a configured command
 and measures a path — the only place any of those happens — and it is exercised for real,
 because the filesystem is real in tests and `true`/`touch` are honest commands. A fake
