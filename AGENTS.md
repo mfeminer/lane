@@ -1645,9 +1645,17 @@ to lane's own version number to explain why.
 
 ### Distribution — the Homebrew tap
 
-The recommended install is `brew tap mfeminer/tap && brew install lane`, from
+The recommended install is `brew install mfeminer/tap/lane`, from
 **[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap)**. The `curl`
 install is still in the README, demoted to a fallback for anyone without Homebrew.
+
+**The full `mfeminer/tap/lane` name in that command is load-bearing, not stutter.**
+Homebrew 6 refuses to load a formula from an untrusted tap, and `brew tap` does not
+grant trust: `brew tap mfeminer/tap && brew install lane` fails with *"Refusing to load
+formula mfeminer/tap/lane from untrusted tap"*. Naming the formula in full is itself the
+trust grant, and needs no prompt. The short name works for everything afterwards. Do not
+"simplify" the README back to a tap-then-install pair — it was written that way once and
+it did not work.
 
 **The tap is a separate repository, deliberately.** Homebrew only auto-resolves the
 short `brew tap user/repo` and `brew install user/tap/formula` forms when the

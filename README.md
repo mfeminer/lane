@@ -17,11 +17,12 @@ macOS on Apple silicon, with `git`, [`gh`](https://cli.github.com) (logged in) a
 editor command on your PATH — `cursor`, `code`, `zed`, `idea`, `subl`.
 
 ```bash
-brew tap mfeminer/tap
-brew install lane
+brew install mfeminer/tap/lane
 ```
 
-or `brew install mfeminer/tap/lane` to do both in one command. Either way
+The full name is needed the first time: Homebrew will not load a formula from a tap you
+have not trusted, and `brew tap` on its own does not grant that — naming the formula in
+full does, with no prompt to answer. After that the short name works for everything, and
 **`brew upgrade lane` is how it updates from here on** — which the manual install below
 never had an answer for beyond running the same `curl` again and hoping you remembered
 to. The formula lives in [mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap).
