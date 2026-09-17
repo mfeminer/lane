@@ -84,6 +84,12 @@ What the two tables share is the action function. What they do not share is the 
 itself, and a new action is not automatically scriptable — that is a decision to take
 per action, not a gap to fill in reflexively.
 
+**One identifier shape, everywhere the CLI has to name something specific.**
+`<project>/<lane>` for a lane, `<project>/<command>` for a command — same shape, and a
+new one is not invented per subcommand. The one clause that differs is the split: a lane
+name cannot contain a slash so one is refused, and a command routinely does
+(`bin/install`) so everything after the first slash is taken verbatim.
+
 **A `<project>/<lane>` names a lane, and nothing else does.** `lane enter demo/pager`,
 `lane close demo/pager` — the same slug the listing prints on every row. This does not
 contradict *looking and acting are the same widget*: the cursor is what a person uses
@@ -203,6 +209,9 @@ stdout/stderr split". That went with the premise above and goes with it.
 |---|---|
 | `config get` / `config set` | `{"key", "value", "overridden_by"}` |
 | `config prefixes …` | `{"prefixes": [...], "path", "seeded"}` |
+| `config preparation list` | `{"project", "paths": [{"path", "answer", "discovered", "present_in_a_lane"}]}` |
+| `config preparation set` | `{"project", "applied": [{"path", "answer"}], "rejected": [{"path", "reason"}]}` |
+| `config commands …` | `{"project", "commands": [{"id", "project", "command", "directory", "unless"}]}` |
 
 `value` is `null` where nothing is set, never `""` — a script has to be able to tell a
 setting nobody has given from one set to nothing, and only the first is a real state.
@@ -325,9 +334,48 @@ drifting.
   chose — the store answers it, since an absent *or* empty file means the seed and
   comparing against `DEFAULT_PREFIXES` would get it wrong for anybody who wrote the same
   six down on purpose.
-- **A name that is not there exits 4**, whether it is a lane, a project, a branch or a
-  prefix. `cli.commands.NotThere` is the base every such refusal shares, so the
-  dispatcher catches one thing rather than a tuple a new subcommand can forget to join.
+- **`lane config commands list|add|change|forget`** takes `<project>/<command>` — the
+  `<project>/<lane>` shape, with **one clause different**: it splits on the *first*
+  slash and takes everything after it verbatim, because a command routinely contains a
+  slash (`bin/install`) where a lane name cannot have one. One identifier shape across
+  the CLI, not a new one per subcommand. `change` takes only the fields being edited,
+  and the rest keep their stored value — which is not a rule this invented: the screen
+  already re-asks all three with each defaulted to what is stored, so `change` supplies
+  what it was given and takes `Prefilled.DEFAULT` for the rest.
+- **`lane config preparation list|set`** is the one place a single-item command is not
+  enough. The screen answers up to ~200 paths in one sitting, and a script forced into
+  one invocation per path has parity on paper and nothing usable — so `set` also takes
+  `--from-json <file|->`, reading `[{"path": …, "answer": "in"|"out"}, …]` and applying
+  every entry in **one** `PrepareStore.save`. That is the screen's own rule
+  (`prepare/store.py`, *one write, not one per path*) and both callers now reach it
+  through `config.remember_answers`.
+- **A bad entry in a batch is a per-entry error, not a reason to abandon the batch.**
+  "Some of two hundred were typos" is exactly the case this exists to answer, so the
+  valid ones land in that one write and the rest come back in `rejected`, named one by
+  one. A path never contributes to the write unless it validated, so a file half-written
+  from a bad batch is not a state that can exist. Any rejection exits **1** — one rule
+  for one entry and for two hundred, since a single `--path` *is* a batch of one.
+  A malformed *document*, unlike a bad entry, is refused whole: an entry lane cannot
+  read is a typo in one row; a document it cannot parse is a caller that has not
+  produced the thing it thinks it has.
+- **`preparation list` shows more than the screen does, deliberately.** `config ·
+  preparation` lists only paths somebody has already answered — it is a review screen,
+  and entering a lane is what discovers new ones. A script needs the unanswered ones
+  too: to see that `cache` has never been decided, and because `set` has to be able to
+  say a path is a *typo* rather than filing an answer against a path this project does
+  not have. So it asks git the same question entering a lane asks (`ignored_paths`) and
+  reports the union, with `discovered` false for a stored answer git no longer reports.
+  `present_in_a_lane` is computed by neither screen — settings has no lane in hand and
+  entering knows about one lane — and is reported because a tick that copies a gigabyte
+  and a tick that does nothing have to be tellable apart, and a script has no cursor
+  panel to read that from.
+- **The paths are spelled the way git reports them.** A fully ignored directory is
+  `node_modules`, not `node_modules/`, whatever `.gitignore` says — that is the spelling
+  every answer is stored under, so it is the spelling the command line takes.
+- **A name that is not there exits 4**, whether it is a lane, a project, a branch, a
+  prefix or a command. `cli.commands.NotThere` is the base every such refusal shares, so
+  the dispatcher catches one thing rather than a tuple a new subcommand can forget to
+  join.
 
 **`--help` is generated at whatever depth it is asked at.** `parser.subparser()` takes a
 *path* and walks whatever subparsers it finds, and each nested parser records its own

@@ -937,6 +937,46 @@ $ LANE_EDITOR=vim lane config set editor zed --json
 rather than as having silently failed. `null` there means nothing is set at all, which is
 a different thing from set to nothing.
 
+**Preparation and commands are per project**, and both take `--project`:
+
+```bash
+lane config preparation list --project acme --json
+lane config preparation set --project acme --path node_modules --in
+lane config commands add --project acme --command install --unless node_modules
+lane config commands change acme/install --directory web    # the other fields keep theirs
+lane config commands forget acme/install
+```
+
+Paths are spelled the way **git** reports them — a fully ignored directory is
+`node_modules`, not `node_modules/`, whatever your `.gitignore` says.
+
+**Answering two hundred paths takes one invocation, not two hundred.** That is the whole
+reason `--from-json` exists, and it writes the file once:
+
+```bash
+lane config preparation list --project acme --json \
+  | jq '[.paths[] | select(.answer == "unset") | {path, answer: "out"}]' \
+  | lane config preparation set --project acme --from-json -
+```
+
+A path that is not one of the project's ignored paths is reported on its own and the rest
+still land — "some of those were typos" is a real thing to happen to a generated batch,
+and the file is never left half written:
+
+```json
+{"project": "acme",
+ "applied":  [{"path": "node_modules", "answer": "in"}],
+ "rejected": [{"path": "ndoe_modules", "reason": "not an ignored path in acme"}]}
+```
+
+Anything rejected exits `1`, so a script can tell "all of it landed" from "most of it did"
+without reading the document.
+
+`preparation list` shows you more than the screen does: the screen reviews what you have
+*answered*, and this also lists what has been discovered and never decided (`unset`), plus
+whether each path is already sitting in one of your open lanes — which is what tells you
+whether a tick would copy a gigabyte or do nothing.
+
 **The editor stays shut** unless you pass `--launch-editor`.
 
 **Entering a lane can refuse.** If some ignored path has never been answered — a new

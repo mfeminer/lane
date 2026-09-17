@@ -201,6 +201,89 @@ def _config_flags(one: argparse.ArgumentParser) -> None:
         for name in extra:
             parser.add_argument("to", metavar=name, nargs="?", help="what to call it instead")
 
+    preparing = _under(groups, "config", "preparation", "which ignored paths come into a lane")
+    steps = _level(
+        preparing, "config preparation", dest="config_preparation_command", metavar="<verb>"
+    )
+    _project(_under(steps, "config preparation", "list", "every path and what it is answered"))
+
+    answering = _under(steps, "config preparation", "set", "answer one path, or a file of them")
+    _project(answering)
+    answering.add_argument("--path", metavar="<path>", help="which path, for a single answer")
+    # In or out, and nothing else. The third state — *unanswered* — is the absence of a
+    # step rather than a value, so there is no flag that could ask for it.
+    answer = answering.add_mutually_exclusive_group()
+    answer.add_argument(
+        "--in", dest="inside", action="store_const", const=True, help="bring it into the lane"
+    )
+    answer.add_argument(
+        "--out", dest="inside", action="store_const", const=False, help="leave it out"
+    )
+    answering.add_argument(
+        "--from-json",
+        metavar="<file|->",
+        help='answer many at once: [{"path": "…", "answer": "in"|"out"}, …], or - for stdin',
+    )
+    answering.set_defaults(inside=None)
+
+    commands = _under(groups, "config", "commands", "the commands `run` on every enter of a lane")
+    _command_verbs(
+        _level(commands, "config commands", dest="config_commands_command", metavar="<verb>")
+    )
+
+
+def _command_verbs(verbs: argparse._SubParsersAction[Any]) -> None:
+    """`list`, `add`, `change`, `forget` — the screen's own two verbs plus the two a
+    screen gets for free from having a cursor and an `add a command` row."""
+    listing = _under(verbs, "config commands", "list", "this project's run steps")
+    _project(listing)
+
+    adding = _under(verbs, "config commands", "add", "record one more")
+    _project(adding)
+    _command_fields(adding)
+
+    changing = _under(
+        verbs, "config commands", "change", "edit one — fields not given keep their value"
+    )
+    _command_id(changing)
+    _command_fields(changing)
+
+    forgetting = _under(verbs, "config commands", "forget", "and stop running it")
+    _command_id(forgetting)
+
+
+def _project(one: argparse.ArgumentParser) -> None:
+    """Which project's commands. A flag rather than a positional because `list` has
+    nothing else to say and `add` has three more things to say after it."""
+    one.add_argument("--project", metavar="<name>", help="which project")
+
+
+def _command_id(one: argparse.ArgumentParser) -> None:
+    """`<project>/<command>` — the `<project>/<lane>` shape, one clause different.
+
+    It splits on the **first** slash and takes everything after verbatim, because a
+    command routinely contains one (`bin/install`) where a lane name cannot.
+    """
+    # Its own dest: `command` is already the top-level subcommand's, and `--command` is
+    # the field. Three things called `command` on one namespace is one too many.
+    one.add_argument("command_id", metavar="<project>/<command>", nargs="?", help="which command")
+
+
+def _command_fields(one: argparse.ArgumentParser) -> None:
+    """The three things a `run` step carries, as the screen asks for them.
+
+    None is `required`: on `add` a missing one is TTY-gated like any other answer, and on
+    `change` a missing one means *keep what is stored*, which is what the screen's own
+    prompt default already does.
+    """
+    one.add_argument("--command", dest="run_command", metavar="<cmd>", help="what to run")
+    one.add_argument(
+        "--directory", metavar="<dir>", help="where to run it, relative to the lane root"
+    )
+    one.add_argument(
+        "--unless", metavar="<path>", help="skip it when this path is already in the lane"
+    )
+
 
 def _setting(one: argparse.ArgumentParser) -> None:
     """Which of the three. Optional to argparse so `--help` is help, not a complaint;

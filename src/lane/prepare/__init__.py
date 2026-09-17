@@ -375,7 +375,7 @@ def plan(
     at all. `None` means "not asked", which is what the model's own tests want.
     """
     candidates = tuple(
-        Candidate(path=path, present=_present(lane_path / path), project=project)
+        Candidate(path=path, present=present(lane_path / path), project=project)
         for path in unanswered(steps, ignored)
         if writable is None or path in writable
     )
@@ -401,11 +401,11 @@ def needed(step: Step, lane_path: Path) -> Effect | None:
         return None
 
     if step.verb is Verb.RUN:
-        if step.unless and _present(lane_path / step.unless):
+        if step.unless and present(lane_path / step.unless):
             return None
         return Effect(step=step)
 
-    if _present(lane_path / step.path):
+    if present(lane_path / step.path):
         # **Entering a lane never overwrites what the lane changed.** A dependency tree
         # patched by hand is work, and losing it silently is the one thing this feature
         # could do that is worse than not existing.
@@ -413,7 +413,7 @@ def needed(step: Step, lane_path: Path) -> Effect | None:
     return Effect(step=step)
 
 
-def _present(path: Path) -> bool:
+def present(path: Path) -> bool:
     """Whether anything is at `path` — a symlink included, broken or not.
 
     `exists()` alone follows symlinks, so a link into a main clone that has since lost

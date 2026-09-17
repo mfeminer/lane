@@ -360,6 +360,14 @@ under it, the back label and the module are all `config`. What did **not** renam
 `setting`, and `lane config get <setting>` is how the command line says it. The screen is
 `config`; the things on it are settings.
 
+**`preparation` has a second caller that shows *more* than the screen does, and that is
+not a drift.** This screen is a review of what has been answered; a script also needs the
+paths nobody has answered, because it has to be told that `cache` has never been decided
+and because `lane config preparation set` must be able to call a path a typo rather than
+file an answer against a path the project does not have. So the command line asks git the
+question entering a lane asks and reports the union. The screen is unchanged — adding
+unanswered rows *here* would make it the screen entering a lane already is.
+
 **The screen has a second caller now, and it changed nothing about the screen.**
 `lane config get`/`set` and `lane config prefixes …` answer the questions on this screen
 before they are drawn and then run the screen's own functions — `change_setting`,
