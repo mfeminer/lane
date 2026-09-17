@@ -59,10 +59,23 @@ COLUMNS = (
     Column("current value"),
 )
 
+PROJECTS_ROOT = "projects_root"
+LANES_ROOT = "lanes_root"
+EDITOR = "editor"
+SETTINGS = (PROJECTS_ROOT, LANES_ROOT, EDITOR)
+"""One name per setting, doing every job at once.
+
+It is `Config`'s field name, the key `context.overridden` reports against, the value of
+the row on this screen **and** the `key` its question is asked under — which is what
+lets `lane config set` answer that question before it is drawn (`cli/answers.py`)
+instead of reimplementing what the question decides. Four names for one setting was how
+these could have drifted; there is one.
+"""
+
 _LABELS = {
-    "projects_root": "projects root",
-    "lanes_root": "lanes root",
-    "editor": "editor",
+    PROJECTS_ROOT: "projects root",
+    LANES_ROOT: "lanes root",
+    EDITOR: "editor",
     "preparation": "preparation",
     "commands": "commands",
     "branch prefixes": "branch prefixes",
@@ -93,6 +106,15 @@ file is beside the config (`lane/prefixes.py`).
 
 Which prefix a lane takes is still decided per lane, at the prompt. This row is the menu
 that choice is made from, which is a different thing."""
+
+PREFIX_VERB = "prefix-verb"
+PREFIX = "prefix"
+"""The prefix screen's two questions, named so the command line can answer them.
+
+`prefixes change old new` is literally those two keystrokes written down: *change*, then
+the new name typed into the prompt behind it — the same shape `open --branch-name` has
+for the branch menu's `other…`.
+"""
 
 PREPARE_BACK = "← Back to config"
 """Scoped deliberately, as ADR 0002 requires — one step back, not out of config."""
@@ -164,7 +186,6 @@ def _run_list(context: Context) -> None:
         except Abandoned:
             return
 
-        current = store.load_file_only()
         if key == PREPARATION:
             _run_preparation(context)
             continue
@@ -174,22 +195,49 @@ def _run_list(context: Context) -> None:
         if key == PREFIXES:
             _run_branch_prefixes(context)
             continue
-        if key == "projects_root":
-            projects_root = _ask_projects_root(context, current.projects_root)
-            if projects_root is None:
-                continue
-            store.save(replace(current, projects_root=projects_root))
-        elif key == "lanes_root":
-            base = current.projects_root if current.projects_root is not None else home()
-            lanes_root = _ask_lanes_root(context, current.lanes_root, base)
-            store.save(replace(current, lanes_root=lanes_root))
-        else:
-            editor = _ask_editor(context, current.editor or DEFAULT_EDITOR)
-            store.save(replace(current, editor=editor))
+        if not change_setting(context, key):
+            continue
 
-        context.reload_config()
         ui.blank()
         ui.ok(f"Saved to {store.path}")
+
+
+def change_setting(context: Context, key: str) -> bool:
+    """Ask one setting's question, validate the answer and save it. Reports whether it did.
+
+    The body of the list's own loop, lifted out so that `lane config set` **is** this
+    rather than a second thing that looks like it. Which question a setting asks, what
+    it will accept, what gets written and when the context is reloaded all live here
+    once; the screen calls it with the row under the cursor and the command line calls
+    it with the setting it was named, and neither knows anything the other does not.
+
+    It reads the file rather than `context.config`, deliberately: the environment may be
+    winning, and what is being edited is the file. Saying so is the caller's job, and
+    both callers do (`_report_overrides` here, `overridden_by` there).
+    """
+    store = context.config_store
+    current = store.load_file_only()
+
+    match key:
+        case _ if key == PROJECTS_ROOT:
+            projects_root = _ask_projects_root(context, current.projects_root)
+            if projects_root is None:
+                return False
+            store.save(replace(current, projects_root=projects_root))
+        case _ if key == LANES_ROOT:
+            # With no projects root yet there is nothing to suggest a lanes root beside,
+            # so the home directory stands in — the same fallback `_beside` ends at.
+            base = current.projects_root if current.projects_root is not None else home()
+            store.save(
+                replace(current, lanes_root=_ask_lanes_root(context, current.lanes_root, base))
+            )
+        case _:
+            store.save(
+                replace(current, editor=_ask_editor(context, current.editor or DEFAULT_EDITOR))
+            )
+
+    context.reload_config()
+    return True
 
 
 _VALUE_LIMIT = 40
@@ -220,9 +268,9 @@ def _rows(context: Context, current: Config) -> list[Row[str]]:
         )
 
     return [
-        row("projects_root", _text(current.projects_root)),
-        row("lanes_root", _text(current.lanes_root)),
-        row("editor", current.editor or DEFAULT_EDITOR),
+        row(PROJECTS_ROOT, _text(current.projects_root)),
+        row(LANES_ROOT, _text(current.lanes_root)),
+        row(EDITOR, current.editor or DEFAULT_EDITOR),
         row(PREPARATION, _prepared_phrase(context)),
         row(COMMANDS, _commands_phrase(context)),
         row(PREFIXES, _prefixes_phrase(context)),
@@ -572,7 +620,11 @@ def _ask_projects_root(context: Context, current: Path | None) -> Path | None:
     ui.detail("One git repository per subfolder is expected: <folder>/<project>/.git")
 
     while True:
-        typed = ui.text("Which folder do your projects sit in", default=str(current or ""))
+        typed = ui.text(
+            "Which folder do your projects sit in",
+            default=str(current or ""),
+            key=PROJECTS_ROOT,
+        )
         if not typed.strip():
             ui.error("A path is required.")
             continue
@@ -613,7 +665,7 @@ def _ask_lanes_root(context: Context, current: Path | None, projects_root: Path)
     ui = context.ui
     suggestion = current if current is not None else _beside(projects_root)
 
-    typed = ui.text("Where should lanes be parked", default=str(suggestion))
+    typed = ui.text("Where should lanes be parked", default=str(suggestion), key=LANES_ROOT)
     lanes_root = expand_path(typed) if typed.strip() else suggestion
 
     if lanes_root == projects_root or projects_root in lanes_root.parents:
@@ -632,7 +684,7 @@ def _beside(projects_root: Path) -> Path:
 
 def _ask_editor(context: Context, current: str) -> str:
     ui = context.ui
-    editor = ui.text("Editor command to open a lane with", default=current)
+    editor = ui.text("Editor command to open a lane with", default=current, key=EDITOR)
 
     if context.environment.which(editor) is not None:
         ui.ok(f"'{editor}' found.")
@@ -691,9 +743,9 @@ def _run_branch_prefixes(context: Context) -> None:
             return
 
         if chosen == ADD_PREFIX:
-            _add_prefix(context)
+            add_prefix(context)
             continue
-        _act_on_prefix(context, chosen)
+        act_on_prefix(context, chosen)
 
 
 def _prefix_rows(prefixes: Sequence[str]) -> list[Row[str]]:
@@ -715,8 +767,13 @@ def _prefix_rows(prefixes: Sequence[str]) -> list[Row[str]]:
     return rows
 
 
-def _act_on_prefix(context: Context, prefix: str) -> None:
-    """Two verbs for the row under the cursor, exactly as `commands` offers two."""
+def act_on_prefix(context: Context, prefix: str) -> bool:
+    """Two verbs for one prefix, exactly as `commands` offers two. Reports whether it wrote.
+
+    The screen picks which prefix with a cursor and ignores the answer; `lane config
+    prefixes change`/`forget` names it and has an exit code to choose, which is the only
+    reason this says anything at all.
+    """
     try:
         verb = context.ui.choose(
             prefix,
@@ -724,9 +781,10 @@ def _act_on_prefix(context: Context, prefix: str) -> None:
                 Choice("change", "change", "rename it on the menu"),
                 Choice("forget", "forget", "and stop offering it"),
             ],
+            key=PREFIX_VERB,
         )
     except Abandoned:
-        return
+        return False
 
     store = context.prefix_store()
     current = list(store.load())
@@ -738,31 +796,35 @@ def _act_on_prefix(context: Context, prefix: str) -> None:
             # An empty file means the seed, so the six are about to reappear on the next
             # repaint — unexplained, that reads as the forget having failed.
             context.ui.warn("That was the last one, so the six lane ships with are back.")
-        return
+        return True
 
     # Its own name is not a name it collides with: `change` shows the current one as the
     # default, so pressing Enter on it is the commonest way to back out of a rename, and
     # calling that a duplicate is an accusation rather than a report.
     others = [one for one in current if one != prefix]
-    changed = _usable_prefix(context, context.ui.text("Branch prefix", default=prefix), others)
+    typed = context.ui.text("Branch prefix", default=prefix, key=PREFIX)
+    changed = _usable_prefix(context, typed, others)
     if changed is None or changed == prefix:
-        return
+        return False
     # In place rather than forget-and-add: the order *is* what the branch prompt shows,
     # so a rename must not drop the row to the bottom of it.
     current[current.index(prefix)] = changed
     store.save(current)
     context.ui.ok(f"{changed}/ — offered when a lane names its branch.")
+    return True
 
 
-def _add_prefix(context: Context) -> None:
+def add_prefix(context: Context) -> bool:
+    """Offer one more. Reports whether it wrote, for the same reason `act_on_prefix` does."""
     store = context.prefix_store()
-    prefix = _usable_prefix(context, context.ui.text("Branch prefix"), store.load())
+    prefix = _usable_prefix(context, context.ui.text("Branch prefix", key=PREFIX), store.load())
     if prefix is None:
-        return
+        return False
     # The seed plus the new one, not the new one alone: adding `spike` is not a way to
     # lose the six, and once anything is written the file *is* the menu.
     store.save([*store.load(), prefix])
     context.ui.ok(f"{prefix}/ — offered when a lane names its branch.")
+    return True
 
 
 def _usable_prefix(context: Context, typed: str, offered: Sequence[str]) -> str | None:

@@ -125,6 +125,7 @@ lane list --json | jq -r '.[] | select(.merged) | .slug'
 lane enter acme/fix-the-pager
 lane close acme/fix-the-pager --yes --keep-branch
 lane doctor --json
+lane config set editor zed
 ```
 
 `lane --help` lists them; `lane <command> --help` lists that command's flags. Three

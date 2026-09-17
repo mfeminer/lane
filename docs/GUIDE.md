@@ -880,6 +880,9 @@ lane list --json
 lane enter acme/fix-the-pager --launch-editor
 lane close acme/fix-the-pager --yes --delete-others feature/old-attempt
 lane doctor --json
+lane config get editor
+lane config set lanes-root ~/Work/Lanes
+lane config prefixes add spike
 ```
 
 **It is the same code.** A subcommand does not have its own idea of what opening a lane
@@ -908,6 +911,31 @@ unique work). The row flags — `--rescue`/`--no-rescue`, `--delete-branch`/`--k
 `--delete-others a,b`/`--keep-others` — change those defaults, and each one is checked
 against the rows this particular close actually has. Naming a branch it never offered is
 an error, before anything is removed.
+
+**Configuring lane is a subcommand too**, and it is the only one with a level under it —
+`config` covers four unrelated things, so each gets its own verbs:
+
+```bash
+lane config get projects-root                 # just the value, so $(…) needs no trimming
+lane config set editor zed                    # the screen's own validation, same warnings
+lane config prefixes list --json
+lane config prefixes change bugfix defect     # renamed in place: the order is the menu
+lane config prefixes forget docs
+```
+
+`set` runs the very checks the screen runs — a projects root with no repositories in it
+is refused here exactly as it is there, and an editor that is not on your `PATH` gets the
+same warning. If an environment variable is currently winning, `set` **still writes the
+file** (that is what the screen does; the file is the thing lane can edit) and says so:
+
+```bash
+$ LANE_EDITOR=vim lane config set editor zed --json
+{"key": "editor", "value": "vim", "overridden_by": "LANE_EDITOR"}
+```
+
+`value` is what lane would actually use, so the write is visible as *not yet in effect*
+rather than as having silently failed. `null` there means nothing is set at all, which is
+a different thing from set to nothing.
 
 **The editor stays shut** unless you pass `--launch-editor`.
 

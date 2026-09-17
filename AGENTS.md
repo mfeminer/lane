@@ -33,7 +33,7 @@ Running `lane` bare starts an interactive session:
 - when the action finishes you are back at the menu
 - the session ends when you choose to quit
 
-**And `lane` takes subcommands: `open`, `list`, `enter`, `close`, `doctor`.** This
+**And `lane` takes subcommands: `open`, `list`, `enter`, `close`, `doctor`, `config`.** This
 file used to say, at length, that it never would. That was reasoned from a premise
 which has since changed, so the reasoning is replaced rather than quietly dropped.
 
@@ -73,10 +73,12 @@ same list, and both of the differences are deliberate:
 - `enter` and `close` are subcommands but **not** menu entries. They are the two verbs
   the listing offers for the row under the cursor, and that is still the better route
   by hand — see below. A script has no cursor, so it names the lane instead.
-- `config` is a menu entry and **not** a subcommand, yet. Configuring lane from a
-  script is a real want and is its own piece of work; until then the absence is stated
-  rather than half-built. The entry is *named* for the subcommand it is about to get —
-  see below.
+- `config` is **both**, and it is the only subcommand with a level under it. Four
+  unrelated things live behind that one word — three flat settings, a list of branch
+  prefixes, a per-project checklist and a per-project list of commands — where every
+  other subcommand is one thing. `git config` and `gh config` are shaped the same way,
+  and flattening it would give names like `config-prefixes-add`, which is a namespace
+  spelled badly.
 
 What the two tables share is the action function. What they do not share is the list
 itself, and a new action is not automatically scriptable — that is a decision to take
@@ -195,6 +197,23 @@ stdout/stderr split". That went with the premise above and goes with it.
   it stays on stdout exactly as it always has; only the usage errors the command line
   itself produces go to stderr in both modes.
 
+**The documented shapes.** Additive-only, all of them:
+
+| Command | stdout |
+|---|---|
+| `config get` / `config set` | `{"key", "value", "overridden_by"}` |
+| `config prefixes …` | `{"prefixes": [...], "path", "seeded"}` |
+
+`value` is `null` where nothing is set, never `""` — a script has to be able to tell a
+setting nobody has given from one set to nothing, and only the first is a real state.
+`overridden_by` is the environment variable currently winning, or `null`. Both `get` and
+`set` answer in the one shape because they are one question asked twice: `set` is a
+`get` with a write in front of it, and a caller checking its own write should not have
+to parse a second schema to do it.
+
+**Without `--json`, `config get` prints the value and nothing else** — so
+`$(lane config get editor)` needs no trimming — and says where it came from on stderr.
+
 ### Missing input is TTY-gated, and lane never waits for an answer nothing can give
 
 The old rule was *lane requires a TTY, full stop*. The new one is narrower and is the
@@ -262,6 +281,58 @@ when the branch goes anyway (deleting every branch it can is what closing *is*),
 specific branches and a name that is not there is a typo or a stale assumption; and
 `--rescue` must have a row either way, because rescue exists to keep something, and
 asking to keep what is not at risk means the lane is not the one the caller thinks.
+
+### Configuring lane from a script: `lane config`
+
+The same device as the core loop, pointed at the one action it deliberately left out.
+A `config` subcommand does not *do* anything either: it answers the question
+`actions/config.py` was going to ask and then lets that module ask it, so a projects
+root with no repositories is refused by the code that refuses it on screen and the
+write goes through the same `ConfigStore`. `cli/configuring.py` is the caller; the
+decisions stay where they were.
+
+What that required, and it is the part worth knowing: **the config screen's prompts had
+no `key`**, so nothing on the command line could reach them. They have one now, and a
+setting's key *is* its name everywhere else — `Config`'s field, the override map's key,
+the value of the row on screen. One name doing four jobs is what stops four names
+drifting.
+
+- **`lane config get <setting>` / `set <setting> <value>`**, where `<setting>` is
+  `projects-root`, `lanes-root` or `editor`. Kebab on the command line, `projects_root`
+  underneath; `cli/configuring.UNDERSCORED` is the one place the two spellings meet.
+- **`get` reports what lane would actually use**, not what the file says. The
+  environment wins over the file everywhere else in lane, so it wins here — a `get`
+  answering from the file while lane ran on the variable would be a reading of a config
+  nobody is running.
+- **`set` is not special-cased for the environment.** If a variable is currently
+  winning, it still writes the file — exactly what the screen does, because the file is
+  the thing lane can edit — and **says so**, in the line it prints and in
+  `overridden_by`. That field is how a script tells a write that has not taken effect
+  yet from one that has, without parsing prose.
+- **`set` never triggers the first run.** `config.run()` branches to the three-question
+  sequence when there is no config file; a subcommand asked for one setting and given
+  one answer must not walk anybody through the other two.
+- **A value the screen's validation refuses exits 3**, not 1. The validation re-asks —
+  that is what `_ask_projects_root` does — so the supplied answer is *spent* and there
+  is no terminal to ask in, which is the same situation and the same code as
+  `lane open --branch-name <a name git rejects>`. It reads oddly for a bad value, and it
+  is left as it is rather than given a second meaning: one exception, one mapping.
+- **`lane config prefixes list|add|change|forget`** uses the screen's own two verbs,
+  unchanged. `change feature story` is that screen's two keystrokes written down. Every
+  one of them answers with the **whole list**, because the order *is* the branch
+  prompt's menu and a rename that moved a row would be invisible in a report naming one
+  prefix. `seeded` says whether those are the six lane ships with or a list somebody
+  chose — the store answers it, since an absent *or* empty file means the seed and
+  comparing against `DEFAULT_PREFIXES` would get it wrong for anybody who wrote the same
+  six down on purpose.
+- **A name that is not there exits 4**, whether it is a lane, a project, a branch or a
+  prefix. `cli.commands.NotThere` is the base every such refusal shares, so the
+  dispatcher catches one thing rather than a tuple a new subcommand can forget to join.
+
+**`--help` is generated at whatever depth it is asked at.** `parser.subparser()` takes a
+*path* and walks whatever subparsers it finds, and each nested parser records its own
+path — so `lane config prefixes --help` is that screen's help, and nothing in the help
+branch knows how deep any particular command goes.
 
 ### Exit codes — a public interface
 
