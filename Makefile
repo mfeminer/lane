@@ -1,5 +1,5 @@
 # One obvious way to run each thing. AGENTS.md names these commands.
-.PHONY: help install test lint fmt types check build repro winget clean
+.PHONY: help install test lint fmt types check build repro clean
 
 # PyInstaller names the executable after the platform it is building for, so the
 # two targets below have to as well. `OS` is set to `Windows_NT` by Windows itself
@@ -19,7 +19,6 @@ help:
 	@echo "check    lint + types + test"
 	@echo "build    PyInstaller one-file -> dist/lane (dist/lane.exe on Windows)"
 	@echo "repro    build twice, compare the two binaries (holds on macOS, not on Windows)"
-	@echo "winget   write the winget manifests for a published release (VERSION=x.y.z)"
 	@echo "clean    remove build artefacts"
 
 install:
@@ -50,7 +49,7 @@ build:
 	@echo "built: $(BINARY)"
 
 repro:
-	# Two builds of the same tree, compared. A Homebrew formula and a winget manifest
+	# Two builds of the same tree, compared. A Homebrew formula and a Scoop manifest
 	# both pin the release binary's sha256, and cd.yml rebuilds rather than reusing
 	# when it re-runs against an existing release — so the day this stops holding, a
 	# re-run silently breaks `brew install` for everyone on that version, with no
@@ -92,17 +91,6 @@ repro:
 		exit 1; \
 	fi; \
 	echo "reproducible: both builds are $$first"
-
-winget:
-	# The manifest pins the released asset's URL and sha256, so this reads the hash
-	# from the published release rather than from a local build — a manifest must
-	# never describe a binary nobody can download. packaging/winget/README.md has
-	# the submission step and why a published manifest freezes that release.
-	@if [ -z "$(VERSION)" ]; then \
-		echo "usage: make winget VERSION=0.2.0" >&2; \
-		exit 2; \
-	fi
-	uv run python packaging/winget/generate.py "$(VERSION)"
 
 clean:
 	rm -rf build dist .pytest_cache .mypy_cache .ruff_cache

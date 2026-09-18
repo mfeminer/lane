@@ -90,7 +90,7 @@ ban-relative-imports = "all"
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["src", "tests", "packaging"]
+files = ["src", "tests"]
 warn_unreachable = true
 warn_no_return = true
 disallow_any_unimported = true

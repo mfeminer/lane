@@ -48,22 +48,29 @@ running instead of the one `brew upgrade` maintains.
 ### Windows
 
 ```powershell
-winget install mfeminer.lane
+scoop bucket add mfeminer https://github.com/mfeminer/scoop-bucket
+scoop install mfeminer/lane
 ```
 
-winget comes with Windows 10 and 11, so there is nothing to install before that line
-works — which is the whole reason it is the one package manager lane targets. `winget
-upgrade mfeminer.lane` is how it updates.
+The bucket has to be added first, the same shape as trusting a Homebrew tap: Scoop only
+installs from buckets you have named. After that **`scoop update lane` is how it updates
+from here on** — which the manual install below never had an answer for beyond fetching
+the same file again and hoping you remembered to. The manifest lives in
+[mfeminer/scoop-bucket](https://github.com/mfeminer/scoop-bucket), and it pins each
+release's `sha256`, so Scoop verifies what it downloaded before putting it on your
+`PATH`.
 
-**Without winget**, the binary is on the release. Download
+Scoop is not on a Windows machine by default; if you have not got it,
+[scoop.sh](https://scoop.sh) is one line of PowerShell.
+
+**Without Scoop**, the binary is on the release. Download
 [`lane-windows-x86_64.exe`](https://github.com/mfeminer/lane/releases/latest/download/lane-windows-x86_64.exe),
 rename it to `lane.exe`, and put it in a folder that is on your `PATH`.
 
-**The first run will probably show "Windows protected your PC".** lane is not code-signed,
-so SmartScreen holds any download of it the first time — the same honesty as the macOS
-quarantine note above, and the same answer: **More info → Run anyway**. It is asked once
-per downloaded copy. The winget install does not usually raise it, because winget checks
-the hash the manifest pins instead.
+**A copy downloaded that way will probably show "Windows protected your PC" the first
+time.** lane is not code-signed, so SmartScreen holds a file your browser marked as
+coming from the internet — the same honesty as the macOS quarantine note above, and the
+same answer: **More info → Run anyway**. It is asked once per downloaded copy.
 
 ### Then
 

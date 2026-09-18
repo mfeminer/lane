@@ -40,9 +40,11 @@ def install_remedy() -> str:
     """How to install `gh` on the machine this is running on.
 
     A remedy nobody can carry out is worse than no remedy — `brew install gh` on a
-    Windows machine names a thing that is not there. Both of these are the package
-    manager lane itself is installed with on that platform, so somebody following the
-    advice has already got it. See docs/CONVENTIONS.md §11.
+    Windows machine names a thing that is not there. macOS gets Homebrew, which is also
+    how lane is installed there. **Windows gets winget, not the Scoop that lane itself
+    ships through**, and that asymmetry is deliberate: winget is on every Windows 10 and
+    11 machine, while Scoop is only there if this user chose to install it — and one who
+    took the binary straight off the release never did. See docs/CONVENTIONS.md §11.
     """
     if sys.platform == "win32":
         return "winget install GitHub.cli"
