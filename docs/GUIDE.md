@@ -1074,9 +1074,9 @@ copy-on-write to lose** — it is always a real copy — so the answer is the se
 `doctor` says which of the two you are in.
 
 **"Windows protected your PC" when I run lane** — lane isn't code-signed, so SmartScreen
-holds a downloaded copy the first time. **More info → Run anyway**; you're asked once per
-downloaded copy. Installing with `winget install mfeminer.lane` usually avoids it, because
-winget checks the hash its manifest pins instead.
+holds a copy your browser marked as downloaded from the internet. **More info → Run
+anyway**; you're asked once per downloaded copy. Installing with `scoop install
+mfeminer/lane` fetches the binary itself and verifies the `sha256` its manifest pins.
 
 **My editor doesn't launch on Windows** — lane finds an editor by its command on `PATH`
 (`cursor`, `code`, `zed`, `subl`, `idea`), and most editors' installers offer to put it
@@ -1143,11 +1143,11 @@ Two rules erode first, so they're worth stating here too:
   a GitHub release with both attached. It does not run the test suite — CI already gates
   every pull request.
 
-Two things are done by hand after a release, because neither belongs to a repository
-this one can write to: bump the Homebrew formula's `url` and `sha256` in
-[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap), and run
-`make winget VERSION=x.y.z` and submit the manifests to `microsoft/winget-pkgs`.
-`packaging/winget/README.md` has the steps.
+One thing is done by hand after a release, because it belongs to a repository this one
+cannot write to: bump the Homebrew formula's `url` and `sha256` in
+[mfeminer/homebrew-tap](https://github.com/mfeminer/homebrew-tap). The Windows manifest
+in [mfeminer/scoop-bucket](https://github.com/mfeminer/scoop-bucket) needs nothing done
+to it — its `checkver` finds the new release and a scheduled action commits the update.
 
 `make repro` proves two builds of the same commit are byte-identical. **That holds on
 macOS and is measured not to hold on Windows** — PyInstaller writes `base_library.zip`'s

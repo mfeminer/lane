@@ -54,7 +54,7 @@ jobs:
         # re-uploads with --clobber when a release already exists, and that re-upload
         # comes from a rebuild — so a rerun against an already-pinned tag would change
         # the hash and break `brew install` for everyone, with no version change to
-        # explain it. A winget manifest pins a sha256 the same way.
+        # explain it. A Scoop manifest pins a sha256 the same way.
         #
         # PYTHONHASHSEED is the one that does the work there, and it was not the obvious
         # suspect. Python randomises string hashing per process, PyInstaller walks a
